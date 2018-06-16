@@ -1,0 +1,172 @@
+import random
+import math
+
+#PS:目前还没写完，后续根据理解继续补充这个代码。
+#神经网络底层实现--数组格式
+#分析:前向传播和反向传播都以神经元为单位，隐藏层为一组进行反复传播,所以我们创建俩个类:神经元,神经网络
+#完善代码还需要写神经元层类，后续需要补充。
+
+#神经元类
+class Neural:
+    #神经元每次都是由输入数据与权重参数的乘积和+b得到out部分，再经过relu/sigmod函数得到net部分。
+    # 为了防止权重参数w过大，我们再设计一个常量参数用于小化权重参数,w必须是列表
+    #我们设定10个类别，所以相应有10个目标值
+    target = [0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1,0.1]
+    digit  = 0.1
+    b = 0
+    step = 0.01  #学习率,后续测试时，每迭代300次就除以2.使其不断减小，遵循梯度下降原则。
+    #设置样本数和特征数,隐藏层个数,分类个数
+    def __init__(self,inputNums,featureNums,N,NumClass):
+        self.w = [[0 for i in range(featureNums)] for j in range(inputNums)]
+        self.inputNums = inputNums
+        self.featureNums = featureNums
+        self.N = N
+        self.NumClass = NumClass
+
+    #输入层->隐藏层的out层
+    def out_hidden_layer(self):
+        assert(self.inputNums is not None and self.featureNums is not None)
+        hidden_layer = []  #设置缓存变量
+        hidden_weights = []
+        for i in range(len(self.featureNums)):
+            aa,bb = self.out_hidden_neural
+            hidden_layer.append(aa)
+            hidden_weights.append(bb)
+        return hidden_layer,hidden_weights  #这样求出所有层的out结果和w结果。
+
+    #输入神经元->隐藏神经元的out函数,返回hidden_out列表,还需要一个缓存变量存储结果值。
+    def out_hidden_neural(self,X):
+        assert(self.inputNums is not None)
+        assert(self.w is None)
+        sum = 0.0
+        hidden_weights = [] #设置缓存存储权重值
+        for i in range(len(self.featureNums)):
+            w[0][i] = random.random()
+            hidden_weights.append(w[0][i])
+            sum+=X[0][i]*w[0][i]*digit
+        return sum+total,hidden_weights
+
+    #sigmod函数
+    def sigmod_hidden(self,inputDims):
+        return 1/(1+math.exp(-inputDims))
+
+    #relu函数
+    def relu_hidden(self,inputDims):
+        return max(0,inputDims)
+
+    #out神经元层->net神经元层
+    def out_net_hidden_layer(self,format):
+        assert(format=="sigmod" or format=="relu")
+        input, weights = self.out_hidden_layer
+        inputDims = []  #设置缓存
+        for i in range(len(input)):
+            inputDims.append(input[i])
+            if(format=="sigmod"):
+                inputDims.append(self.sigmod_hidden(input[i]))
+            else:
+                inputDims.append(self.relu_hidden(input[i]))
+        return inputDims,weights
+
+    #隐藏层之间传递->即net层->out层
+    def hidden_layer(self,format):
+        assert(format=="sigmod" or format=="relu")
+        input,weights = out_net_hidden_layer
+        weight1 = []  #设置缓存变量,保存横坐标w
+        weight2 = []  #设置缓存变量,保存所有w
+        intputDims = []
+        sum = 0.0
+        for j in range(len(self.featureNums)):
+            for i in range(len(input)):
+                weight = random.random()
+                weight1.append(weight1)
+                sum+=weight*digit*inputDims[i]
+            weight2.append(weight1)
+            inputDims.append(sum)
+        return inputDims,weight2
+
+    #输出结果,这里是最后一个隐藏层的输出结果传递过来,这里由于我们设置神经元层类,所以到时候用循环体表示隐藏层个数。
+    def _out_hidden(self,inputDims):
+        assert(self.NumClass is not None)
+        inputs,weights = self.out_net_hidden_layer
+        weight = [] #设置缓存权值
+        input = []  #设置缓存存储隐藏层到输出层的out数。
+        num = 0.0
+        for i in range(self.NumClass):
+            sum = 0.0
+            for m in range(len(inputs)):
+                w = random.random()
+                weight.append(w)
+                sum += inputs[m] * weight[m]
+            sum = sum + self.b
+            input.append(exp(sum))  #别忘了先exp，将大的数更大，小的数更小，有利于区分
+            num = num+math.exp(sum)
+
+        return input,num,weight
+
+    #最后归一化输出结果,这个结果值是还没计算出损失函数的，当做普通的out结果值
+    def out_hidden(self):
+        input,num,weight = self._out_hidden
+        inputs = [] #设置缓存结果，存储输出结果值
+        for i in range(len(input)):
+            inputs.append(input[i]/num)
+
+        return inputs
+
+
+    #误差值,误差值是-log(out值),我们最终是让这个error_hidden趋近于0
+    def error_hidden(self):
+        return [-math.log(i) for i in self.out_hidden()]
+
+    #反向传播:误差->输出层的方案是先求出所有误差值之和，然后再进行链式求导,最后求出△W值
+    def reverse_out_hidden_layer(self,inputDims):
+        E = 0.0
+        E1 = [] #设置误差缓存
+        for i in range(len(self.target)):
+            E+=self.error_neural(i)
+            E1.append(self.error_neural(i))
+        W = 0.0
+        W1 = []  #存储所有的权值W变化值
+        for i in range(self.featureNums):
+            W = E*self.step*self.error_first(i)*self.error_second(i)*self.error_third()
+            W1.append(W)
+        return W1,E1
+
+    #反向传播:误差->隐藏层的方案是先进行链式求导，再求出所有误差值之和,最后求出△W值
+    def reverse_hidden_layer(self,inputDims):
+        W = 0.0
+        E = 0.0
+        E1 = [] #设置误差缓存
+        W1 = [] #设置W变化值缓存
+        for j in range(len(self.featureNums)):
+            for i in range(len(self.target)):
+                E = self.error_neural(i)*self.step*self.error_first(i)*self.error_second(i)*self.error_third()
+                E1.append(E)
+                W+=E
+            W1.append(W)
+        return W1,E1
+
+    #反向传播:误差公式
+    def error_neural(self,num):
+        return 1/2*(self.target[num]-self.out_hidden()[num])**2
+
+    #以下误差计算都是求导后的结果,具体看文档求导公式
+    #第一层误差 求导后结果是 E/out => -(目标值-输出值),里面设定坐标即可
+    def error_first(self,num):
+        return -(self.target[num]-self.out_hidden()[num])
+
+    #第二层误差 求导后结果是 out/net : out*(1-out)
+    def error_second(self,num):
+        return self.out_hidden()[num]*(1-self.out_hidden()[num])
+
+    #第三层误差: 求导后结果是 1*outh1*w^(1-1) = outh1 也就是最后一层隐藏层的out值,我这里其实应该再设定一个隐藏层类。
+    def error_third(self):
+        input,weights = self.out_hidden_layer()
+        return input
+
+
+
+#神经元网络类:
+class NeuralNetWork:
+
+
+
