@@ -60,53 +60,6 @@ for i in range(train_nums):
         print("Epoch: %03d/%03d loss:%.9f train_score: %.3f test_acc: %.3f"
              %(i,train_nums,losses,train_score,test_score))
              
-   
-#下面开始初始化，init,Session进行run操作
-#每次迭代100个。,每5次打印一下。总共进行50次train操作
-train_nums = 50
-batch_sizes = 100
-step = 5
-init = tf.global_variables_initializer()
-sess = tf.Session()
-sess.run(init)
-for i in range(train_nums):
-    losses = 0.0 
-    num_batch = int(trainimg.shape[0]/batch_sizes)#迭代次数初始化
-    for j in range(num_batch):
-        batchx,batchy = mnist.train.next_batch(batch_sizes) #提供了一个迭代数的函数,返回每次迭代的X样本和y结果
-        feeds = {X:batchx,Y:batchy}  #按照格式我们先创建字典，让X,Y对应相应batch参数
-        sess.run(graid,feed_dict=feeds)  #用梯度下降法每次最优化loss值
-        losses += sess.run(loss,feed_dict=feeds)/num_batch  #优化后的loss值除以迭代次数再求和就是我们最终loss值，其实就是在原来loss值上用了迭代法。
-    if i % step==0:
-        feeds_train = {X:batchx,Y:batchy}   #训练集数据集
-        feeds_test = {X:testimg,Y:testlabel}    #测试数据集
-        train_score = sess.run(score,feeds_train)  #我们最终得到的分值与训练/测试数据集的格式如下
-        test_score = sess.run(score,feeds_test)
-        print("Epoch: %03d/%03d loss:%.9f train_score: %.3f test_acc: %.3f"
-             %(i,train_nums,losses,train_score,test_score))
-#下面开始初始化，init,Session进行run操作
-#每次迭代100个。,每5次打印一下。总共进行50次train操作
-train_nums = 50
-batch_sizes = 100
-step = 5
-init = tf.global_variables_initializer()
-sess = tf.Session()
-sess.run(init)
-for i in range(train_nums):
-    losses = 0.0 
-    num_batch = int(trainimg.shape[0]/batch_sizes)#迭代次数初始化
-    for j in range(num_batch):
-        batchx,batchy = mnist.train.next_batch(batch_sizes) #提供了一个迭代数的函数,返回每次迭代的X样本和y结果
-        feeds = {X:batchx,Y:batchy}  #按照格式我们先创建字典，让X,Y对应相应batch参数
-        sess.run(graid,feed_dict=feeds)  #用梯度下降法每次最优化loss值
-        losses += sess.run(loss,feed_dict=feeds)/num_batch  #优化后的loss值除以迭代次数再求和就是我们最终loss值，其实就是在原来loss值上用了迭代法。
-    if i % step==0:
-        feeds_train = {X:batchx,Y:batchy}   #训练集数据集
-        feeds_test = {X:testimg,Y:testlabel}    #测试数据集
-        train_score = sess.run(score,feeds_train)  #我们最终得到的分值与训练/测试数据集的格式如下
-        test_score = sess.run(score,feeds_test)
-        print("Epoch: %03d/%03d loss:%.9f train_score: %.3f test_acc: %.3f"
-             %(i,train_nums,losses,train_score,test_score))
              
 输出结果如下:             
 Epoch: 000/050 loss:0.329082789 train_score: 0.930 test_acc: 0.917
