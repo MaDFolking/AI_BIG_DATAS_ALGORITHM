@@ -50,7 +50,8 @@ for i in range(train_nums):
         batchx,batchy = mnist.train.next_batch(batch_sizes) #提供了一个迭代数的函数,返回每次迭代的X样本和y结果
         feeds = {X:batchx,Y:batchy}  #按照格式我们先创建字典，让X,Y对应相应batch参数
         sess.run(graid,feed_dict=feeds)  #用梯度下降法每次最优化loss值
-        losses += sess.run(loss,feed_dict=feeds)/num_batch  #优化后的loss值除以迭代次数再求和就是我们最终loss值，其实就是在原来loss值上用了迭代法。
+        losses += sess.run(loss,feed_dict=feeds)  #优化后的loss值除以迭代次数再求和就是我们最终loss值，其实就是在原来loss值上用了迭代法,为了优化我们在循环后除以迭代数
+    losses = losses/num_batch
     if i % step==0:
         feeds_train = {X:batchx,Y:batchy}   #训练集数据集
         feeds_test = {X:testimg,Y:testlabel}    #测试数据集
