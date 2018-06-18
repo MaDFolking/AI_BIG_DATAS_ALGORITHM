@@ -1,0 +1,44 @@
+import tensorflow as tf
+from captcha.image import ImageCaptcha
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+import random
+
+#初始化验证码的数据集
+number = ['0','1','2','3','4','5','6','7','8','9']
+letter = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z']
+LETTER = ['A','B','C','D','E','F','G','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W','X','Y','Z']
+
+#验证码生成文本,char_set是验证码候选集,利用python列表合并操作,size是一条码是多少个数,一般是四个。
+#验证码是一种全排列序列，如果是4种，就是(10+26+26)^4方次计算，所以计算量很大。
+def random_text(char_set = number+letter+LETTER,size = 4):
+    random_list = []
+    for i in range(size):
+        list = random.choice(char_set)
+        random_list.append(list)
+    return random_list
+
+#生成验证码图
+def get_captcha_text_image():
+    image = ImageCaptcha()
+    captcha_text = random_text()
+    #列表拆分成字符串，用.join方式
+    captcha_text = ''.join(captcha_text)
+    #生成验证码
+    captcha = image.generate(captcha_text)
+    captcha_image = Image.open(captcha)  #生成图对象
+    captcha_image = np.array(captcha_image) #保存成numpy格式方便建模计算
+    return captcha_text,captcha_image
+
+if __name__ == '__main__':
+    text,image = get_captcha_text_image()
+    # 创建一个图形，赋值给f
+    f = plt.figure()
+    #再在这个图形上创建子图,位置都设置为第一个，这三个参数为子图的总行数，总列数，位置。
+    ax = f.add_subplot(111)
+    #将文本text添加到子图ax的轴上
+    ax.text(0.1,0.9,text,horizontalalignment = 'center',verticalalignment='center',transform = ax.transAxes)
+    #轴上显示图像
+    plt.imshow(image)
+    plt.show()
