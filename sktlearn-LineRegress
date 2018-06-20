@@ -1,0 +1,77 @@
+import sklearn
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import StandardScaler
+import numpy as np
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import pandas as pd
+from pandas import DataFrame
+import time
+
+#计算出电功率与电流的关系以及与时间的关系，由此判断出时间和电流哪个更能影响电功率
+
+## 设置字符集，防止中文乱码
+mpl.rcParams['font.sans-serif']=[u'simHei']
+mpl.rcParams['axes.unicode_minus']=False
+
+#读取数据
+path1 = ".//Untitled Folder//household_power_consumption_1000.txt"
+data = pd.read_csv(path1,sep=";",low_memory=False)
+name = ['Date', 'Time', 'Global_active_power', 'Global_reactive_power', 'Voltage', 'Global_intensity', 'Sub_metering_1', 'Sub_metering_2', 'Sub_metering_3']
+
+#时间转换
+def dateFormat(x):
+    t = time.strptime(''.join(x),"%d/%m/%Y %H:%M:%S")
+    return (t.tm_year,t.tm_month,t.tm_mday,t.tm_hour,t.tm_min,t.tm_sec)
+    
+#数据异常处理
+data_new = data.replace("?",np.nan)
+datas = data_new.dropna(axis=0,how="any")
+
+#归一化
+ss = StandardScaler()
+X_train1 = ss.fit_transform(X_train1)
+X_test1 = ss.transform(X_test1)
+
+#创建模型
+lr = LinearRegression()
+lr.fit(X_train1,Y_train1)
+Y_predict1 = lr.predict(X_test1)
+print("准确率为: ",lr.score(X_test1,Y_test1))
+
+#可视化
+t1 = np.arange(len(Y_test1))
+plt.figure(facecolor='w')
+plt.plot(t1,Y_predict1,'r',linewidth = 2,label='预测值' )
+plt.plot(t1,Y_test1,'g',linewidth = 2,label='真实值')
+plt.title(u'线性回归时间与电功率的关系',fontsize=20)
+plt.legend(loc='lower right')
+plt.grid(b=True)
+plt.show()
+
+#数据处理2--电流与电功率关系
+X_2 = datas.iloc[:,2:5]
+Y_2 = datas.iloc[:,5]
+X_train2,X_test2,Y_train2,Y_test2 = train_test_split(X_2,Y_2,random_state=666)
+
+#数据归一化
+ss2 = StandardScaler()
+X_train2 = ss.fit_transform(X_train2)
+X_test2 = ss.transform(X_test2)
+
+#生成模型
+lr = LinearRegression()
+lr.fit(X_train2,Y_train2)
+Y_predict2 = lr.predict(X_test2)
+print("准确率为:",lr.score(X_test2,Y_test2))
+
+#可视化
+t2 = np.arange(len(X_test2))
+plt.figure(facecolor='w')
+plt.plot(t2,Y_predict2,'r',linewidth = 2,label='预测值')
+plt.plot(t2,Y_test2,'g',linewidth =2,label='真实值')
+plt.legend(loc='lower right')
+plt.title(u'线性回归电流与电功率的关系',fontsize = 20)
+plt.grid(b=True)
+plt.show()
