@@ -1,0 +1,76 @@
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import input_data
+
+#加载数据，我把数据放在了Unititled Folder/文件路径下，是相对路径
+mnist      = input_data.read_data_sets('Untitled Folder/', one_hot=True)
+trainimg   = mnist.train.images
+trainlabel = mnist.train.labels
+testimg    = mnist.test.images
+testlabel  = mnist.test.labels
+
+print(trainimg.shape)
+print(trainlabel.shape)
+print(testimg.shape)
+print(testlabel.shape)
+print(trainlabel[0])
+print(mnist.train.num_examples)
+
+#tensorflow的特点就是开辟空间,我们先把我们要求的参数都罗列出来。
+#以下是输入的x值和y的真实结果值,由于我们用batch迭代法，所以每次不一定需要迭代多少，样本数先用None占位
+X = tf.placeholder("float",[None,784])
+Y = tf.placeholder("float",[None,10])
+W = tf.Variable(tf.zeros([784,10]))  #参数W是跟X相乘输出10个分类的数，所以横坐标必须=X的纵坐标
+b = tf.Variable(tf.zeros([10]))   #截距b是我们最终输出值，所以根分类树相等
+#因为是10分类，所以无法用逻辑回归，我们需要转为softmax分类器,以下是softmax分类器
+soft = tf.nn.softmax(tf.matmul(X,W)+b) #将线性表达式放在softmax即可
+#求损失函数,softmax的损失是-log(P)的和再除以平均数,因为要求所有Y结果值的损失函数的和，所以这里记住用Y*,第二个参数是维度.
+loss = tf.reduce_mean(-tf.reduce_sum(Y*tf.log(soft), reduction_indices=1))
+#用梯度下降求损失，学习率设置为0.5,minimize()大概意思是最小化loss值
+graid = tf.train.GradientDescentOptimizer(0.5).minimize(loss)
+#预测样本中每个最大值与真实值比较，因为我们的算法是每个样本中概率最大的那个就是属于哪种样本
+#所以取最大的坐标值比较即可
+pre = tf.equal(tf.argmax(soft,1),tf.argmax(Y,1))
+#准确率为所有比较对的值/总数即可，为了简化这部我们所幸让对的都是1，然后取平均值即可
+score = tf.reduce_mean(tf.cast(pre,"float"))
+
+#下面开始初始化，init,Session进行run操作
+#每次迭代100个。,每5次打印一下。总共进行50次train操作
+train_nums = 50
+batch_sizes = 100
+step = 5
+init = tf.global_variables_initializer()
+sess = tf.Session()
+sess.run(init)
+for i in range(train_nums):
+    losses = 0.0 
+    num_batch = int(trainimg.shape[0]/batch_sizes)#迭代次数初始化
+    for j in range(num_batch):
+        batchx,batchy = mnist.train.next_batch(batch_sizes) #提供了一个迭代数的函数,返回每次迭代的X样本和y结果
+        feeds = {X:batchx,Y:batchy}  #按照格式我们先创建字典，让X,Y对应相应batch参数
+        sess.run(graid,feed_dict=feeds)  #用梯度下降法每次最优化loss值
+        losses += sess.run(loss,feed_dict=feeds)  #优化后的loss值除以迭代次数再求和就是我们最终loss值，其实就是在原来loss值上用了迭代法,为了优化我们在循环后除以迭代数
+    losses = losses/num_batch
+    if i % step==0:
+        feeds_train = {X:batchx,Y:batchy}   #训练集数据集
+        feeds_test = {X:testimg,Y:testlabel}    #测试数据集
+        train_score = sess.run(score,feeds_train)  #我们最终得到的分值与训练/测试数据集的格式如下
+        test_score = sess.run(score,feeds_test)
+        print("Epoch: %03d/%03d loss:%.9f train_score: %.3f test_acc: %.3f"
+             %(i,train_nums,losses,train_score,test_score))
+             
+             
+输出结果如下:             
+Epoch: 000/050 loss:0.329082789 train_score: 0.930 test_acc: 0.917
+Epoch: 005/050 loss:0.228871372 train_score: 0.930 test_acc: 0.922
+Epoch: 010/050 loss:0.220129058 train_score: 0.920 test_acc: 0.922
+Epoch: 015/050 loss:0.215067584 train_score: 0.930 test_acc: 0.924
+Epoch: 020/050 loss:0.212312516 train_score: 0.900 test_acc: 0.924
+Epoch: 025/050 loss:0.207444761 train_score: 0.990 test_acc: 0.924
+Epoch: 030/050 loss:0.207027065 train_score: 0.950 test_acc: 0.924
+Epoch: 035/050 loss:0.205042278 train_score: 0.960 test_acc: 0.923
+Epoch: 040/050 loss:0.203984251 train_score: 0.960 test_acc: 0.925
+Epoch: 045/050 loss:0.202844432 train_score: 0.970 test_acc: 0.926
+
+最终:损失函数为0.2,训练集准确性: 0.97 测试集准确性: 0.92
