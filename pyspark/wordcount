@@ -1,0 +1,17 @@
+import os
+from pyspark import SparkConf
+from pyspark import SparkContext
+import numpy as np
+
+#统计文本单词出现的数量
+#因为v是map,所以下面每个v都自动先调用出单词后次数
+def print_iter(iter):
+    for v in iter:
+        print("%s单词出现%d次" %v)
+
+conf = SparkConf().setMaster('local').setAppName('King')
+sc = SparkContext(conf = conf)
+rdd1 = sc.textFile("D://app//aaa.csv")
+rdd2 = rdd1.flatMap(lambda line:line.strip().split(' ')).filter(lambda line:len(line.strip())!=0).map(lambda x:(x,1)).reduceByKey(lambda a1,a2:a1+a2)
+rdd2.foreachPartition(lambda iter:print_iter(iter))
+sc.stop()
