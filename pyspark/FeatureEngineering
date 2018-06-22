@@ -391,6 +391,7 @@ person_rdd_df = sqlContext.createDataFrame(person_rdd1)
 #将sex和cell转化为数值类型
 sex_df2_result = StringIndexer(inputCol="sex",outputCol="sex_int").fit(person_rdd_df).transform(person_rdd_df)
 #因为dateframe本质还是rdd,所以根据rdd依赖原则和DAG图原则，是分stage的，所以我们fit上个dateframe的rdd。
+#所以本质是基于上个DateFrame进行转换。
 cell1_df_result = StringIndexer(inputCol="cell1",outputCol="cell1_int1").fit(sex_df2_result).transform(sex_df2_result)
 
 
