@@ -26,7 +26,7 @@ def tokenizer(rdd_df,input_name,out_name):
     tokenizer_result_df = tokenizer_df.transform(rdd_df)
     return tokenizer_result_df
 
-#正则表达式拆分
+#正则表达式拆分,再看看正则表达式
 def regexTokenizer(rdd_df,input_name,out_name):
     """
      对给定的DataFrame中对应列的数据采用RegexTokenizer方式进行文本数据的划分
