@@ -3,6 +3,13 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import input_data
 
+#下面是CNN算法实现，简单流程如下:
+#第一步数据预处理，拆分训练和测试数据集，初始化w和b参数，w中的深度需要自己根据业务设定。其他根据公式来算即可。
+#第二步是写卷积层。按照卷积——relu——池化--drop--拉平reshape--全连接--drop--输出层的顺序写即可。
+#第三步是计算预测值(卷积函数)，损失值(softmax算出总和再取平均)，优化器(一般大数据用Ada,小数据用梯度下降)。
+#和准确率(判断俩者相等取True,最后转为1/0格式再取平均值)，score结果值。
+#最后一步设定迭代次数，开始迭代计算，别忘了run操作和batch设定。
+
 #读取数据集,在input_data包中读取数据，mnist数据集自动划分了训练集和测试集。labels是特征标签,images是样本数量。
 mnist = input_data.read_data_sets('data/', one_hot=True)
 trainimg   = mnist.train.images
@@ -39,27 +46,38 @@ biases   = {
 
 #卷积函数
 def conv_basic(_input, _w, _b, _keepratio):
-        #输入层:784开根号得到长和宽,为了跟tensorflow底层维度保证相同，我们需要reshape成(深度,高,宽,通道数),由于深度是超参数，所以设置成-1让我们后续通过
-        #tensorflow来决定。
+        
+        #输入层:784开根号得到长和宽,为了跟tensorflow底层维度保证相同，我们需要reshape成(深度,高,宽,通道数),
+        #由于深度是超参数，所以设置成-1让我们后续通过tensorflow来决定。
         _input_r = tf.reshape(_input, shape=[-1, 28, 28, 1])
+        
         #第一层卷积,stride为上下左右的每次平移数量,padding=SAME是包含了padding特征，如果是valied则忽略padding不进行+2*padding
         _conv1 = tf.nn.conv2d(_input_r, _w['wc1'], strides=[1, 1, 1, 1], padding='SAME')
         _conv1 = tf.nn.relu(tf.nn.bias_add(_conv1, _b['bc1']))
-        #池化层选取max以便增大特征特性,ksize跟stride一样
+        
+        #池化层选取max以便增大特征特性,ksize:有个前提是长度>=4的长宽深度数量大小，中间俩个是长宽。左右俩边是数量和通道一般为1.所以这个是2*2大小的窗口。
         _pool1 = tf.nn.max_pool(_conv1, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
-        #keepratio是保留特征多少。
+        
+        #keepratio是dropout保留特征多少。
         _pool_dr1 = tf.nn.dropout(_pool1, _keepratio)
-        # CONV LAYER 2
+        
+        
+        #第二层规律与第一层一样
         _conv2 = tf.nn.conv2d(_pool_dr1, _w['wc2'], strides=[1, 1, 1, 1], padding='SAME')
         _conv2 = tf.nn.relu(tf.nn.bias_add(_conv2, _b['bc2']))
         _pool2 = tf.nn.max_pool(_conv2, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
         _pool_dr2 = tf.nn.dropout(_pool2, _keepratio)
-        # VECTORIZE
+        
+        #在进入全连接层之前先有个reshape操作，以便拉平。抽取wd1第一个维度，以便下面计算。
         _dense1 = tf.reshape(_pool_dr2, [-1, _w['wd1'].get_shape().as_list()[0]])
-        # FULLY CONNECTED LAYER 1
+        
+        #全连接层,利用矩阵相乘函数进行依次相乘，记住b每层只有一个所以不随w进行相乘。
         _fc1 = tf.nn.relu(tf.add(tf.matmul(_dense1, _w['wd1']), _b['bd1']))
+        
+        #全连接后要进行drop增加神经学习能力
         _fc_dr1 = tf.nn.dropout(_fc1, _keepratio)
-        # FULLY CONNECTED LAYER 2
+        
+        #最后的输出层,因为bd2设置为10，所以out肯定是10个。
         _out = tf.add(tf.matmul(_fc_dr1, _w['wd2']), _b['bd2'])
         # RETURN
         out = { 'input_r': _input_r, 'conv1': _conv1, 'pool1': _pool1, 'pool1_dr1': _pool_dr1,
@@ -67,52 +85,62 @@ def conv_basic(_input, _w, _b, _keepratio):
             'fc1': _fc1, 'fc_dr1': _fc_dr1, 'out': _out
         }
         return out
-print ("CNN READY")
 
-a = tf.Variable(tf.random_normal([3, 3, 1, 64], stddev=0.1))
-print (a)
-a = tf.Print(a, [a], "a: ")
-init = tf.global_variables_initializer()
-sess = tf.Session()
-sess.run(init)
-
+#样本,特征保留率用如下格式初始化,因为每次不知道迭代多少次，所以都设置为None
 x = tf.placeholder(tf.float32, [None, n_input])
 y = tf.placeholder(tf.float32, [None, n_output])
 keepratio = tf.placeholder(tf.float32)
 
-# FUNCTIONS
-
+#下面分别是预测值,损失函数，优化器,准确率(用argmax坐标函数来取equal,如果正确就是true,到时候转化为float就是)正确率(将准确率转化为float32求和再取平均数就是我们的结果。)
 _pred = conv_basic(x, weights, biases, keepratio)['out']
 cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(_pred, y))
 optm = tf.train.AdamOptimizer(learning_rate=0.001).minimize(cost)
 _corr = tf.equal(tf.argmax(_pred,1), tf.argmax(y,1)) 
 accr = tf.reduce_mean(tf.cast(_corr, tf.float32)) 
+
+#计算完以上公式后，需要进行tensorflow的初始化。结果赋值给init
 init = tf.global_variables_initializer()
     
 # SAVER
 print ("GRAPH READY")
 
+#初始化Session对象，我们的计算结果值都需要在Session中进行运行。
 sess = tf.Session()
+#开始运行初始化值
 sess.run(init)
 
+#我们总共进行15次迭代。
 training_epochs = 15
-batch_size      = 16
-display_step    = 1
-for epoch in range(training_epochs):
-    avg_cost = 0.
-    #total_batch = int(mnist.train.num_examples/batch_size)
-    total_batch = 10
-    # Loop over all batches
-    for i in range(total_batch):
-        batch_xs, batch_ys = mnist.train.next_batch(batch_size)
-        # Fit training using batch data
-        sess.run(optm, feed_dict={x: batch_xs, y: batch_ys, keepratio:0.7})
-        # Compute average loss
-        avg_cost += sess.run(cost, feed_dict={x: batch_xs, y: batch_ys, keepratio:1.})/total_batch
 
+#每次迭代16个样本数，也就是上面的None值
+batch_size      = 16
+
+#每1次都查看下结果。
+display_step    = 1
+
+#开始迭代
+for epoch in range(training_epochs):
+    #因为我们要查看损失值，而损失值=损失值之和/样本数，样本数是每次迭代的数量
+    avg_cost = 0.
+    
+    #因为每次迭代16个样本，所以总共迭代次数=总样本数/迭代样本数
+    total_batch = int(mnist.train.num_examples/batch_size)
+    
+    #开始进行迭代
+    for i in range(total_batch):
+        #获取样本和特征的每次迭代数量
+        batch_xs, batch_ys = mnist.train.next_batch(batch_size)
+        #记住，运行一定要在Session对象上运行，用优化器去优化，后面feed_dict是个字典函数，表示这个函数，整体是用优化器来计算这个函数的损失函数值。
+        sess.run(optm, feed_dict={x: batch_xs, y: batch_ys, keepratio:0.7})
+        #计算完损失函数后，叠加给avg_cost,记住最后测试阶段，保留率是1,因为我们最后是计算准确值。而没必要增强神经元的学习能力。
+        avg_cost += sess.run(cost, feed_dict={x: batch_xs, y: batch_ys, keepratio:1.})
+   
+   #得到损失函数
+    avg_cost = avg_cost/total_batch
     # Display logs per epoch step
     if epoch % display_step == 0: 
         print ("Epoch: %03d/%03d cost: %.9f" % (epoch, training_epochs, avg_cost))
+        #最后求结果保留率都是1，用accr也就是score分别带入不同batch即可。
         train_acc = sess.run(accr, feed_dict={x: batch_xs, y: batch_ys, keepratio:1.})
         print (" Training accuracy: %.3f" % (train_acc))
         #test_acc = sess.run(accr, feed_dict={x: testimg, y: testlabel, keepratio:1.})
