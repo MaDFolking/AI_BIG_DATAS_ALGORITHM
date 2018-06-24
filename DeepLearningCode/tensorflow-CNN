@@ -1,0 +1,123 @@
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import input_data
+
+#读取数据集,在input_data包中读取数据，mnist数据集自动划分了训练集和测试集。labels是特征标签,images是样本数量。
+mnist = input_data.read_data_sets('data/', one_hot=True)
+trainimg   = mnist.train.images
+trainlabel = mnist.train.labels
+testimg    = mnist.test.images
+testlabel  = mnist.test.labels
+print ("MNIST ready")
+
+#我们的图片像素是28*28=784,业务是进行10分类。
+n_input  = 784
+n_output = 10
+
+#设置权重参数w和b
+#(1)CNN的过程是卷积(提取特征,增加通道数,每次通道数是上一层的深度,间接的增加图像的深度)
+#(2)relu(归一化)
+#(3)池化(根据filter和stride平移提取特征,主要目的是提取有效特征，防止过拟合,特征提取也是卷积层一大特点，通常用max选取,因为max比平均值更能体现特征特点)
+#(4)ropout(增加神经元的学习能力,使其在减小神经元的同时保证准确率，间接的增强了神经元单体学习能力,这里的删除是假删除，每次随机概率选取)
+weights  = {
+        #wc都是卷积层的filter,[高,宽,通道,深度]。我们设置64和128俩层卷积层,是根据业务场景的经验得出,具体需要实验证明。
+        'wc1': tf.Variable(tf.random_normal([3, 3, 1, 64], stddev=0.1)),    
+        'wc2': tf.Variable(tf.random_normal([3, 3, 64, 128], stddev=0.1)),
+        #wd是全连接层的filter数，全连接层是将图像扁平化,所以需要reshape操作,公式是长*宽*通道数,第二个参数是深度也是自己设定的。第二个wd是输出结果。
+        #长*宽是根据每次正方形结果=(原始长/宽-filter+2*padding)/stride+1公式推导出来。
+        'wd1': tf.Variable(tf.random_normal([7*7*128, 1024], stddev=0.1)),
+        'wd2': tf.Variable(tf.random_normal([1024, n_output], stddev=0.1))
+    }
+#截距都等于filter数量，也就是输出值，也就是深度。
+biases   = {
+        'bc1': tf.Variable(tf.random_normal([64], stddev=0.1)),
+        'bc2': tf.Variable(tf.random_normal([128], stddev=0.1)),
+        'bd1': tf.Variable(tf.random_normal([1024], stddev=0.1)),
+        'bd2': tf.Variable(tf.random_normal([n_output], stddev=0.1))
+    }
+
+#卷积函数
+def conv_basic(_input, _w, _b, _keepratio):
+        #输入层:784开根号得到长和宽,为了跟tensorflow底层维度保证相同，我们需要reshape成(深度,高,宽,通道数),由于深度是超参数，所以设置成-1让我们后续通过
+        #tensorflow来决定。
+        _input_r = tf.reshape(_input, shape=[-1, 28, 28, 1])
+        #第一层卷积,stride为上下左右的每次平移数量,padding=SAME是包含了padding特征，如果是valied则忽略padding不进行+2*padding
+        _conv1 = tf.nn.conv2d(_input_r, _w['wc1'], strides=[1, 1, 1, 1], padding='SAME')
+        _conv1 = tf.nn.relu(tf.nn.bias_add(_conv1, _b['bc1']))
+        #池化层选取max以便增大特征特性,ksize跟stride一样
+        _pool1 = tf.nn.max_pool(_conv1, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
+        #keepratio是保留特征多少。
+        _pool_dr1 = tf.nn.dropout(_pool1, _keepratio)
+        # CONV LAYER 2
+        _conv2 = tf.nn.conv2d(_pool_dr1, _w['wc2'], strides=[1, 1, 1, 1], padding='SAME')
+        _conv2 = tf.nn.relu(tf.nn.bias_add(_conv2, _b['bc2']))
+        _pool2 = tf.nn.max_pool(_conv2, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
+        _pool_dr2 = tf.nn.dropout(_pool2, _keepratio)
+        # VECTORIZE
+        _dense1 = tf.reshape(_pool_dr2, [-1, _w['wd1'].get_shape().as_list()[0]])
+        # FULLY CONNECTED LAYER 1
+        _fc1 = tf.nn.relu(tf.add(tf.matmul(_dense1, _w['wd1']), _b['bd1']))
+        _fc_dr1 = tf.nn.dropout(_fc1, _keepratio)
+        # FULLY CONNECTED LAYER 2
+        _out = tf.add(tf.matmul(_fc_dr1, _w['wd2']), _b['bd2'])
+        # RETURN
+        out = { 'input_r': _input_r, 'conv1': _conv1, 'pool1': _pool1, 'pool1_dr1': _pool_dr1,
+            'conv2': _conv2, 'pool2': _pool2, 'pool_dr2': _pool_dr2, 'dense1': _dense1,
+            'fc1': _fc1, 'fc_dr1': _fc_dr1, 'out': _out
+        }
+        return out
+print ("CNN READY")
+
+a = tf.Variable(tf.random_normal([3, 3, 1, 64], stddev=0.1))
+print (a)
+a = tf.Print(a, [a], "a: ")
+init = tf.global_variables_initializer()
+sess = tf.Session()
+sess.run(init)
+
+x = tf.placeholder(tf.float32, [None, n_input])
+y = tf.placeholder(tf.float32, [None, n_output])
+keepratio = tf.placeholder(tf.float32)
+
+# FUNCTIONS
+
+_pred = conv_basic(x, weights, biases, keepratio)['out']
+cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(_pred, y))
+optm = tf.train.AdamOptimizer(learning_rate=0.001).minimize(cost)
+_corr = tf.equal(tf.argmax(_pred,1), tf.argmax(y,1)) 
+accr = tf.reduce_mean(tf.cast(_corr, tf.float32)) 
+init = tf.global_variables_initializer()
+    
+# SAVER
+print ("GRAPH READY")
+
+sess = tf.Session()
+sess.run(init)
+
+training_epochs = 15
+batch_size      = 16
+display_step    = 1
+for epoch in range(training_epochs):
+    avg_cost = 0.
+    #total_batch = int(mnist.train.num_examples/batch_size)
+    total_batch = 10
+    # Loop over all batches
+    for i in range(total_batch):
+        batch_xs, batch_ys = mnist.train.next_batch(batch_size)
+        # Fit training using batch data
+        sess.run(optm, feed_dict={x: batch_xs, y: batch_ys, keepratio:0.7})
+        # Compute average loss
+        avg_cost += sess.run(cost, feed_dict={x: batch_xs, y: batch_ys, keepratio:1.})/total_batch
+
+    # Display logs per epoch step
+    if epoch % display_step == 0: 
+        print ("Epoch: %03d/%03d cost: %.9f" % (epoch, training_epochs, avg_cost))
+        train_acc = sess.run(accr, feed_dict={x: batch_xs, y: batch_ys, keepratio:1.})
+        print (" Training accuracy: %.3f" % (train_acc))
+        #test_acc = sess.run(accr, feed_dict={x: testimg, y: testlabel, keepratio:1.})
+        #print (" Test accuracy: %.3f" % (test_acc))
+
+print ("OPTIMIZATION FINISHED")
+
+ 
