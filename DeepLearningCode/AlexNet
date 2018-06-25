@@ -1,0 +1,117 @@
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import input_data
+
+#读取数据
+mnist = input_data.read_data_sets("Untitled Folder/",one_hot=True)
+train_x = mnist.train.images
+train_y = mnist.train.labels
+test_x = mnist.test.images
+test_y = mnist.test.labels
+print(len(train_x))
+print(train_x.shape)
+
+#设置参数
+input_nums = 784
+out_nums = 10
+weights = {
+    "wc1":tf.Variable(tf.random_normal([11,11,1,64],stddev=0.1)),
+    "wc2":tf.Variable(tf.random_normal([5,5,64,128],stddev=0.1)),
+    "wc3":tf.Variable(tf.random_normal([3,3,128,256],stddev=0.1)),
+    "wc4":tf.Variable(tf.random_normal([3,3,256,256],stddev=0.1)),
+    "wc5":tf.Variable(tf.random_normal([3,3,256,128],stddev=0.1)),
+    "wd1":tf.Variable(tf.random_normal([4*4*128,4096],stddev=0.1)),
+    "wd2":tf.Variable(tf.random_normal([4096,4096],stddev=0.1)),
+    "out":tf.Variable(tf.random_normal([4096,out_nums],stddev=0.1))
+}
+biases = {
+    "bc1":tf.Variable(tf.random_normal([64],stddev=0.1)),
+    "bc2":tf.Variable(tf.random_normal([128],stddev=0.1)),
+    "bc3":tf.Variable(tf.random_normal([256],stddev=0.1)),
+    "bc4":tf.Variable(tf.random_normal([256],stddev=0.1)),
+    "bc5":tf.Variable(tf.random_normal([128],stddev=0.1)),
+    "bd1":tf.Variable(tf.random_normal([4096],stddev=0.1)),
+    "bd2":tf.Variable(tf.random_normal([4096],stddev=0.1)),
+    "out":tf.Variable(tf.random_normal([out_nums],stddev=0.1))
+}
+
+#创建conv对象,alex中增加了lrn函数取代dropout,每次假删除随机选取百分比的，让其每次少数神经元达到目标值，间接的增强了学习能力。
+def conv_basic(inputs,w,b,keepratio):
+    input1 = tf.reshape(inputs,shape=[-1,28,28,1])
+    #conv1
+    conv1 = tf.nn.conv2d(input1,w["wc1"],strides=[1,1,1,1],padding="SAME")
+    conv1 = tf.nn.relu(tf.nn.bias_add(conv1,b["bc1"]))
+    pool1 = tf.nn.max_pool(conv1,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
+    norm1 = tf.nn.lrn(pool1,depth_radius=5,bias=1,alpha=1,beta=0.5)
+    #conv2
+    conv2 = tf.nn.conv2d(norm1,w["wc2"],strides=[1,1,1,1],padding="SAME")
+    conv2 = tf.nn.relu(tf.nn.bias_add(conv2,b["bc2"]))
+    pool2 = tf.nn.max_pool(conv2,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
+    norm2 = tf.nn.lrn(pool2,depth_radius=5,bias=1,alpha=1,beta=0.5)
+    #conv3
+    conv3 = tf.nn.conv2d(norm2,w["wc3"],strides=[1,1,1,1],padding="SAME")
+    conv3 = tf.nn.relu(tf.nn.bias_add(conv3,b["bc3"]))
+    pool3 = tf.nn.max_pool(conv3,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
+    norm3 = tf.nn.lrn(pool3,depth_radius=5,bias=1,alpha=1,beta=0.5)
+    #conv4
+    conv4 = tf.nn.conv2d(norm3,w["wc4"],strides=[1,1,1,1],padding="SAME")
+    conv4 = tf.nn.relu(tf.nn.bias_add(conv4,b["bc4"]))
+    pool4 = tf.nn.max_pool(conv4,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
+    norm4 = tf.nn.lrn(pool4,depth_radius=5,bias=1,alpha=1,beta=0.5)
+    #conv5
+    conv5 = tf.nn.conv2d(norm4,w["wc5"],strides=[1,1,1,1],padding="SAME")
+    conv5 = tf.nn.relu(tf.nn.bias_add(conv5,b["bc5"]))
+    pool5 = tf.nn.max_pool(conv5,ksize=[1,2,2,1],strides=[1,2,2,1],padding="SAME")
+    norm5 = tf.nn.lrn(pool5,depth_radius=5,bias=1,alpha=1,beta=0.5)
+    #full layer,first dense
+    dense1 = tf.reshape(norm5,shape=[-1,w["wd1"].get_shape().as_list()[0]])
+    full1 = tf.nn.relu(tf.add(tf.matmul(dense1,w["wd1"]),b["bd1"]))
+    full1 = tf.nn.dropout(full1,keeptiaos)
+     #full layer,first dense
+    dense2 = tf.reshape(full1,shape=[-1,w["wd2"].get_shape().as_list()[0]])
+    full2 = tf.nn.relu(tf.add(tf.matmul(dense2,w["wd2"]),b["bd2"]))
+    full2 = tf.nn.dropout(full2,keeptiaos)
+    #out layer
+    out_layer = tf.add(tf.matmul(full2,w["out"]),b["out"])
+    out={"dense1":dense1,"full1":full1,"full2":full2,"out":out_layer}
+    return out
+    
+#初始化X,Y预测值,损失值，优化器，SCORE
+X = tf.placeholder(tf.float32,[None,input_nums])
+Y = tf.placeholder(tf.float32,[None,out_nums])
+keeptiaos = tf.placeholder(tf.float32)
+print(X)
+predict = conv_basic(X,weights,biases,keeptiaos)["out"]
+print(conv_basic(X,weights,biases,keeptiaos)["dense1"]," ",conv_basic(X,weights,biases,keeptiaos)["full1"]," ",conv_basic(X,weights,biases,keeptiaos)["full2"])
+print(predict.shape," ",Y.shape)
+print(predict)
+loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=predict,labels = Y))
+optimzer = tf.train.AdamOptimizer(0.001).minimize(loss)
+score = tf.reduce_mean(tf.cast(tf.equal(tf.argmax(predict,1),tf.argmax(Y,1)),tf.float32))
+
+#初始化
+init = tf.global_variables_initializer()
+sess = tf.Session()
+sess.run(init)
+
+#由于卷积神经网络计算量大，所以epoch设置小一些
+traning_epochs = 10
+batch_size = 16
+display_step = 1
+for i in range(traning_epochs):
+    losses = 0.0
+    num_size = int(train_x.shape[0]/batch_size)
+    for j in range(num_size):
+        batchx,batchy = mnist.train.next_batch(batch_size)
+        feeds = {X:batchx,Y:batchy,keeptiaos:0.5}
+        print(batchx.shape,batchy.shape)
+        sess.run(optimzer,feed_dict=feeds)
+        losses+=sess.run(loss,feed_dict={X:batchx,Y:batchy,keeptiaos:1.})
+    losses=losses/num_size
+    if i % display_step==0:
+        feed1 = {X:batchx,Y:batchy,keeptiaos:1.}
+        feed2  ={X:test_x,Y:test_y,keeptiaos:1.}
+        train_score = sess.run(score,feed_dict = feed1)
+        test_score = sess.run(score,feed_dict  =feed2)
+        print("Epoch: %03d/%03d loss: %.9f train_score : %.3f test_score : %.3f"%(i,traning_epochs,losses,train_score,test_score))
