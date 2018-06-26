@@ -54,6 +54,10 @@ def conv_basic(_input, _w, _b, _keepratio):
         _input_r = tf.reshape(_input, shape=[-1, 28, 28, 1])
         
         #第一层卷积,stride为上下左右的每次平移数量,padding=SAME是包含了padding特征，如果是valied则忽略padding不进行+2*padding
+        #stride四个选项为深度宽高通道，深度是卷积核数，一般都是一个个处理，channel同理，所以一般只处理长宽。
+        #一个卷积核对应一个偏执值b.这点倒是跟BP不太一样。不是一个层对应一个b.
+        #padding如果是valied,公式是(input-filter+1)/stride。因为忽略了padding,所以就不用-2*padding.在分子上加1，因为是多余部分直接删除。
+        #padding如果是SAME,公式是(input)/stide
         _conv1 = tf.nn.conv2d(_input_r, _w['wc1'], strides=[1, 1, 1, 1], padding='SAME')
         _conv1 = tf.nn.relu(tf.nn.bias_add(_conv1, _b['bc1']))
         
@@ -95,7 +99,9 @@ keepratio = tf.placeholder(tf.float32)
 
 #下面分别是预测值,损失函数，优化器,准确率(用argmax坐标函数来取equal,如果正确就是true,到时候转化为float就是)正确率(将准确率转化为float32求和再取平均数就是我们的结果。)
 _pred = conv_basic(x, weights, biases, keepratio)['out']
+#计算误差
 cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(_pred, y))
+#这步是梯度反向传播，是根据误差让他反向传播，我们的目的是求极值，也就是找到全局最小值。这块找资料看看。
 optm = tf.train.AdamOptimizer(learning_rate=0.001).minimize(cost)
 _corr = tf.equal(tf.argmax(_pred,1), tf.argmax(y,1)) 
 accr = tf.reduce_mean(tf.cast(_corr, tf.float32)) 
