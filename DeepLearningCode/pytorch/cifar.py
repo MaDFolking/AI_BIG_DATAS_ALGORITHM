@@ -31,6 +31,7 @@ model_names = sorted(name for name in models.__dict__ if name.islower() and not 
 #(1)prop:指定程序名。通过%(prog)s引用程序名。parser.add_argument('--foo', help='foo of the %(prog)s program')
 #(2)usage : 根据参数自动生成用法信息
 #(3)description:展现程序要干什么的信息
+#(4)choice: 将命令行参数的值限定在一个范围内，超出范围则报错 ,这是个列表，我们上面的 model_names就赋值给choice获取所有某块信息，再进行操作
 #其他具体信息请查看该博客: https://blog.csdn.net/guoyajie1990/article/details/76739977
 parser = argparse.ArgumentParser(description='PyTorch CIFAR10/100 Training')
 
