@@ -17,7 +17,7 @@ import torchvision.datasets as datasets
 import models.cifar as models
 
 from utils import Bar, Logger, AverageMeter, accuracy, mkdir_p, savefig
-#pytorch的所有网络
+#pytorch的所有网络,这个属于参数解析模块
 
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
