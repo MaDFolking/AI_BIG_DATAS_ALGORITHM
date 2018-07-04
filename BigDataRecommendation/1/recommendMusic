@@ -1,0 +1,429 @@
+import surprise
+from surprise import Dataset, Reader
+from surprise import KNNBasic, KNNWithMeans, KNNBaseline
+from surprise import evaluate, print_perf
+import json
+import random
+import time
+import numpy as np
+import pickle
+from functools import reduce
+import itertools
+
+# "## 一、需求",
+# "1. 每天为每个用户产生30首歌曲的一个推荐列表，要求这三十首歌中不能出现该用户最近7天听过/浏览过的歌曲\n",
+# "2. 当用户浏览某个歌单页面，给该用户推荐和当前歌单比较类似的5个其它歌单"
+# "## 系统实现流程",
+# "1. 获取数据",
+# "2. 构建原始的用户物品评分矩阵",
+# "3. 基于推荐算法构建完整的用户物品评分矩阵",
+# "4. 将推荐结果保存到数据库中供其它项目组使用"
+# "## 三、数据获取",
+# "实际工作中，因为实现的推荐系统其实就是自己公司内部使用的，所以可以直接从公司的数据库中获取相关数据即可；一般情况下，常用的数据集包括但不限于：_**用户行为日志数据、物品相关的信息数据、用户相关的信息数据等**_<br/>\n",
+# "备注：在这里使用一种取巧的方式，使用爬取过来的歌单信息来作为原始数据",
+#解题思路:
+#1.因为用户没有听过这一首歌曲，所以写一个时间函数，用updateTime之差大于7天时间即可。然后根据用户对歌曲相似度，做出矩阵，推荐30个放入列表中。
+#2.如果是冷启动用户，就给推荐其他用户评分最高的10首。
+#3.给用户推荐的5个相似歌曲需要 Item-CF 用户-物品评分矩阵来用Item-CF相似矩阵求出5个其他相似歌单。
+#4.总结:最后需要做出歌曲-评分矩阵和哥单-评分矩阵
+#5.热度自己设定，一定要playCount>10000和supriceCount>1000前提才能把歌曲列入。
+
+#第一步:解析json文件
+def parse_json_file(input):
+    assert input is not None
+    #loads可以读取json文件的字符串，load主要是读取文件。
+    datas = json.loads(input)
+    data_result = datas['result']
+    data_playId = data_result['id']
+    data_userId = data_result['userId']
+    data_playName = data_result['name']
+    data_updateTime = data_result['updateTime']
+    data_subscribedCount = data_result['subscribedCount']
+    data_playCount = data_result['playCount']
+    #data_playCount>10000 and data_subscribedCount>1000才推荐
+    assert data_playCount>10000 and data_subscribedCount>1000
+    songs = ''
+    data_tracks = data_result['tracks']
+    for line in data_tracks:
+        try:
+            #如果里面没内容，注意，下面不应该使用assert,因为assert是让程序终止，主要应对运行异常。
+            if len(line)>0:
+                songId = str(   line['id'])
+                songName = line['name'].strip()
+                songPopularity = str(line['popularity'])
+                songs+='\t'+','.join([songId,songName,songPopularity])
+        except Exception as exp:
+            print(exp)
+            return ''
+        return str(data_playId)+"##"+str(data_userId)+"##"+data_playName+"##"+str(data_updateTime)+"##"+ \
+           str(data_subscribedCount)+"##"+str(data_playCount)+songs+'\n'
+
+#第二步,解析json文件后，获取我们需要的数据，放入新的文件中，方便后面建立矩阵和矩阵文件。
+def input_json_file(input,output):
+    assert input is not None and output is not None
+    with open(output,'w',encoding='UTF-8') as writer:
+        with open(input,'r',encoding='UTF-8') as reader:
+            for line in reader:
+                try:
+                    if len(line)>0:
+                        result = parse_json_file(line)
+                        print("yes")
+                        #result返回的是一个字符串，还是用result即可，因为如果为空，里面肯定没内容，那么返回的是个''空字符串，说明这一行没内容
+                        #并不影响整体数据和矩阵。
+                        if result:
+                            writer.writelines(result)
+                            print('yes')
+                except Exception as exp:
+                    print(exp)
+
+#第三步:创建用户-评分，歌曲列表对歌曲的评分矩阵,并设置最小值，最大值
+def clip(x,minNumber,maxNumber):
+    return np.clip(x,minNumber,maxNumber)
+
+#第四步:判断用户是否是7天之内看过的歌曲，所有要有7天限制。
+def parse_new_song_date_time(updateTime):
+    return int(time.time())*1000-updateTime>7*24*3600*1000
+
+#第五步:判断歌曲是否为新歌曲，以1年为限制
+def is_new_old_song(updateTime):
+    return int(time.time())*1000-updateTime<3600*24*366*1000*1000
+
+#第六步:判断用户是否为刚来的用户
+def is_new_old_user(userId,input):
+    assert input is not None
+    with open(input,'r',encoding='UTF-8') as reader:
+        list = []
+        for line in reader:
+            if line:
+                try:
+                    _,userIds,_,_,_,_ = line.strip().split('\t')[0].split('##')
+                    list.append(userIds)
+                except Exception as exp:
+                    print(exp)
+        if userId not in list:
+            return True
+        else:
+            return False
+
+#第七步:构建用户-评分矩阵函数，为存储文件做准备的函数。其中data_playCount>10000 and data_subscribedCount>1000才推荐才推荐
+#这个矩阵先统计一年以内的，所以一年内的都算。
+#这个函数是每次都调用一次，然后依次放入矩阵clip中。
+def parse_user_rating(userId,updateTime,playCount,subscribedCount,songInfo):
+    assert userId is not None and songInfo is not None
+    songId,_,songRating = songInfo.split(",")
+    #初始默认权重为0.9，如果不是
+    w = 0.9
+    #因为这些参数在函数运行时会转化为str,需要float转一次,热点歌曲为1.1权重，非热点歌曲为0.5权重.
+    if float(playCount) >1000 and float(subscribedCount)>10000 and is_new_old_song(int(updateTime)):
+        w = 1.1
+    #构建矩阵
+    songRating = float(songRating)*w
+    songRating = clip(songRating/10.0,1.0,10.0)
+    print(w)
+    return ','.join([userId,songId,str(songRating),updateTime])
+
+#第八步,构建完用户-评分矩阵，就放进文件里。
+#return str(data_playId) + "##" + str(data_userId) + "##" + "##" + data_playName + str(data_updateTime) + "##" + \
+#       str(data_subscribedCount) + "##" + str(data_playCount) + songs + '\n'
+#
+def parse_user_rating_file(input,output):
+    assert input is not None and output is not None
+    try:
+        with open(output,'w',encoding='UTF-8') as writer:
+            with open(input,'r',encoding='UTF-8') as reader:
+                for line in reader:
+                    if line:
+                        content = line.strip().split('\t')
+                        print('yes')
+                        #注意构建评分矩阵必须都是float类型
+                        _,userId,_,updateTime,subscribedCount,playCount = content[0].split('##')
+                        subscribedCount, playCount = float(subscribedCount), float(playCount)
+                        result = map(lambda song: parse_user_rating(userId,updateTime,playCount,subscribedCount,song)
+                        if len(parse_user_rating(userId, updateTime, playCount, subscribedCount, song).split(','))>2 else None
+                        ,content[1:])
+                        print('yes')
+                        #此时已经是个矩阵，每行用\n空出来
+                        result = '\n'.join(result)
+                        print("yes")
+                        if result:
+                            writer.writelines(result)
+                            writer.write('\n')  #同理，每次都用\n空出,因为这次我们没有给'\n'
+                            print('yes')
+    except Exception as exp:
+        print(exp)
+
+#用于给List第3列排序
+def takeThird(element):
+    return element[2]
+
+#第九冷启动问题，如果是第一次来的用户且没有任何详细信息，给他推荐评分最高的30首歌曲,并存放在一个文件上。
+def parse_top10(userId,input,output):
+    assert input is not None and output is not None
+    if is_new_old_user(userId,input):
+        with open(input,'r',encoding='UTF-8') as reader:
+            n = 0
+            list2 = []
+            for line in reader:
+                try:
+                    if line:
+                        songId,songName,songRating = line.strip().split('\t')[1].split(',')
+                        list1 = []
+                        list1.append(songId+',')
+                        list1.append(songName+',')
+                        list1.append(float(songRating))
+                        list1.append('\n')
+                        list2.append(list1)
+                        n+=1
+                except Exception as exp:
+                    print(exp)
+            try:
+                if n<=30:
+                    with open(output,'w',encoding='UTF-8') as writer1:
+                        for i in list2:
+                            i[2] = str(i[2])
+                            writer1.writelines(i)
+                else:
+                    list2.sort(key=takeThird,reverse=True)
+                    with open(output, 'w', encoding='UTF-8') as writer2:
+                        for i in list2[:30]:
+                            i[2] = str(i[2])
+                            writer2.writelines(i)
+            except Exception as exp:
+                print(exp)
+
+#第11步:构建歌单-歌曲评分。
+#我们设定有这个都设置为1.0
+def parse_playList_song(playListId,songInfo):
+    assert playListId is not None and songInfo is not None
+    try:
+        songId,_,_ = songInfo.split(',')
+        songRating = random.randint(1,10)
+        return ','.join([playListId,songId,str(songRating)])
+    except Exception as exp:
+        return '        '
+
+#第12步:将歌单-歌曲评分存放在文件中
+#   return str(data_playId)+"##"+str(data_userId)+"##"+"##"+data_playName+str(data_updateTime)+"##"+ \
+#           str(data_subscribedCount)+"##"+str(data_playCount)+songs+'\n'
+def parse_playList_song_file(input,output):
+    assert input is not None and output is not None
+    with open(output,'w',encoding='UTF-8') as writer:
+        with open(input,'r',encoding='UTF-8') as reader:
+            for line in reader:
+                try:
+                    content = line.strip().split('\t')
+                    playListId,_,_,_,_,_ = content[0].split('##')
+                    result = map(lambda song:parse_playList_song(playListId,song) if len(parse_playList_song(playListId,song).split(','))>2
+                                 else None,content[1:])
+                    result = '\n'.join(result)
+                    if result:
+                        writer.writelines(result)
+                        writer.write('\n')
+                        print('yes')
+                except Exception as exp:
+                    print(exp)
+
+#第13步: 从定义格式数据中提取id和name映射关系的函数API
+#这是个公共函数，目的是后面方便我们比较歌单id与歌单名的映射，以及歌曲id与歌曲id的映射，
+def parse_playlist_song_id_2_name(input,playListFile,outSongFile):
+    assert input is not None and playListFile is not None and outSongFile is not None
+    #歌单id与歌单名称之间的映射字典
+    playlist_id_2_name_dict = {}
+    #歌曲id和歌曲名称之间的映射字典
+    song_id_2_name_dict = {}
+    with open(input,'r',encoding='UTF-8') as reader:
+        for line in reader:
+            try:
+                contents = line.strip().split('\t')
+                playlist_id,_ ,playlist_name, _, _, _ = contents[0].split("##")
+                playlist_id_2_name_dict[playlist_id] = playlist_name
+                for i in contents[1:]:
+                    try:
+                        songId,songName,_ = i.split(',')
+                        song_id_2_name_dict[songId] = songName
+                    except Exception as exp:
+                        print(exp)
+            except Exception as exp:
+                print(exp)
+    with open(playListFile,'wb') as list_Id:
+        pickle.dump(playlist_id_2_name_dict,list_Id)
+    with open(outSongFile,'wb') as song_Id:
+        pickle.dump(song_id_2_name_dict,song_Id)
+
+
+inputFiles = "D:\\pyspark\\Recommendation\\data\\playlist_detail_music_all.json"          #数据源Json文件
+outputPlayListFile = "D:\\pyspark\\Recommendation\\data\\playList_detail_music_all.txt"   #解析Json后的音乐文件
+userSongRatingFile = "D:\\pyspark\\Recommendation\\data\\user_song_rating_music_all.txt"  #用户对应音乐评分的矩阵
+playSongRatingFile = "D:\\pyspark\\Recommendation\\data\\play_song_rating_music_all.txt"  #歌单对应音乐评分的矩阵
+top30SontFile = "D:\\pyspark\\Recommendation\\data\\top10.txt"   #冷启动top30问题，等会再做。
+playlist_pkl_file_path = "D:\\pyspark\\Recommendation\\data\\playlist.pkl"   #歌单Id对应歌单名的映射
+song_pkl_file_path = "D:\\pyspark\\Recommendation\\data\\song.pkl"           #歌曲Id对应歌曲名的映射
+all_user_recommend_file = "D:\\pyspark\\Recommendation\\data\\all_user_recommend.txt"  #存放推荐用户30首歌的文件
+all_playList_recommend_file = "D:\\pyspark\\Recommendation\\data\\all_playList_recommend.txt"  #推荐用户当前歌单的文件
+all_playList_recommend_new_top5_file = "D:\\pyspark\\Recommendation\\data\\all_playList_recommend_new_top5.txt"
+
+#解析json字符串
+input_json_file(inputFiles,outputPlayListFile)
+#建立用户-评分矩阵并生成文件
+parse_user_rating_file(outputPlayListFile,userSongRatingFile)
+#建立歌单-评分矩阵并生成文件
+parse_playList_song_file(outputPlayListFile,playSongRatingFile)
+#歌曲，歌单的ID与名称映射，方便后续操作
+parse_playlist_song_id_2_name(outputPlayListFile,playlist_pkl_file_path,song_pkl_file_path)
+#冷启动问题，面对新来的用户进行推荐to30，我们这里假设新来用户ID：213123124213
+parse_top10(213123124213,outputPlayListFile,top30SontFile)
+
+
+#  1. 如果该用户是新来的，也就是userId没在数据库中，我们就推荐评分最高的30首歌曲。
+#我们将里面的歌曲放入一个列表中，方便后面使用
+songsListTop30 = []
+print('给新用户推荐以下30首歌曲: ')
+def recommend_new_user():
+    with open(top30SontFile,'r',encoding='UTF-8') as reader:
+        for i in reader:
+            try:
+                songs = i.strip().split(',')
+                songsListTop30.append(songs[1])
+                print(songs[1])
+            except Exception as exp:
+                print(exp)
+
+# "2. 每天为每个用户产生30首歌曲的一个推荐列表，要求这三十首歌中不能出现该用户最近7天听过/浏览过的歌曲",
+#userId,songId,rating,updateTime
+#我们调用函数求出7天内没浏览过的，然后把用户放在set里。选取相应评分最高的30个，如果不够30个，就选取评分最高的剩下歌曲，因为我们
+#没有其他维度,所以只能这样做，否则就再创建个相似度矩阵来求解相似的歌曲。
+#读取后直接存在文件中，供给其他人使用。
+def user_recommend_List():
+    with open(all_user_recommend_file, 'w', encoding='UTF-8') as writer:
+        with open(userSongRatingFile,'r',encoding='UTF-8') as reader:
+            #存放用户ID
+            userList =   set()
+            #存放歌曲列表
+            songList = []
+            #存放用户相应的歌曲列表
+            songsList = {}
+            for i in reader:
+                try:
+                    if i:
+                        content = i.strip().split(',')
+                        userList.add(content[0])
+                        print(content[1])
+                        #要有限制是不能是最近7天，所以用今天时间减去歌曲被听的时间
+                        if parse_new_song_date_time(int(content[3])):
+                            songsList[content[0]] = []
+                            print("***************************************")
+                            songsList[content[0]].append(content[1])
+                except Exception as exp:
+                    print(exp)
+            print(songsList)
+            # 根据映射，将相应的songId转化为songName
+            with open(song_pkl_file_path, 'rb') as reader:
+                data = pickle.load(reader)
+                print(data)
+                for i,j in songsList.items():
+                    for m in range(len(songsList[i])):
+                        if m<1:
+                            songsList[i][m] = list(data[str(songsList[i][m])])
+                            #因为生成list后，字符串元素都拆分字符显示，所以需要合并。
+                            aa = reduce(lambda x, y: str(x) + str(y), songsList[i][m])
+                            songsList[i] = []
+                            songsList[i].append(aa)
+                        else:
+                            songsList[i].append(data[str(songsList[i][m])])
+            for j in userList:
+                try:
+                    if len(songsList[j])<30:
+                        aa = 30-len(songsList[j])
+                        songsList[j] += songsListTop30[:aa]
+                except Exception as exp:
+                    print(exp)
+
+            if songsList:
+                for i,j in songsList.items():
+                    aa = ','.join(j)
+                    bb = i+" : "+aa
+                    print(bb)
+                    writer.writelines(bb)
+                    writer.write('\n')
+
+# "3. 当用户浏览某个歌单页面，给该用户推荐和当前歌单比较类似的5个其它歌单"
+#需要用到歌单与id映射。
+#根据该歌单里面的歌曲，跟哪些歌曲相似，然后推荐相应的5个歌单。
+#但是我们生成的列表中评分都是随机的,所以我们只需要找到评分相同的5个歌单即可。
+#假如没有5个一样的评分，就在大于评分的随机抽取。
+#做完后存储。
+#写个函数，表示动态传来一个userId,只要不是新用户，就进行歌单推荐
+
+#写个函数方便比较第二个数。
+def takeSecond(element):
+    return element[1]
+#推荐用户歌单，
+def recommend_playList(userId,playId,input,output,outputPlayListFile,outputNew):
+    #如果不是新客户
+    #找到跟他评分一样的5个，如果不满足5个，就超过他评分即可，因为我们已经知道评分满分的是超过5个。
+    if is_new_old_user(userId,outputPlayListFile)==False:
+        with open(output,'w',encoding='UTF-8') as writer:
+            with open(input,'r',encoding='UTF-8') as reader:
+                rating = ''      #存放rating。
+                list1 = [playId]  #存放ID。
+                for line in reader:
+                    if str(playId) == str(line.strip().split(',')[0]):
+                        rating = line.strip().split(',')[2]
+                        print('yes')
+                    if str(rating) == str(line.strip().split(',')[2]):
+                        print('no')
+                        list1.append(line.strip().split(',')[0])
+
+                print(list1)
+                list1 = list(set(list1))
+                print('list1')
+                list1 = list1[1:6]
+                print(list1)
+                #做映射
+                with open(playlist_pkl_file_path, 'rb') as reader_song:
+                    songs = pickle.load(reader_song)
+                    print(songs)
+                    for i in range(len(list1)):
+                        list1[i] = songs[list1[i]]
+                print(list1)
+                # 存储在文件中
+                if list1:
+                    for i in list1:
+                        writer.writelines(i)
+                        writer.write('\n')
+
+    #如果是新客户,我们直接推荐5个评分最高歌单,并保存在文件中。
+    else:
+        with open(outputNew,'w',encoding='UTF-8') as writer:
+            with open(input,'r',encoding='UTF-8') as reader:
+                list2 = []
+                for line in reader:
+                    list1 = []
+                    list1.append(line.strip().split(',')[0])
+                    list1.append(int(line.strip().split(',')[2]))
+                    list2.append(list1)
+
+                list2.sort(key=takeSecond,reverse=True)
+                list2 = list2[:5]
+                print(list2)
+                #还需要做映射
+                with open(playlist_pkl_file_path,'rb') as reader_song:
+                    songs = pickle.load(reader_song)
+                    print(songs)
+                    for i in range(len(list2)):
+                        list2[i][0] = songs[list2[i][0]]
+                #存储在文件中
+                if list2:
+                    for i in range(len(list2)):
+                        writer.writelines(str(list2[i][0]))
+                        writer.write('\n')
+
+#创建个参数动态获取歌单ID
+playIds = 423245641
+userId = 42689902
+#recommend_playList(userId,playIds,playSongRatingFile,all_playList_recommend_file,outputPlayListFile,all_playList_recommend_new_top5_file)
+#假设是个新用户
+userId123 = 11111111111
+recommend_playList(userId123,playIds,playSongRatingFile,all_playList_recommend_file,outputPlayListFile,all_playList_recommend_new_top5_file)
+
+
