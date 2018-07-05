@@ -22,15 +22,15 @@ def random_captcha_text(char_set=number, captcha_size=4):
 def gen_captcha_text_and_image():  
     image = ImageCaptcha()  
    
-    captcha_text = random_captcha_text()  
-    captcha_text = ''.join(captcha_text)  
+    captcha_text = random_captcha_text()  #生成list 
+    captcha_text = ''.join(captcha_text)  #list转string
    
     captcha = image.generate(captcha_text)  
     #image.write(captcha_text, captcha_text + '.jpg')   
    
     captcha_image = Image.open(captcha)  
-    captcha_image = np.array(captcha_image)  
-    return captcha_text, captcha_image  
+    captcha_image = np.array(captcha_image)  #转换为np.array,像素点格式。
+    return captcha_text, captcha_image       
 
 def convert2gray(img):  
     if len(img.shape) > 2:  
@@ -215,6 +215,7 @@ def crack_captcha(captcha_image):
         return text 
 if __name__ == '__main__':
     train = 1
+    #用是否等于0判断走训练还是测试集。
     if train == 0:
         number = ['0','1','2','3','4','5','6','7','8','9']  
         #alphabet = ['a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z']  
