@@ -1,0 +1,82 @@
+import tensorflow as tf, pdb
+
+WEIGHTS_INIT_STDEV = .1
+
+#transform，3层卷积，5层参差，2层反卷积+最后一层输出。
+#
+def net(image):
+    conv1 = _conv_layer(image, 32, 9, 1)
+    conv2 = _conv_layer(conv1, 64, 3, 2)
+    conv3 = _conv_layer(conv2, 128, 3, 2)
+    resid1 = _residual_block(conv3, 3)
+    resid2 = _residual_block(resid1, 3)
+    resid3 = _residual_block(resid2, 3)
+    resid4 = _residual_block(resid3, 3)
+    resid5 = _residual_block(resid4, 3)
+    conv_t1 = _conv_tranpose_layer(resid5, 64, 3, 2)
+    conv_t2 = _conv_tranpose_layer(conv_t1, 32, 3, 2)
+    #注意最后一个是输出特征图，这里是3个。
+    conv_t3 = _conv_layer(conv_t2, 3, 9, 1, relu=False)
+    #得到结果值，要把像素映射到0-255之间，写法如下。
+    preds = tf.nn.tanh(conv_t3) * 150 + 255./2
+    return preds
+
+def _conv_layer(net, num_filters, filter_size, strides, relu=True):
+    weights_init = _conv_init_vars(net, num_filters, filter_size)  #初始化权重参数，因为次数多，用函数表达。
+    strides_shape = [1, strides, strides, 1]
+    net = tf.nn.conv2d(net, weights_init, strides_shape, padding='SAME')
+    net = _instance_norm(net)
+    if relu:
+        net = tf.nn.relu(net)
+
+    return net
+
+#反卷积
+def _conv_tranpose_layer(net, num_filters, filter_size, strides):
+    #得到权重。
+    weights_init = _conv_init_vars(net, num_filters, filter_size, transpose=True)
+    #获取初始化。
+    batch_size, rows, cols, in_channels = [i.value for i in net.get_shape()]
+    #获取新的filter大小，用原来的乘以stride,也就是扩大。记住这个公式。因为原来公式是除以strides
+    new_rows, new_cols = int(rows * strides), int(cols * strides)
+    # new_shape = #tf.pack([tf.shape(net)[0], new_rows, new_cols, num_filters])
+
+    new_shape = [batch_size, new_rows, new_cols, num_filters]
+    #stack操作获取新的shape
+    tf_shape = tf.stack(new_shape)
+    strides_shape = [1,strides,strides,1]
+
+    net = tf.nn.conv2d_transpose(net, weights_init, tf_shape, strides_shape, padding='SAME')
+    net = _instance_norm(net)  #这块没太看懂，到时候重新弄。
+    return tf.nn.relu(net)
+
+#残差网络，原始net+跳过俩层的结果，我们先写个跳过1层的结果tmp,再return时再加一层卷积，将tmp赋值过去就是2层结果。
+def _residual_block(net, filter_size=3):
+    #原始结果，也就是跳过了2层的不变结果
+    tmp = _conv_layer(net, 128, filter_size, 1)
+    #特征图自身net+2层的结果，所以里面是赋值了tmp,这样就是俩层后的结果。
+    return net + _conv_layer(tmp, 128, filter_size, 1, relu=False)
+#这块没太看懂，到时候重新研究。tensorflow其实直接有batch_normazition模块。
+def _instance_norm(net, train=True):
+    batch, rows, cols, channels = [i.value for i in net.get_shape()]
+    var_shape = [channels]
+    #moments:第一个是输入值，第二个是输入值的索引值，第三个是否保留都是True
+    mu, sigma_sq = tf.nn.moments(net, [1,2], keep_dims=True)
+    shift = tf.Variable(tf.zeros(var_shape))
+    scale = tf.Variable(tf.ones(var_shape))
+    epsilon = 1e-3
+    #归一化，根据论文得出的公式。
+    normalized = (net-mu)/(sigma_sq + epsilon)**(.5)
+    return scale * normalized + shift
+
+#反卷积初始化操作
+def _conv_init_vars(net, out_channels, filter_size, transpose=False):
+    _, rows, cols, in_channels = [i.value for i in net.get_shape()]
+    #记住正卷积核反卷积的参数对比。
+    if not transpose:
+        weights_shape = [filter_size, filter_size, in_channels, out_channels]
+    else:
+        weights_shape = [filter_size, filter_size, out_channels, in_channels]
+
+    weights_init = tf.Variable(tf.truncated_normal(weights_shape, stddev=WEIGHTS_INIT_STDEV, seed=1), dtype=tf.float32)
+    return weights_init
