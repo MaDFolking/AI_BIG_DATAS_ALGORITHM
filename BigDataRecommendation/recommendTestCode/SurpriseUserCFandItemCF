@@ -1,0 +1,209 @@
+import os
+import surprise
+from surprise import Dataset, Reader
+from surprise import NormalPredictor, BaselineOnly
+from surprise import evaluate, print_perf
+from surprise import KNNBasic, KNNWithMeans, KNNBaseline
+import numpy as np
+from six import iteritems
+
+#第一个知识点: 加载数据方式
+# 方式一：加载模式数据（这种方式会从网络上下载数据，速度比较慢）
+# 导入surprise默认携带的数据(Movieline数据)
+# 默认加载数据，会提示需要下载数据，当数据已经存在的时候就不需要下载啦
+# 支持三种参数：'ml-100k', 'ml-1m', and 'jester'
+data1 = Dataset.load_builtin('ml-100k')
+
+# 可以通过手动的进行数据切分，产生和机器学习交叉验证类似的效果
+data1.split(n_folds = 3)
+
+# 方式二：加载指定数据集
+# 导入自己的数据集/实际工作中导入业务数据集
+## 直接读取文件
+# 指定文件所在的路径(要求给定的文件中只有数据，没有列)
+filePath = os.path.expanduser("D:\\大数据+人工智能相关资料\\[20180629]_推荐系统：推荐算法模型之协同过滤算法\\05_随堂代码\[20180629]_推荐系统：推荐算法模型之协同过滤算法\\datas\\ratings.csv")
+# 必须给定数据格式(必须给定一个数据读取器，告诉如何读取数据),记住，这是固定格式，因为Reader是基于Dataset的包,所以必须按照这个格式。
+reader = Reader(line_format="user item rating timestamp",sep=',')
+# 加载数据
+data2 = Dataset.load_from_file(filePath,reader=reader)
+print(data2)
+
+#当用户对物品的评分呈现正态分布时，用这个方法:
+#构建模型对象
+algo = NormalPredictor()
+predict = evaluate(algo = algo,data=data2,measures=["RMSE","MAE","FCP"])
+# print_perf(predict)  #Surprise框架输入方式
+
+#通过algo模型来预测用户对其他物品评分，相当于用户为X_train,预测出Y_predict,评分结果用est
+aa = algo.predict("1","2").est
+bb = algo.predict("1","3").est
+cc = algo.predict("3","4").est
+print("用户1对物品2的评分: %.3f"%aa)
+print("用户1对物品3的评分: %.3f"%bb)
+print("用户3对物品4的评分: %.3f"%cc)
+
+# 基于统计的基线推荐算法
+#
+# Baseline Only:算法的思想是认为用户u对于物品i的评分，是相对于平均评分μ的一个偏移；而这个偏移体现在两个方面：
+#
+# (1) 用户的差异性：用户u相对于其它用户而言，对于物品可能具有比较严格的要求或者比较宽松的要求；当具有比较严格的要求的时候，
+# 其实体现的是用户u和其它用户v相比，对于同一个物品i而言，一般r_ui < r_vi;
+# 所以可以可以通过找出用户u对所有物品的评分和全局平均评分μ之间的差值来作为用户u在评分一个新物品的时候，会给定一个相对于μ的一个分值。
+
+# (2)物品的差异性：物品i相对于其它物品而言，物品确实可能质量/性能比较低或者比较高的；当物品i的性能/质量比其它的物品差的时候，
+# 那么就可以认为物品i的最终评分相对于其它物品应该低一点；
+
+#对于als只能这样配置
+bls_option1 = {
+    "method":"als",  #默认是sgd
+    "n_epochs":10,   #迭代次数
+    "reg_i":25,      #物品的lambda,经验判断最好是25
+    "reg_u":10       #用户的lambda,经验判断最好是10
+}
+#对于sgd只能这样配置
+bls_option2 = {
+    "method":"sgd",
+    "n_epochs":40,
+    "reg":0.02,           #正则化前面的参数
+    "learning_rate":0.01
+}
+
+algo2 = BaselineOnly(bsl_options=bls_option1)
+evaluate(algo=algo2,data=data2,measures=["RMSE","MAE","FCP"])
+aa = algo.predict("1","1061",3.0)
+print(aa)
+
+# KNNBasic
+#
+# UserCF
+#
+# 普通的协同过滤算法；核心思想：
+#
+# 待预测的用户对物品i的评分，受该用户的相似用户对物品i的评分的影响
+# 从而认为待预测的用户对物品i的评分其实就是相似用户对物品i评分的加权和
+# 简单理解：根据用户历史行为信息，将相似用户喜好的物品推荐给当前用户
+#
+# 流程：
+#
+# 计算所有用户之间的相似度(一般情况下在UserCF中使用pearson相似度比较多)，从而得到相似度矩阵
+# 计算用户-物品评分矩阵; 首先从相似度矩阵中获取用户u的相似用户列表，
+# 然后根据这个列表计算用户u对物品i的评分(加权计算的方式)；迭代计算所有用户和所有物品的评分
+# ItemCF
+#
+# 简单理解：根据用户对物品的评分信息，计算物品与物品之间的相似度；根据用户的浏览行为/评分行为/喜欢的物品，将喜欢物品的相似物品推荐给用户。
+# data1
+
+#泊松相似度计算
+sim_optins = {"name":"pearson","user_based":"True","shrinkage":0}
+algo3 = KNNBaseline(sim_options=sim_optins)
+predict2 = evaluate(algo = algo3,data=data1,measures=['RMSE','MAE','FCP'])
+
+sim_option2 = {
+    'name':'pearson', # 使用什么相似度度量方式
+    'user_based': True # 是UserCF还是ItemCF《当参数user_based为true的时候，表示是UserCF》
+}
+# 构建模型
+algo4 = KNNBasic(sim_options=sim_option2)
+# 进行模型训练的时候，必须对训练数据进行构建（必须构建, 其实就是将Movieline格式数据转换为稀疏矩阵，
+# 在这个转换过程中会对用户id和物品id进行重新的赋值）
+# 在这个过程中，会做一个id的转换，就是将外部的数据id转换为内部数据id
+trainset = data1.build_full_trainset()
+#模型训练
+algo4.train(trainset)
+row_all_user_ids = ['1','3','5','7','9'] # 所有的用户id
+row_all_item_ids = ['2','4','6','8','10'] # 所有的物品id
+# for user_id in row_all_user_ids:
+#     for item_id in row_all_item_ids:
+#         print("用户%s对于物品%s的评分为:%.3f" % (user_id, item_id, algo.predict(user_id, item_id).est) )
+
+#直接获取相似物品
+row_item_id = '1'
+#物品id对应我们训练转化后稀疏矩阵的id赋值,我们俗称内部id,但最终结果展现的是外部id
+inner_item_id = algo4.trainset.to_inner_iid(riid=row_item_id)
+#找出最相似的k个商品
+item_neighbors = algo4.get_neighbors(inner_item_id,k = 10)
+# print("全部数据中的最相近的10个物品内部id为:{}".format(inner_item_id))
+# print("全部数据中的最相近的10个物品外部id为:{}".format([algo4.trainset.to_raw_iid(i) for i in item_neighbors]))  #这个方法就是将内部id转化为外部
+#
+# #计算相似度用sim函数，里面传递内部id
+# for i in item_neighbors:
+#     item_id = algo.trainset.to_raw_iid(i)
+#     print("物品{}对物品{}的相似度为: {}".format(row_item_id,item_id,algo4.sim[inner_item_id][i]))
+
+
+# ItemCF变种
+#
+# 构建当前用户u的物品喜好列表
+# 对于喜好列表中的所有物品i，分别根据计算出来的物品之间的相似度矩阵获取当前商品i的相似物品
+# 思考：可以认为物品i和它的相似物品是比较类似；同时我们可以认为如果此时我们将相似物品推荐给用户u其实是可以的。
+# 但是此时用户u的喜好商品是多个(列表)，所以产生的推荐列表不能直接拿某一个物品i的相似物品进行推荐
+# 根据用户u对喜好列表中的物品的偏好程度，更新对应相似物品的权重值
+# 计算所有相似物品的加权平均相似度
+# 获取相似度最大的前N个物品作为推荐列表
+
+print("物品相似度矩阵: ")
+print(algo4.sim)
+print(algo4.sim.shape)
+path = "D:\\大数据+人工智能相关资料\\[20180629]_推荐系统：推荐算法模型之协同过滤算法\\05_随堂代码\\[20180629]_推荐系统：推荐算法模型之协同过滤算法\\datas\\sim_out.txt"
+with open(path,'w',encoding='UTF-8') as writer:
+    n = algo4.sim.shape[0]
+    print(n)
+    for i in range(n):
+        for j in range(n):
+            row_i = algo4.trainset.to_raw_iid(i)
+            row_j = algo4.trainset.to_raw_iid(j)
+            sim = algo4.sim[i][j]
+            writer.writelines("{},{},{}\n".format(row_i,row_j,sim))
+
+
+"""
+KNNBasic, KNNWithMeans, KNNBaseline:
+KNNBasic: 最基本的协同过滤算法，就是直接对评分数据做计算操作
+KNNWithMeans：在基本的协同过滤算法上，加入均值偏置转换
+KNNBaseline：在基本的协同过滤算法上，将均值偏置转换为基准线偏置
+"""
+
+# 加载数据（将数据转换为按样本存储(user item rating)稀疏矩阵的形式）
+# 1. 方式一：直接通过Surprise的代码加载默认数据
+"""
+会从网络上下载电影的评分数据，默认会下载到:~/.surprise_data文件夹中;
+API: name参数可选值'ml-100k', 'ml-1m', and 'jester'.
+"""
+data = Dataset.load_builtin(name='ml-100k')
+
+# 模型构建、模块的效果评估
+# 1. 模型效果评估代码
+# a. 做一个手动的数据分割操作（类似交叉验证）
+data.split(5)
+
+# b. 构建模型
+sim_options = {'name': 'jaccard', 'user_based': True}
+algo = KNNBaseline(sim_options=sim_options, k=40)
+
+# c. 模型效果评估的运行
+evaluate(algo, data=data, measures=['RMSE', 'MAE', 'FCP'])
+
+# # 2. 模型构建代码
+# # a.对训练数据进行构建(必须构建的，将读取的行数据转换为真实的稀疏矩阵形式)
+# # 在转换的过程中，是会对用户id和物品id进行重新的编序号的
+# trainset = data.build_full_trainset()
+#
+# # b. 构建模型
+# sim_options = {'name': 'jaccard', 'user_based': True}
+# algo = KNNBaseline(sim_options=sim_options, k=40)
+#
+# # c. 模型训练
+# algo.train(trainset)
+#
+# # d. 模型预测
+# """
+# 在Surprise框架中，获取预测评分的API必须使用predict，predict底层会调用estimate API：
+# 两个API的区别：
+# predict：传入的是实际的用户id和物品id，predict会处理负的评分(转换过程，也就是数据读取的反过程)
+# estimate: 传入的是转换之后的用户id和物品id，estimate不会处理
+# """
+# uid = "210"
+# iid = "40"
+# pred = algo.predict(uid, iid, 3)
+# print("评分:{}".format(pred))
+# print("评分:{}".format(pred.est))
