@@ -1,0 +1,43 @@
+#杰卡德写法:
+#杰卡德是俩个物品的交集/俩个物品并集得到的相似度。分子是物品之间交集或者用户之间交集。分母是物品A+物品B-AB交集。
+
+def jaccard_sim(n_x, yr, min_support):
+    """
+    计算Jaccard相似度
+    :param n_x: 用户数量或者物品数量
+    :param yr: 用户的评分信息或者物品的评分信息
+    :param min_support: 最小支持度
+    :return:
+    """
+    sim = np.zeros(shape=(n_x, n_x), dtype=np.double)
+    a = np.zeros(shape=(n_x, n_x), dtype=np.int32)
+    b = np.zeros(shape=(n_x), dtype=np.int32)
+
+    for y, y_ratings in iteritems(yr):
+        # y: UserCF中，物品id；ItemCF中，用户id
+        # y_ratings：UserCF中：物品被所有用户的评分；ItemCF: 用户对所有物品的评分
+        # 也就是说：在UserCF中，y可以看成物品；在ItemCF中，y可以看成是用户。
+        for xi, ri in y_ratings:
+            # 这里可以看成xi用户对于物品y做了一个评分或者xi物品被用户y做了一次评分
+            # 这里计算每个用户评分过的商品数量
+            b[xi] += 1
+
+            for xj, rj in y_ratings:
+                # UserCF中：物品被用户xi和用户xj的评分ri和rj；所以这里体现的是：xi和xj同时评论了物品y
+                # ItemCF中：用户对于物品xi和物品xj的评分ri和rj；所以这里体现的是：用户y同时评论了xi和xj
+                # 这里计算两个用户同时评论过的商品数量
+                a[xi, xj] += 1
+
+    # 对于每个用户或者每个物品都计算相似度
+    for xi in range(n_x):
+        sim[xi, xi] = 1
+        for xj in range(xi + 1, n_x):
+            if a[xi, xj] < min_support:
+                # 如果两个人共同评分的物品少于min_support或者两个物品共同被评分的用户少于min_support，设置相似度为0
+                sim[xi, xj] = 0
+            else:
+                sim[xi, xj] = 1.0 * a[xi, xj] / (b[xi] + b[xj] - a[xi, xj])
+
+            sim[xj, xi] = sim[xi, xj]
+
+    return sim
