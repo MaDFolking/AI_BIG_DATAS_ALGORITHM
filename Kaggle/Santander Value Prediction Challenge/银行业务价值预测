@@ -1,0 +1,348 @@
+'''
+在本笔记本中，我们对数据进行预处理，并将数据反馈到梯度提升树模型中，
+得到了1.39个在公共主板上的数据，其工作流程如下：数据预处理。
+数据预处理的目的是为了达到更高的时空效率。我们所做的工作包括圆形的，常量的特征删除，
+重复的特征删除，不重要的特征删除，等等。这里的关键是确保预处理不影响精度。
+特征变换特征变换的目的是帮助模型更好地掌握数据中的信息，防止过度拟合。
+我们所做的包括在培训/测试集上删除“活”在不同发行版上的特性，添加统计特性，
+添加低维表示作为特征。模特。我们使用了两个模型：xgBoost和lightgbm。我们对最后预测的两个模型进行了平均。
+请继续关注，更多的更新将会到来。
+'''
+#第一步:加载数据，删除转换数据
+
+import numpy as np
+import pandas as pd
+import os
+#os.listdir(path) :返回该文件夹下的所有文件或者文件夹的名称。如果该文件夹下没内容就是一个空列表
+print(os.listdir("Untitled Folder\\"))
+import warnings
+
+#忽略警告信息
+warnings.filterwarnings('ignore')
+#注意，这个地方不要用sep=',' 
+train = pd.read_csv('Untitled Folder\\train.csv')
+test = pd.read_csv('Untitled Folder\\test.csv')
+#我们的业务是根据客户(也就是ID)求目标函数target.所以需要将y_train化为target(y值).并将id单独拿出来
+test_Id = test['ID']
+Y_train = train['target']
+
+print(train.shape)
+print(test.shape)
+#通过显示矩阵发现很多是稀疏矩阵，target和ID等又不进行计算，所以需要在内部删除用 inplace=True
+#log1p = log（x+1）这是个经过0点，x与y一直成e次方关系，所以x小于0的地方y极具下降，x大于0地方y缓慢上升。
+#我认为这样做目的是将小于0的部分变成离群点，更明显分布，集中处理大于0的部分。
+Y_train = np.log1p(Y_train)
+#0是行，1是列。将ID这一列删除。inplace表明这一操作在内部操作，不返回结果。如果不加这个，drop返回一个新结果
+#因为在训练集中ID和target不做数据计算所以删除
+#因为ID为第一列，target为第二列，所以我们这样写。
+train.drop('ID', axis = 1, inplace = True)
+train.drop('target', axis = 1, inplace = True)
+test.drop('ID', axis = 1, inplace = True)
+
+#nunique是某一行或者某一列数的种类，下面这个是返回一种的，再将其删除。也就是去掉一种类型的数据。
+#因为我们是稀疏矩阵，所以默认都是0也就是一种数据，我们将这类数据需要全部删除。这也是稀疏矩阵去0操作。
+cols_only_value = train.columns[train.nunique()==1]
+#values返回列表。如果不是则返回dataframe对象,这里显示大概200多种。单一种类数据。
+# print(cols_only_value)
+# print(cols_only_value.values)
+train.drop(cols_only_value,axis = 1,inplace = True)
+test.drop(cols_only_value,axis = 1,inplace = True)
+NUM_OF_DECIMALS = 32
+#保留32位
+train = train.round(NUM_OF_DECIMALS)
+test = test.round(NUM_OF_DECIMALS)
+colsToRemove = []
+columns = train.columns
+#下面是去重操作，将所有列中元素相同的列放进一个列表中，方便后续删除。
+for i in range(len(columns)-1):
+    #一列数据
+    v = train[columns[i]].values
+    dupCols = []
+    for j in range(i+1,len(columns)):
+        #俩个array有相同的shape和元素返回True
+        if np.array_equal(v,train[columns[j]].values):
+            colsToRemove.append(columns[j])
+train.drop(colsToRemove,axis = 1,inplace = True)
+test.drop(colsToRemove,axis = 1,inplace = True)
+train.shape
+print(train)
+#总结:上述中，我们主要缩小数据，删除无用数据和重复数据(因为重复数据对最后结果无用，反而更容易过拟合)，将稀疏矩阵尽量趋近稠密。
+
+'''
+这里我们使用一个弱的 RandomForestRegressor 来获得特性的重要。
+在这里我们选择了TOP NUM_of_FERES重要特性。num_of_properties这里是一个可以调优的超参数。
+'''
+from sklearn import model_selection
+from sklearn import ensemble
+#特征数
+NUM_FEATURES = 1000
+#rmse方法
+def math_rmse(y,predict):
+    return np.sqrt(np.mean(np.power(y-predict,2)))
+#拆分数据集,注意y_train是返回列表,因为y是目标值
+x_train,x_test,y_train,y_test = model_selection.train_test_split(train,Y_train.values,test_size = 0.2,random_state=5)
+model = ensemble.RandomForestRegressor(n_jobs=-1,max_depth=10)
+model.fit(x_train,y_train)
+print(math_rmse(y_test,model.predict(x_test)))
+#随机森林的常用属性: feature_importances_ :特征的重要性，这个数越大越重要，所以排序取前1000个,注意DataFrame的字典格式的value必须是列表，既然是字典
+#默认也是二维数组，而我们取的是一维，所以最后要[feature].values。这是取第二行的train里的columns维度。(毕竟我们要映射这个。)
+#sort_values(axis=1)就是按索引排序，ascending=False是降序排。
+aa = pd.DataFrame({"importance":model.feature_importances_,'feature':train.columns}).sort_values(
+by = ['importance'],ascending=[False])[:NUM_FEATURES]
+print(aa.shape)
+col = pd.DataFrame({"importance":model.feature_importances_,'feature':train.columns}).sort_values(
+by = ['importance'],ascending=[False])[:NUM_FEATURES]['feature'].values
+print(col.shape)
+print(col)
+train = train[col]
+test = test[col]
+train.shape
+
+'''
+我们尝试用柯尔莫哥洛夫-斯米尔诺夫测试测试训练数据和测试数据。
+：https://www.cnblogs.com/sddai/p/5737408.html
+这是一个双侧测试的零假设, 是否从相同的连续分布抽取2独立样本 (见更多)。如果一个特征在训练集上的分布与测试集不同, 
+我们应该删除这个特性, 因为在训练中我们学到的东西不能一概而论。THRESHOLD_P_VALUE 和 THRESHOLD_STATISTIC 是超参数。
+'''
+from scipy.stats import ks_2samp
+THRESHOLD_P_VALUE = 0.01  #我们设定的p值，也就是ks返回的第二个值，不能低于这个值。否则拒绝这俩样本/维度分布相同设定的假设。
+THRESHOLD_STATISTIC = 0.3 #我们设定的ks统计量。不能高于这个值，否则拒绝这俩样本/维度分布相同设定的假设。
+diff_cols = []
+for col in train.columns:
+    statistic,pvalue = ks_2samp(train[col].values,test[col].values)
+    if pvalue<=THRESHOLD_P_VALUE and np.abs(statistic)>THRESHOLD_STATISTIC:
+        diff_cols.append(col)
+for col in diff_cols:
+    if col in train.columns:
+        train.drop(col,axis = 1,inplace = True)
+        test.drop(col,axis = 1,inplace = True)
+train.shape
+
+'''
+我们增加了一些额外的统计功能的原始功能。
+此外, 我们还添加了低维表示作为特征。NUM_OF_COM 是超参数.最后低纬度的部分与最后过滤后的部分进axis = 1的concat.
+'''
+from sklearn import random_projection
+from sklearn.preprocessing import scale, MinMaxScaler
+import gc
+import itertools
+from copy import deepcopy
+import time
+import progressbar
+ntrain = len(train)
+
+ntest = len(test)
+tmp = pd.concat([train,test],axis=1)  #随机项目
+#这是权重计算，每行的和再除以总行数(总样本数)，这样相当于这个样本的消费数占据所有样本的比重。
+weight = ((train!=0).sum()/ntrain).values
+#记住，train,test这些都是向量计算，都是每行或者每列计算。
+#weight1 = (train!=0).sum()
+# print(weight1)
+#这种写法让0的数都取nan,方便我们后面计算自动过滤掉nan
+tmp_train = train[train!=0]
+tmp_test = test[test!=0]
+#矩阵与向量计算，行向量与矩阵每一行所有数相乘和等于该行最终结果。axis=1 每行的结果和，axis=0是每列结果和，都是Nan
+train['weight_count'] = (tmp_train*weight).sum(axis = 1)
+test['weight_count'] = (tmp_test*weight).sum(axis = 1)
+train['count_not0'] = tmp_train.sum(axis = 1)
+test['count_not0'] = tmp_test.sum(axis = 1)
+train["sum"] = train.sum(axis = 1)
+test["sum"] = test.sum(axis = 1)
+train["var"] = tmp_train.var(axis = 1) #方差
+test["var"] = tmp_test.var(axis = 1)
+train["median"] = tmp_train.median(axis = 1)
+test["median"] = tmp_test.median(axis = 1)
+train["std"] = tmp_train.std(axis = 1)  #偏差(标准偏差)
+test["std"] = tmp_test.std(axis = 1)
+train["max"] = tmp_train.max(axis = 1)
+test["max"] = tmp_test.max(axis = 1)
+train["min"] = tmp_train.min(axis = 1)
+test["min"] = tmp_test.min(axis = 1)
+del(tmp_train)
+del(tmp_test)
+#我们是按照行合并，也就是列不变情况，行增加，这样会出现很多Nan值。所以我们用nan_to_num进行去nan.
+tmp = pd.DataFrame(np.nan_to_num(tmp))
+
+total_df = deepcopy(tmp)
+
+
+#np.isnan是否为nan.np.any:只要没有nan,就返回True,这个检查下tmp里还有没有nan.
+print(np.any(np.isnan(total_df)))
+#any查看两矩阵是否有一个对应元素相等。事实上，all（）操作就是对两个矩阵的比对结果再做一次与运算，而any则是做一次或运算
+#分别返回一个表示“哪些元素是有穷的（非inf，非NaN）或哪些元素是无穷的”的布尔型数组。简单说np.isfinite(nan)/np.isfinite(inf)都是False,因为这俩个一是Nan
+#,一个是无穷。np.isfinite(1)返回True。
+#所以这个也是检查total_df有没有nan或者inf(无穷数)这些异常数。
+print(np.all(np.isfinite(total_df)))
+p = progressbar.ProgressBar() #显示进度条
+p.start()
+print('total_df.columns:',total_df.columns)
+columnsCount = len(total_df.columns)
+#平方方差缩放所有列,将偏差大的去掉。
+for col in total_df.columns:
+    p.update(col/columnsCount*100)
+    #每个特征维度的列向量。
+    data = total_df[col].values
+    #标准偏差:S = Sqr(∑(xn-x拨)^2 /(n-1))
+    #一种量度数据分布的分散程度之标准，用以衡量数据值偏离算术平均值的程度。
+    #标准偏差越小，这些值偏离平均值就越少，反之亦然。
+    #标准偏差的大小可通过标准偏差与平均值的倍率关系来衡量。
+    data_mean,data_std = np.mean(data),np.std(data)
+    #扩大标准差
+    cut_off = data_std*3
+    #取范围值，平均值-标准偏差*3为下届，上界是平均值+标准偏差*3
+    lower,upper = data_mean-cut_off,data_mean + cut_off
+    #将每个特征维度上偏差大的去掉，重新放在一个列表中
+    outList = [i for i in data if i>lower and i <upper]
+    if(len(outList)>0):
+        non_zero_idx = data != 0
+        #loc是返回的是相应轴的数目，可以添加条件来去掉不想要的。
+        total_df.loc[non_zero_idx,col] = np.log(data[non_zero_idx]) #这行不太明白
+    
+    nonzero_rows = total_df[col] != 0
+    #numpy.all() 测试沿给定轴的所有数组元素是否都计算为True。nan,无穷大，无穷小都是False,其他为True
+    if np.isfinite(total_df.loc[nonzero_rows,col]).all():
+        #标准化数据,标准化: 以均值和分量方式为中心，以单位方差为中心。
+        total_df.loc[nonzero_rows, col] = scale(total_df.loc[nonzero_rows, col])
+        if  np.isfinite(total_df[col]).all():
+            #每一列都标准化。
+            total_df[col] = scale(total_df[col])
+    #因为启动了progressbar,最后要collect下，collect是收集无法访问的内存垃圾。
+    gc.collect()
+p.finish()
+#过滤完后，开始降低纬度，这里没用PCA,而是用 SparseRandomProjection 
+#SparseRandomProjection: 通过稀疏随机投影减少维数
+#稀疏随机矩阵是密集随机投影矩阵的替代方案，其保证了类似的嵌入质量，同时具有更高的存储器效率并且允许更快地计算投影数据。
+#一般来说是用于我们这种大量稀疏矩阵，当然也可以使用PCA。
+#具体看: http://scikit-learn.org/stable/modules/generated/sklearn.random_projection.SparseRandomProjection.html#sklearn.random_projection.SparseRandomProjection
+'''
+您当然可以试用PCA，这里我使用RF进行功能选择只是因为它简单，快速，
+不太可能丢失任何有用的信息。我个人不喜欢PCA，因为它是一种线性方法，当原始特征分布在非线性流形上时，它表现很差
+所以做非线性数据集时最好用SparseRandomProjection，做肯定是线性数据集时用PCA
+'''
+NUM_OF_COM = 100
+#投影置100维度。
+transformer = random_projection.SparseRandomProjection(n_components = NUM_OF_COM)
+#降低纬度后拟合转换
+RP = transformer.fit_transform(tmp)
+#降低纬度后开始转换切割样本数
+rp = pd.DataFrame(RP)
+columns = ["RandomProjection{}".format(i) for i in range(NUM_OF_COM)]
+rp.columns = columns
+rp_train = rp[:ntrain]
+rp_test = rp[ntrain:]
+rp_test.index = test.index
+
+#连接原始矩阵和随机降维的矩阵,用横向连接。
+train = pd.concat([train,rp_train],axis = 1)
+test = pd.concat([test,rp_test],axis = 1)
+
+del(rp_train)
+del(rp_test)
+print(train)
+train.shape
+
+rp = pd.DataFrame(RP)
+columns = ["RandomProjection{}".format(i) for i in range(NUM_OF_COM)]
+rp.columns = columns
+rp_train = rp[:ntrain]
+rp_test = rp[ntrain:]
+print(test.shape)
+print(rp_test.shape)
+
+#连接原始矩阵和随机降维的矩阵,用横向连接。
+train = pd.concat([train,rp_train],axis = 1)
+test = pd.concat([test,rp_test],axis = 1)
+
+del(rp_train)
+del(rp_test)
+print(train)
+train.shape
+
+'''
+定义交叉验证方法和模型。xgboost 和 lightgbm 用作基本模型。
+超参数已经通过网格搜索进行了调整, 这里我们直接使用它们。NUM_FOLDS 可作为超参数处理
+'''
+
+
+'''
+定义交叉验证方法和模型。xgboost 和 lightgbm 用作基本模型。
+超参数已经通过网格搜索进行了调整, 这里我们直接使用它们。NUM_FOLDS 可作为超参数处理
+'''
+from sklearn.ensemble import RandomForestRegressor,  GradientBoostingRegressor
+from sklearn.base import BaseEstimator, TransformerMixin, RegressorMixin, clone
+from sklearn.model_selection import KFold, cross_val_score, train_test_split
+from sklearn.metrics import mean_squared_error
+import xgboost as xgb
+import lightgbm as lgb
+'''
+定义给定模型的评估方法。我们在训练集上使用 k 倍交叉验证。
+损失函数为目标与预测的根均方对数误差
+注: train和y_train是全局变量
+'''
+#
+NUM_FOLDS = 5
+#由于XGB特性，可以自己设定损失函数，我们设定为均方对数误差开根号
+#将模型传递给这个函数，求出rmse
+def rmse_cv(model):
+    kf = KFold(NUM_FOLDS,shuffle = True,random_state=42).get_n_splits(train.values)
+    rmse= np.sqrt(-cross_val_score(model, train.values, Y_train, scoring="neg_mean_squared_error", cv = kf))
+    return(rmse)
+
+model_xgb = xgb.XGBRegressor(colsample_bytree=0.055, colsample_bylevel =0.5, 
+                             gamma=1.5, learning_rate=0.02, max_depth=32, 
+                             objective='reg:linear',booster='gbtree',
+                             min_child_weight=57, n_estimators=1000, reg_alpha=0, 
+                             reg_lambda = 0,eval_metric = 'rmse', subsample=0.7, 
+                             silent=1, n_jobs = -1, early_stopping_rounds = 14,
+                             random_state =7, nthread = -1)
+model_lgb = lgb.LGBMRegressor(objective='regression',num_leaves=144,
+                              learning_rate=0.005, n_estimators=720, max_depth=13,
+                              metric='rmse',is_training_metric=True,
+                              max_bin = 55, bagging_fraction = 0.8,verbose=-1,
+                              bagging_freq = 5, feature_fraction = 0.9)  
+#ensemble method: model averaging
+class AveragingModels(BaseEstimator, RegressorMixin, TransformerMixin):
+    def __init__(self, models):
+        self.models = models
+        
+    # we define clones of the original models to fit the data in
+    # the reason of clone is avoiding affect the original base models
+    def fit(self, X, y):
+        self.models_ = [clone(x) for x in self.models]  
+        # Train cloned base models
+        for model in self.models_:
+            model.fit(X, y)
+        return self
+    
+    #Now we do the predictions for cloned models and average them
+    def predict(self, X):
+        predictions = np.column_stack([ model.predict(X) for model in self.models_ ])
+        return np.mean(predictions, axis=1)
+
+#cross validation   
+score = rmsle_cv(model_xgb)
+print("Xgboost score: {:.4f} ({:.4f})\n".format(score.mean(), score.std()))
+score = rmsle_cv(model_lgb)
+print("LGBM score: {:.4f} ({:.4f})\n" .format(score.mean(), score.std()))
+averaged_models = AveragingModels(models = (model_xgb, model_lgb))
+score = rmsle_cv(averaged_models)
+print("averaged score: {:.4f} ({:.4f})\n" .format(score.mean(), score.std()))
+#predict and submit 
+averaged_models.fit(train.values, y_train)
+pred = np.expm1(averaged_models.predict(test.values))
+ensemble = pred
+sub = pd.DataFrame()
+sub['ID'] = test_ID
+sub['target'] = ensemble
+sub.to_csv('submission.csv',index=False)
+
+#Xgboost score: 1.3582 (0.0640)
+#LGBM score: 1.3437 (0.0519)
+#averaged score: 1.3431 (0.0586)
+
+#Xgboost score: 1.3566 (0.0525)
+#LGBM score: 1.3477 (0.0497)
+#averaged score: 1.3438 (0.0516)
+    
+    
+    
