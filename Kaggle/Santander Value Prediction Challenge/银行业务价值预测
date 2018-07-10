@@ -105,7 +105,7 @@ train.shape
 ：https://www.cnblogs.com/sddai/p/5737408.html
 这是一个双侧测试的零假设, 是否从相同的连续分布抽取2独立样本 (见更多)。如果一个特征在训练集上的分布与测试集不同, 
 我们应该删除这个特性, 因为在训练中我们学到的东西不能一概而论。THRESHOLD_P_VALUE 和 THRESHOLD_STATISTIC 是超参数。
-PS:这里的数据是排序后的类型才可以做这步操作
+PS:这里的数据是数值型才可以做
 '''
 from scipy.stats import ks_2samp
 THRESHOLD_P_VALUE = 0.01  #我们设定的p值，也就是ks返回的第二个值，不能低于这个值。否则拒绝这俩样本/维度分布相同设定的假设。
