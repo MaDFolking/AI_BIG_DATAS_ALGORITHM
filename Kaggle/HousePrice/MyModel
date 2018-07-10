@@ -1,0 +1,319 @@
+import numpy as np
+import pandas as pd
+import os
+print(os.listdir('Untitled Folder 3//'))
+
+import warnings
+warnings.filterwarnings('ignore')
+
+#第1步: 加载数据,用index_col = 0去除Id这个噪音点。否则后面我们也要drop掉。
+train = pd.read_csv('Untitled Folder 3//train.csv',index_col=0)
+test = pd.read_csv('Untitled Folder 3//test.csv',index_col=0)
+print(train.shape," ",test.shape)
+
+#print(train.shape," ",test.shape)
+train.head()
+test.head()
+
+#第2步，数据量不大，就可以可视化看下。数据量大，就需要根据业务判断。
+%matplotlib inline
+prices = pd.DataFrame({"price":train["SalePrice"], "log(price + 1)":np.log1p(train["SalePrice"])})
+prices.hist()
+
+#第3步，平滑target,进行drop
+Y_train = np.log1p(train['SalePrice'])
+train.drop('SalePrice',axis = 1,inplace = True)
+print(train.shape," ",test.shape)
+
+#第4步,merge，方便以后处理
+all_df = pd.concat((train,test),axis=0)
+print(all_df.shape," ",train.shape," ",test.shape)
+
+#第5步，查看 MSSubClass,根据描述说明，它是建筑类型，是分类，我们需要离散化再数字化处理。
+#all_df['MSSubClass'].value_counts(ascending=False).head(10)
+#pd有个自带的函数get_dummies可以做到分类。
+pd.get_dummies(all_df['MSSubClass'],prefix ='MSSubClass').head()
+all_df = pd.get_dummies(all_df)
+all_df.head()
+print(all_df.shape," ",train.shape," ",test.shape)
+
+#第6步，处理数字类型，先处理NaN值。先查看，再处理，具体根据业务，如果业务没说明，就按照少数drop,多数mean.
+#print(all_df.isnull().sum().sort_values(ascending=False).head(10))
+#发现有2个比较多，一个比较少，先查看比较少的业务情况和数据分布 MasVnrArea
+#print(all_df[all_df.MasVnrArea==0])
+#发现有1722行，太多，放弃，然后处理剩下nan值情况，取平均数
+all_df = all_df.fillna(all_df.mean())
+#检查
+print(all_df.isnull().sum().sort_values(ascending=False).head(10))
+print(all_df.shape," ",train.shape," ",test.shape)
+
+#第7步,数值型数据标准化。
+#先取数值型数据的列,不等于 object就行，防止 one-hot类型。
+print(all_df.shape)
+numeric_cols = all_df.columns[all_df.dtypes!='object']
+print(numeric_cols)
+#标准化按照(X-X')/S来计算
+all_df_mean = all_df.loc[:,numeric_cols].mean()
+all_df_std = all_df.loc[:,numeric_cols].std()
+all_df.loc[:,numeric_cols] = (all_df.loc[:,numeric_cols]-all_df_mean)/all_df_std
+all_df.shape
+print(all_df.shape," ",train.shape," ",test.shape)
+
+#第8步:拆分数据集
+train_df = all_df[:1460]
+test_df = all_df[1460:]
+print(train_df.shape," ",test_df.shape)
+
+#第9步:柯尔莫哥洛夫-斯米尔诺夫测试测试训练数据和测试数据。
+'''
+解释：
+这是一个双侧测试的零假设, 是否从相同的连续分布抽取2独立样本 (见更多)。如果一个特征在训练集上的分布与测试集不同, 
+我们应该删除这个特性, 因为在训练中我们学到的东西不能一概而论。THRESHOLD_P_VALUE 和 THRESHOLD_STATISTIC 是超参数。
+'''
+# from scipy.stats import ks_2samp
+# THRESHOLD_P_VALUE = 0.01  #我们设定的p值，也就是ks返回的第二个值，不能低于这个值。否则拒绝这俩样本/维度分布相同设定的假设。
+# THRESHOLD_STATISTIC = 0.3 #我们设定的ks统计量。不能高于这个值，否则拒绝这俩样本/维度分布相同设定的假设。
+# diffent_cols = []
+# print(train_numeric.shape," ",test_numeric.shape)
+# for i in train.columns:
+#     value1,value2 = ks_2samp(train_df[i].values,test_df[i].values)
+#     if np.abs(value1)>THRESHOLD_P_VALUE and value2<=THRESHOLD_STATISTIC:
+#         diffent_cols.append(i)
+
+# for j in diffent_cols:
+#     if j in train.columns:
+#         train_df.drop(col,axis = 1,inplace = True)
+#         test_df.drop(col,axis = 1,inplace = True)
+# print(train_df.shape)
+    
+#建模，用XGB,LGB,LR,RF(随机森林)四个模型尝试融合。
+#用pipline和网格搜索来调参数。
+
+#LR:默认就好，主要调正则化:C:正则化参数，不要太大，0.1~0.5
+
+#RF:(1)max_features:单个决策树使用的最大特征数,数据量不太大时一般用auto()，太大时可以选择0.X选取百分之多少以防止过拟合。
+# n_estimators:子树的数量，多点好。根据数量量来平衡。
+# random_state 5~100尝试
+# min_sample_leaf 最小叶子个数,也是根据数量来算。毕竟我们还要分树，这个地方我建议以5为单位，最大弄到100即可。
+# oob_score:设置 True开启。随机森林交叉验证方法, 这种方法只是简单的标记在每颗子树中用的观察数据。 
+#然后对每一个观察样本找出一个最大投票得分，是由那些没有使用该观察样本进行训练的子树投票得到。
+
+#XGB自己内置交叉验证来得到最好参数
+#XGB: eta:通过减少每一步的权重，可以提高模型的鲁棒性。 典型值为0.01-0.2 类似learning_rate。相当于慢慢减少权重。 
+#min_child_weight： 最小样本权重的和。 过高欠你和，比重占据太大，太低过拟合。与线性θ类似。
+#max_depth 1-10
+#max_leaf_nodes ：最大叶子节点，一般为max_depth^2次方。
+# gamma： 在节点分裂时，只有分裂后损失函数的值下降了，才会分裂这个节点。Gamma指定了节点分裂所需的最小损失函数下降值。
+# 这个参数的值越大，算法越保守。这个参数的值和损失函数息息相关，所以是需要调整的
+#subsample：0.5-1 这个参数控制对于每棵树，随机采样的比例。减小这个参数的值，算法会更加保守，避免过拟合。但是，如果这个值设置得过小，
+#它可能会导致欠拟合。
+#colsample_bytree 0.5-1和GBM里面的max_features参数类似。用来控制每棵随机采样的列数的占比(每一列是一个特征)。 
+#learning_rate=0.05, 
+#n_estimators 决策树数量
+#reg_alpha 权重的L1正则化项 
+# reg_lambda ： 权重的L2正则化项
+
+#LGB: 不要在少量数据上使用，会过拟合，建议 10,000+ 行记录时使用。
+#以下5个是经常调整的参数
+#objective='regression',
+#num_leaves=5, 树模型复杂度，<2^max_depth
+#learning_rate=0.05, n_estimators=720,
+#max_depth 模型过拟合时，首先调整这个  注意:在回归中，没有max_dapth。(估计只是在分类中),否则出错。
+#max_bin = 55, 默认255，feature存入bin的最大数量.调小max_bin的值可以提高模型训练速度，调大它的值和调大num_leaves起到的效果类似。
+#early_stopping_round ： 设置的数中如果没有提高，就终止，可以加速迭代。一般自己根据业务设置
+######################################
+#下面的LGB参数都是防止过拟合和加速用，所以无法在网格搜索里调，需要根据自己的经验调整。
+#bagging_fraction = 0.8, # 类似于 feature_fraction, 但是它将在不进行重采样的情况下随机选择部分数据,可以用来加速训练
+# 可以用来处理过拟合,Note: 为了启用 bagging, bagging_freq 应该设置为非零值
+#feature_fraction = 0.2319,如果 feature_fraction 小于 1.0, LightGBM 将会在每次迭代中随机选择部分特征. 
+#例如, 如果设置为 0.8, 将会在每棵树训练之前选择 80% 的特征
+# 可以用来加速训练,可以用来处理过拟合
+#min_data_in_leaf =6,  将它设置为较大的值可以避免生长太深的树，但可能会导致 underfitting，
+#在大型数据集时就设置为数百或数千 默认20 叶子可能具有的最小记录数,我们这里数据量小，所以可以设置小一些。
+#feature_fraction_seed=9,1-100 feature_fraction的种子
+#bagging_seed=9,  1-100   bagging_seed的种子
+#bagging_freq = 5,  每次迭代时用的数据 .默认0 可以取任意值 我们一般1 -10选取,加速拟合用的。
+#min_sum_hessian_in_leaf = 11   相当于XGB的 min_child_weight 最小样本权重的叶子总数。 过高欠你和，比重占据太大，太低过拟合。与线性θ类似。
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import GridSearchCV
+from sklearn.pipeline import Pipeline
+from sklearn.svm import LinearSVC
+from sklearn.linear_model import SGDClassifier
+from sklearn.decomposition import PCA, NMF
+from sklearn.linear_model import LinearRegression
+import xgboost as xgb
+import lightgbm as lgb
+#我之前理解是任何模型都可以放里面。但其实它本质是一个模型有多个操作，将这些操作放里面，最后一个地方必须是模型。
+#所以我们四个模型弄网格搜索，就不用pipline了，直接上网格搜索了。
+
+#以下是pipline写法，但这次我们不用。
+# def PolyLr(C = 0.1):
+#     return Pipeline([('lr',LogisticRegression(C=C))])
+# def PolyRf(n_estimators = 100):
+#     return Pipeline([('rf',RandomForestRegressor(n_estimators = n_estimators))])
+# def PolyXGB(colsample_bytree=0.4603, gamma=0.0468, 
+#             learning_rate=0.05, max_depth=5, 
+#             min_child_weight=1.7817, n_estimators=2200,
+#             reg_alpha=0.4640, reg_lambda=0.8571,silent=1,early_stopping_rounds = 15,
+#             subsample=0.5213,random_state=7,nthread = -1                                ):
+#     return Pipeline([('xgb',xgb.XGBRegressor(colsample_bytree=colsample_bytree, gamma=gamma, 
+#       learning_rate=learning_rate, max_depth=max_depth, 
+#       min_child_weight=min_child_weight, n_estimators=n_estimators,
+#       reg_alpha=reg_alpha, reg_lambda=reg_lambda,silent = silent,early_stopping_rounds = early_stopping_rounds,
+#       subsample=subsample, 
+#       random_state =random_state,nthread = nthread))])
+
+# def PolyLGB(objective='regression',num_leaves=5,
+#              learning_rate=0.05, n_estimators=720,
+#              max_bin = 55, bagging_fraction = 0.8,
+#              bagging_freq = 5, feature_fraction = 0.2319,
+#              feature_fraction_seed=9, bagging_seed=9,
+#              min_data_in_leaf =6, min_sum_hessian_in_leaf = 11):
+#     return Pipeline([('lgb',lgb.LGBMRegressor(
+#                               objective=objective,num_leaves=num_leaves,
+#                               learning_rate=learning_rate, n_estimators=n_estimators,
+#                               max_bin = max_bin, bagging_fraction = bagging_fraction,
+#                               bagging_freq = bagging_freq, feature_fraction = feature_fraction,
+#                               feature_fraction_seed=feature_fraction_seed, bagging_seed=bagging_seed,
+#                               min_data_in_leaf =min_data_in_leaf, min_sum_hessian_in_leaf = min_sum_hessian_in_leaf
+#     ))])
+
+#注意,XGB一次只能调这俩个参数，剩下需要一个个调试，最好再配上可视化。
+pagram_grid_xgb = {
+ #'colsample_bytree':[ float(i/10000)for i in range(1,10001)],
+ #'gamma':[ float(i/10000)for i in range(1,10001)],
+ #'learning_rate':[ float(i/100)for i in range(1,101)],|
+ 'max_depth':[ i for i in range(1,100)],
+ 'min_child_weight':[ float(i/10000)for i in range(10000,100001)],
+ #'n_estimators':[i*10 for i in range(1,240)],
+ #'reg_alpha':[ float(i/10000)for i in range(1,10001)],
+ #'reg_lambda':[ float(i/10000)for i in range(1,10001)],
+# 'xgb__silent':[1],
+# 'xgb__early_stopping_rounds':[15],
+ #'xgb__subsample':[ float(i/10000)for i in range(1,10001)],
+ #'xgb__random_state':[ i for i in range(1,100)],
+# 'xgb__nthread':[-1]   
+}
+#注意: lgb一次只能调这四个参数，其他一步步调试，再可视化查看
+pagram_grid_lgb = {
+ #'lgb__objective':['regression'],
+ 'num_leaves':[ i for i in range(1,101)],
+ 'learning_rate':[ float(i/100)for i in range(1,101)],
+ 'n_estimators':[ i*10 for i in range(1,300)],
+ 'max_bin':[ i for i in range(1,100)],
+# 'lgb__max_depth':[i for i in range(1,21)] #注意，在回归问题中，没有max_depth
+ #'lgb__feature_fraction_seed':[i for i in range(1,101)],
+ #'lgb__bagging_seed':[i for i in range(1,101)],
+ #'lgb__bagging_freq':[i for i in range(1,11)],
+ #'lgb__min_sum_hessian_in_leaf':[i for i in range(1,100)]
+# 'lgb__bagging_fraction':[float(i/10) for i in range(1,11)],
+# 'lgb__bagging_freq':[i for i in range(1,11)],
+# 'lgb__feature_fraction':[ float(i/10000)for i in range(1,10001)],
+# 'lgb__feature_fraction_seed':[i for i in range(1,11)],
+# 'lgb__bagging_seed':[i for i in range(1,11)],
+# 'lgb__min_data_in_leaf':[i for i in range(1,11)],
+# 'lgb__min_sum_hessian_in_leaf':[i for i in range(1,21)]  
+}
+pagram_grid_rf = {'n_estimators' : [100,150,200],
+                  'max_depth':range(1,10),
+                  'random_state' : range(1,101),
+                  'min_samples_leaf' : range(1,50)}
+lr = LinearRegression()
+rf = RandomForestRegressor(n_estimators = 100,max_depth = 3,random_state = 50,min_samples_leaf = 100,n_jobs = -1)
+xgb_model = xgb.XGBRegressor(
+ colsample_bytree=0.4603, 
+ gamma=0.0468, 
+ learning_rate=0.05,
+ max_depth=5, 
+ min_child_weight=1.7817,
+ n_estimators=1400,
+ reg_alpha=0.4640,
+ reg_lambda=0.8571,
+ silent=1,
+ early_stopping_rounds = 15,
+ subsample=0.5213,
+ random_state=7,
+ nthread = -1                            
+)
+lgb_model = lgb.LGBMRegressor(
+ objective='regression',num_leaves=5,
+ learning_rate=0.05, n_estimators=720,
+ max_bin = 55,
+ #max_depth = 3
+ #feature_fraction_seed = 9,
+ #bagging_seed = 12,
+ #bagging_freq = 6,
+ #min_sum_hessian_in_leaf = 10,
+ #bagging_fraction = 0.8,
+ #feature_fraction = 0.2319
+)
+grid_rf = GridSearchCV(rf,pagram_grid_rf,cv = 5)
+grid_xgb = GridSearchCV(xgb_model,pagram_grid_xgb,cv=5)
+grid_lgb = GridSearchCV(lgb_model,pagram_grid_lgb,cv=5)
+lr.fit(train_df, Y_train) 
+grid_rf.fit(train_df, Y_train) 
+grid_xgb.fit(train_df, Y_train) 
+grid_lgb.fit(train_df, Y_train) 
+print(grid_xgb.best_params_)
+print(grid_rf.best_params_)
+print(grid_lgb.best_params_)
+
+
+
+from sklearn.model_selection import KFold, cross_val_score, train_test_split
+
+params = [1,2,3,4,5,6]
+test_scores = []
+for param in params:
+    clf = XGBRegressor(max_depth=param)
+    test_score = np.sqrt(-cross_val_score(clf, train_df, Y_train, cv=10, scoring='neg_mean_squared_error'))
+    test_scores.append(np.mean(test_score))
+#可视化
+import matplotlib.pyplot as plt
+%matplotlib inline
+plt.plot(params, test_scores)
+plt.title("max_depth vs CV Error");
+
+#得出损失点为max_depth= 5时最小
+#先写损失函数
+import xgboost as xgb
+n_folds=5
+def rmsle_cv(model):
+    kf=KFold(n_folds,shuffle=True,random_state=10).get_n_splits(train_df.values)
+    rmse=np.sqrt(-cross_val_score(model,train_df.values,Y_train,scoring='neg_mean_squared_error',cv=kf))
+    return rmse
+#开始创建模型
+xgb = xgb.XGBRegressor(colsample_bytree=0.4603, gamma=0.0468, 
+                             learning_rate=0.05, max_depth=5, 
+                             min_child_weight=1.7817, n_estimators=2200,
+                             reg_alpha=0.4640, reg_lambda=0.8571,
+                             subsample=0.5213, silent=1,
+                             random_state =7, nthread = -1)
+#score = np.expm1(xgb.predict(test_df))
+score_rmse = rmsle_cv(xgb)
+print("Xgboost score: {:.4f} ({:.4f})\n".format(score_rmse.mean(), score_rmse.std()))
+
+#开始拟合
+xgb.fit(train_df,Y_train)
+score = np.expm1(xgb.predict(test_df))
+#提交数据
+print(len(score))
+print(test_df.index)
+submissiong_df = pd.DataFrame(data = {"Id":test_df.index,'SalePrice':score})
+submissiong_df.head()
+submissiong_df.to_csv('submission.csv',index=False)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
