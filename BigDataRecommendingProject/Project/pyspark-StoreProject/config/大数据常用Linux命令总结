@@ -201,3 +201,248 @@
 		-》halt
 		-》init 0
 		-》重启：reboot
+		
+八.常用系统命令
+	-》ifconfig:用于查看网络信息
+	-》route -n
+	-》service：服务管理命令
+		service  iptables  start
+		/etc/init.d/iptables  start
+		-rwxr-xr-x. 1 root root  6334 Oct 10  2013 network:命令行管理服务
+		-rwxr-xr-x. 1 root root  2205 Nov 23  2013 NetworkManager：图形化界面
+		-》禁用NetworkManager
+			-》关闭
+			-》禁止开机启动
+		-》重启network服务  
+	-》chkconfig：chkconfig命令用于检查，设置系统的各种服务。
+chkconfig [--add][--del][--list][系统服务] 或 chkconfig [--level <等级代号>][系统服务][on/off/reset]
+
+-add 　增加所指定的系统服务，让chkconfig指令得以管理它，并同时在系统启动的叙述文件内增加相关数据。
+--del 　删除所指定的系统服务，不再由chkconfig指令管理，并同时在系统启动的叙述文件内删除相关数据。
+--level<等级代号> 　指定读系统服务要在哪一个执行等级中开启或关毕。
+		chkconfig   service_name  on/off/--list
+		
+		# chkconfig telnet on //开启Telnet服务
+# chkconfig -list //列出chkconfig所知道的所有的服务的情况
+	-》top ：查看系统资源及进程
+	-》kill ：强制关闭某个进程
+		kill -9 pid 
+	-》ps :进程查看命令
+		ps -ef | grep key
+		ps -ef |grep crond	
+	-》jps
+	-》netstat -atunlp : 查看当前网络连接状态
+		-》a:所有
+		-》t:tcp
+		-》udp
+		-》n:端口号
+		-》l:listen
+		-》p:服务id
+		
+九、Linux中的压缩
+	-》gzip：最常见
+		后缀：.gz
+		压缩：gzip testFile
+		解压缩：gunzip testFile.gz
+		特点：源文件会被移除
+			  不能压缩文件夹
+	-》bzip2：一般用于大文件
+		后缀：.bz2
+		压缩：bzip2 testFile
+		解压缩：bunzip2 testFile.gz
+		特点：源文件会被移除
+			  不能压缩文件夹
+	-》打包命令tar   ：一般打包与压缩连用
+		-》tar  [选项] target.tar  source
+		-》c:打包
+		-》x:解包
+		-》v：显示
+		-》f：文档，如果使用f，f必须是最后一个参数，后面跟的就是文档
+		-》t：查看
+			tar -tvf  ***.tar.gz
+		在一条命令中：只能出现c/x/t其中一个
+		-》C ：指定解压后的地址
+		-》z：表示使用gzip
+			解压：tar.gz
+			tar -zxvf  ***.tar.gz -C  outpath
+			压缩：tar.gz
+			tar -zcvf  ***.tar.gz  source
+		-》j：表示使用bzip2
+			解压：tar.gz
+			tar -jxvf  ***.tar.bz2 -C  outpath
+			压缩：tar.gz
+			tar -jcvf  ***.tar.bz2  source
+
+十、Linux中的软件管理
+	-》软件的类型
+		-》源码
+			-》底层用C、C++编写的 
+				-》./configure    :预编译
+				-》make			  ：编译
+				-》make install	  ：安装
+			-》底层用Java编写的
+				-》maven
+		-》二进制
+	-》rpm包
+		-》rpm
+			zlib-1.2.3-29.el6.i686.rpm
+			软件的名称-版本-操作系统-操作系统的位数.rpm
+		-》查看已安装包
+			rpm  -qa | grep java
+		-》安装rpm包
+			rpm  -ivh  package_path
+			rpm -ivh Packages/zlib-devel-1.2.3-29.el6.x86_64.rpm 
+		-》卸载
+			rpm  -e   package_name
+			rpm -e zlib-devel-1.2.3-29.el6.x86_64
+			rpm -e --nodeps java-1.6.0-openjdk-1.6.0.0-1.66.1.13.0.el6.x86_64
+			不考虑依赖强制删除
+		-》依赖问题：
+			rpm -ivh Packages/zlib-devel-1.2.3-29.el6.i686.rpm
+		-》查看某个命令来自哪个包
+			whereis man
+			rpm -qf /usr/bin/man
+			rpm -qf  command_path
+		-》查看某个包装了哪些文件
+			rpm -ql  package_name
+			rpm -ql tzdata-java-2013g-1.el6.noarch
+	-》yum 安装
+		-》本地必须要有yum源
+			ll /etc/yum.repos.d/
+		-》系统可以联网
+		-》查看哪些包可以安装
+			yum list
+			yum list installed
+		-》安装
+			yum install -y name1  name2 
+			yum install  -y  name
+		-》删除
+			yum remove  -y name
+	-》安装JDK
+		-》包上传到Linux
+		-》tar解压到/opt/modules/
+		-》全局设置JAVA_HOME
+			vim /etc/profile
+			export  JAVA_HOME=/opt/modules/java-
+			export  PATH=$PATH:$JAVA_HOME/bin
+		-》source  /etc/profile
+		-》java -version
+		
+十一、Linux中的通配符与正则表达式
+	-》通配符
+		“*”  “?”
+	-》正则表达式
+		“^”  :以什么开头
+		“$”  ：以什么结尾
+		“[a-z]”:a-z之间任意一个字母
+		“[0-9]”：0-9之间任意一个数字
+		“[A-Z]” ：A-Z之间任意一个字母
+		“*”	：匹配多个
+		“\”　：转义
+		“．” ：匹配单个
+	-》Linux支持的命令
+		-》grep 
+			grep '^root.*bash$' /etc/passwd
+			grep '^root' /etc/passwd
+		-》sed：主要对于行的处理
+			sed 's/old/new/g'  file_path
+			反选
+			grep -v  string
+			ifconfig | grep 'inet ' | grep -v '127.0.0.1' | sed 's/inet addr://g' | sed 's/Bcast.*//g' | sed 's/ //g' 
+		-》awk：主要对于列的处理
+			awk  -F ':' '{print $1}' /etc/passwd
+			awk '/^root/'  /etc/passwd
+			awk '/^root/{print $3}'  /etc/passwd
+			
+十二、Linux中的脚本及环境变量
+	-》全局环境变量   /etc/profile
+		用户的环境变量：USER_HOME/.bash_profile
+	-》位置变量
+		脚本的编写开头：#!/bin/bash
+		运行方式：
+			-》./location.sh      -》必须添加开头
+			-》bash  location.sh
+			-》sh   loacation.sh
+		$1：第1个参数的值
+		$2：第2个参数的值
+		$3：第3个参数的值
+		……
+		$9：第9个参数的值
+	-》预定义
+		$0：脚本的名称
+		$!：进程的PID号
+		$?：程序执行的状态，0成功，非0不成功
+		$*：所有参数，整体
+		$$：当前进程的id号
+		$#：参数的总个数
+		$@：所有参数，分割
+	-》自定义变量
+	-》逻辑连接符
+		与：&&   A执行成功，B才执行
+		或：||   A成功，B不执行
+					A失败，B执行
+		; ：无逻辑关系
+	-》运算
+		$[a+b]   或者  $[$a+$b]
+		$((a+b))  或者   $(($a+$b))
+		expr  $a + $b 
+	-》内置测试判断
+		字符串： = 、 != 、 \>、 \< 、 -z、 -n 
+			-z：如果值为null时为真
+			-n: 如果值不是null则为真
+		数字：在[]中 eq、ne、lt、le、gt、ge
+				 在(())中 >、 ==、 <、 !=、 >=、<=
+		文件：
+		-e：是否存在 
+		-f：是否是一个文件
+		-d：是否是一个目录
+		-r：是否可读
+		-w：是否可写
+		-x：是否可执行
+	-》date
+		查看日期：date +"%Y-%m-%d:%H%M"
+				  date -d "-1 day" +"%Y-%m-%d"
+		设置时间：root用户
+			date -s "YYYY-mm-dd HH:MM:SS"
+			
+十三、任务调度
+	-》at
+		at  10:10
+		进入命令行，写入执行的命令
+		Ctrl+d 保存
+	-》crontab
+		-》启动服务 crond
+		-》crontab  -e  ：编辑定时任务
+			每一行:一行一个定时调度任务
+				* 		* 		* 		* 		*   	command
+				分钟	小时	日		月		星期	执行的任务
+				0-59	0-23	1-31	1-12	0-7		/bin/bash  **.sh
+				
+		-》需求
+			每天凌晨2点执行
+				0	2	*	*	*
+			每月1号的00点进行处理
+				0	0	1	*	*
+		-》特殊字符
+			每两分钟执行一次
+			/:		*/2   *	*	*	*
+			每天上午6,8准时执行
+			,:不连续的区间		0  6,8	*	*	*
+			-：每天6点到8点每两分钟执行执行		*/2  6-8  *	*	*	
+		-》crontab -l：查看当前用户的定时任务
+		-》crontab -r :删除，只能全部删除
+		-》-f：指定某个文件
+     	   -u:指定某个用户
+			crontab -f file_path  -u  username :将某个文件作为某个用户的crontab任务
+			
+-》虚拟机克隆以后的操做
+	-》克隆
+	-》修改主机名和ip
+	-》修改映射
+	-》网卡的问题
+		-》vim /etc/udev/rules.d/70-persistent-net.rules
+		-》删除eth0那条
+		-》将eth1的名称改成eth0
+		-》复制新的网卡的HWADDR地址
+		-》编辑ifcfg-eth0，替换HWADDR地址
+		-》重启网络
