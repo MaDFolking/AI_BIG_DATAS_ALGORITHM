@@ -1,2 +1,181 @@
 一.Linux
-配置:3G内存，20G硬盘,Native模式
+1.配置:3G内存，20G硬盘,Native模式
+
+2.修改主机名 hostname:查看主机名
+          hostname   host_name  ：临时修改主机名
+3.永久修改:  vim  /etc/sysconfig/network
+          cat /etc/sysconfig/network 
+4.重启centos
+5.IP、子网掩码、网关、DNS		
+这里需要注意，我们的子网与DNS最好一样，点击虚拟机左上角的编辑里的虚拟网络编辑可以查到，在nat选项里，
+里面也可以查到我们能用到的IP地址范围，必须遵守这个范围，否则会出错。	
+6.重启网络服务
+查看ip地址：ifconfig
+service  network  restart
+7.修改配置文件  /etc/sysconfig/network-scripts/ifcfg-eth0
+主机名与IP的映射：/etc/hosts
+
+添加一条
+192.168.134.200	hadoop-senior01.ibeifeng.com
+		
+配置windows的本地映射
+C:\Windows\System32\drivers\etc\hosts
+		
+弄完了别忘了 ping 192.168.134.200  或者 hadoop-senior01.ibeifeng.com
+
+注意:正常企业级配置分布式需要格式化磁盘，具体百度可查到，脚本差不多。我这里配置伪分布式，就不写了。
+
+8.关闭防火墙和selinux
+  service iptables stop
+  chkconfig  iptables  off
+  
+  注意:
+  chkconfig用于很多命令的开机启动，比如mysql的:
+  chkconfig mysqld on
+  
+  vim  /etc/selinux/config
+  SELINUX=disabled
+
+9.
+
+二.mysql和tcal包:
+创建好mysql后,需要设置用户权限
+1.create user 'root' identified by 'root';
+2.给root授权,这是用本地进行访问时给root用户的权限
+grant all on *.* to root@localhost identified by 'root';
+3.同理也得给master授权
+grant all on *.* to root@master identified by 'root';
+4.创建数据库
+create database mahout;
+
+5.解压tcl包，需要有gcc编译器
+  yum install gcc
+  yum install gcc-c++
+
+三.安装redis
+redis 需要的内存是比较大的，只有类型列表，没有表。一定程度上也可以持久化到磁盘上。
+必须在root用户下做
+进入/home/master/tcl8.6.1 也就是在tcl目录下。
+
+输入:
+cd unix &&
+./configure --prefix=/usr \
+--mandir=/usr/share/man \
+--without-tzdata \
+$([ $(uname -m) = x86_64 ] && echo --enable-64bit) &&
+make &&
+sed -e "s@^\(TCL_SRC_DIR='\).*@\1/usr/include'@" \
+-e "/TCL_B/s@='\(-L\)\?.*unix@='\1/usr/lib@" \
+-i tclConfig.sh
+make install &&
+make install-private-headers &&
+ln -v -sf tclsh8.6 /usr/bin/tclsh &&
+chmod -v 755 /usr/lib/libtcl8.6.so
+
+top查看虚拟内存
+
+下面是正式安装redis
+
+解压后进入redis目录，编译:
+make -j 4
+编译好后，cd src
+make test
+回到redis目录，输入
+make install
+然后启动redis,因为我们每次都用到，让它启动在后台。
+nohup redis-server &
+完事后输入
+tail -f nohup.out
+查看日志
+也可以查看进程
+ps -ef|grep redis-server
+每次启动redis客户端前，要输入redis-server 启动服务端，再克隆一个界面启动客户端
+进入客户端
+redis-cli
+输入ping 如果显示pong就是启动成功了。
+
+四.安装Kafka
+这里使用kafka自带的zookeeper集群
+进入kafka后
+cd config
+可以查看zookeeper信息
+便于操作可以配置bash_profile环境
+
+#JAVA
+export JAVA_HOME=/home/master/software/jdk1.7.0_71
+export PATH=$PATH:$JAVA_HOME/bin
+
+#HADOOP
+export HADOOP_HOME=/home/master/software/hadoop-2.6.5
+export HADOOP_CONF_DIR=$HADOOP_HOME/etc/hadoop
+export PATH=$PATH:$HADOOP_HOME/bin:$HADOOP_HOME/sbin
+
+#MYSQL
+export MYSQL_HOME=/home/master/software/mysql
+export PATH=$PATH:$MYSQL_HOME/bin
+
+#KAFKA
+export KAFKA_HOME=/home/master/software/kafka_2.10-0.8.2.2
+export PATH=$PATH:$KAFKA_HOME/bin
+
+#SPARK_HOME
+export SPARK_HOME=/home/master/software/spark-1.6.2-bin-hadoop2.6
+export PATH=$PATH:$SPARK_HOME/bin
+
+因为也是开机启动zookeeper,所以也用后台方式启动，回到kafka目录，输入
+nohup bin/zookeeper-server-start.sh config/zookeeper.properties &
+再输入
+tail -F nohup.out
+查看日志
+开启broker
+在config/server.propers 查看信息
+启动:
+ nohup bin/kafka-server-start.sh config/server.properties &
+查看日志信息
+tail -F nohup.out  
+
+五.安装spark
+设置好后，开启命令
+进入spark目录
+运行spark:
+spark-submit --class org.apache.spark.examples.SparkPi \
+--master yarn-client \
+--num-executors 3 \
+--driver-memory 1g \
+--executor-memory 1g \
+--executor-cores 1 \
+lib/spark-examples*.jar \
+10
+
+spark-shell --master local[2]
+
+六 . 配置hbase文件
+vi hbase-site.xml
+<configuration>
+//设置hbase客户端启动
+ <property>
+        <name>hbase.cluster.distributed</name>
+        <value>true</value>
+ </property>
+//设置hbase存放目录，在hdfs创建个/hbase文件目录
+ <property>
+        <name>hbase.root.dir</name>
+        <value>/hbase</value>
+ </property>
+</configuration>
+
+vi hbase-env.sh
+ESC /ZOOKEEPER 这是Citrl+F操作，找到zookeeper看是否配置，我们直接用自带即可。
+
+start-hbase.sh 打开进程看看。
+会发现给出提示 JAVA_HOME is not 设置。
+去设置java
+
+hbase shell
+出错:
+java.lang.IncompatibleClassChangeError: Found class jline.Terminal, but interface was expected
+解决
+问题原因：/usr/java/hadoop-2.6.5/share/hadoop/yarn/lib/jline-0.9.94.jar 版本低了
+解决办法： 
+rm -rf  /usr/java/hadoop-2.6.5/share/hadoop/yarn/lib/jline-0.9.94.jar
+cp /usr/java/apache-hive-2.1.1-bin/lib/jline-2.12.jar /usr/java/hadoop-2.6.5/share/hadoop/yarn/lib/
