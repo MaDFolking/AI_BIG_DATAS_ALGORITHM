@@ -1,0 +1,203 @@
+注意: 一切都是centos6.4版本。所以UBT的注意个别命令有所区别。
+
+一.基本命令
+  ls:list
+		 a：全部
+		 l：长格式的
+		 d：当前目录
+		 ll：与ls -l  等同
+  cd :切换工作目录
+  pwd:打印工作目录
+  clear：清屏
+  whereis :查看命令的位置
+  whoami:查看当前用户
+  whatis：用来查看某个命令的 功能
+  last:查看登录信息
+  du /var/log  :统计var目录下的log目录大小
+	文件管理命令
+	创建一个文件
+			touch  filename
+			touch  "filename"：如果包含空格
+	创建一个文件夹
+			mkdir  d_name
+			mkdir  -p  dir1/dir2
+	删除文件或者文件夹
+			rm  filename :  删除文件
+			-f：force：强制的删除
+			-r: 表示删除一个文件夹
+			rmdir：只能删除空文件夹
+	文件的复制粘贴及剪切
+			cp:复制
+			cp  source_path   target_path
+			-r:表示复制一个文件夹
+			mv:剪切
+			mv  source_path   target_path
+	文件的查看
+			cat 
+			cat   file_path
+			cat /etc/passwd
+			cat -n /etc/passwd :显示行号
+			more,less
+				分页查看，按空格翻页
+				less支持向上查看，方向键或者pageup
+		  head，tail
+			head：从头部第一行开始查看文件，默认只显示前10行
+			head -n 5 /etc/passwd
+			head -5 /etc/passwd  
+			tail：从最后一行开始查看文件，默认只显示后10行
+			tail -F testFile 
+
+四、Linux用户及用户组管理
+	  1.用户的文件
+		/etc/passwd
+		root:x:0:0:root:/root:/bin/bash
+		2.用户名：密码：uid：gid:家目录：shell
+		所有的普通用户的uid从500开始
+	  3.用户组
+		/etc/group
+	  4.用户的操作
+		(1)创建一个用户
+			useradd   username
+		(2)删除一个用户
+			userdel  username:只删除用户，不删除家目录
+			userdel -r  username:删除用户及其家目录
+	  5.用户组的操作
+		(1)添加用户组
+			 groupadd  beifeng4
+		(2)删除组
+			 groupdel  beifeng4 
+	  6.用户密码的设置
+		  passwd
+			passwd  username
+			echo "1234567" | passwd --stdin beifeng
+	  7.用户切换
+		  su:用于切换用户
+		  su - username
+		  su - ：默认切换到root
+		
+五、Linux权限管理
+	 1.权限的显示
+		drwxr-xr-x
+		
+	 2.用户的类型
+		 所有者
+		 同组用户
+		 其他人
+	3.权限的类型
+		读：read
+		写: write
+		执行:x
+		没有权限：-
+	  rwxr-xr-x：
+  三位字母表示一种用户的访问权限
+	rwx				r-x					r-x
+	所有者			同组用户			其他人		
+	可读可写可执行	可读可执行			可读可执行		
+	
+	rw-r--r--：默认权限
+	
+	修改用户权限
+	字母修改
+	      用户：
+				所有者：u
+				同组用户：g
+				其他人：o
+				所有人：a
+			-》chmod:修改用户权限
+				chmod  o+w   /root/passwd
+				chmod  u+x,g+x,o+x  file_path
+				chmod  a+x file_path
+				chmod  a-x  file_path
+		-》数字类型修改
+			rw- r-- r--：默认权限
+			421
+			6	4	4
+			755
+			rwxr-xr-x：chmod 755 file_path
+			chmod -R 777 file_path
+		-》修改用户及用户组
+			chown  -R  username:groupname  file_path
+			chown   username:  file_path
+			chown   :groupname  file_path
+			
+六、常见的符号及工具命令
+	-》| ：管道符
+		cat /etc/passwd | more
+		意思是 /etc/passwd这个文件本身是用cat处理，现在想用more命令处理。就用 | 
+		-》grep :一般与管道符连用，可以单独使用
+		cat /etc/passwd | grep 'root'
+		这行是 cat出包含root的
+		cat /etc/passwd | grep roo*
+		grep 'root' /etc/passwd
+	-》> ：输出的重定向覆盖
+	   >>：输出的重定向追加
+	   echo "testhadoop" > passwd 
+	   echo "testhadoop" >> passwd
+	-》当前目录：.
+	-》上一级目录：..
+	-》换行符   \
+	-》常用的工具命令：
+		-》vi/vim
+			-》编辑文本
+		-》三种模式
+			-》命令模式
+				-》G：跳转到末尾
+				-》gg：跳转到头部
+				-》ngg：跳转到指定行
+				-》i:插入
+				-》o：在下一行插入
+				-》O：在上一行插入
+				-》dd：删除当前行
+				-》ndd：删除从当前行开始的n行,带有剪切功能.
+				-》p:粘贴
+				-》yy：复制
+				-》u:撤销
+				
+			-》插入模式
+			   按i进入编辑
+			   按esc退出编辑模式
+			
+			-》输入：进入最后行模式
+				-》退出：q!
+				-》保存退出：wq,x，ZZ
+				-》设置行号：set nu
+				-》查找字符串：/string
+				-》替换字符串：1,$s/nologin/login/g
+				从第1行到最后一行
+				s表示替换
+				第一个nologin表示将被替换的字符换
+				第二个login表示替换后的字符串
+				g表替换所有的
+				
+50,100s/man/MAN/g
+50-100行的man替换成MAN
+50,100s/man/MAN/gc
+50-100行的man一个个替换成MAN
+	-》man:用于查找某一个命令或者文档查看
+	-》find：查找命令
+		-》find  path   选项  参数
+		-》名称查找
+			find /etc  -name  init*
+			find /etc  -name  init
+		-》文件大小
+			加号：大于
+			减号：小于
+			连接符：and  or
+			and : -a
+			or  :  -o
+			find /etc  -size  +10k -a -size  -20k
+			如果不加单位，默认单位是Linux存储单位块（512字节）
+		-》所属用户和组进行检索
+			find /etc  -user  root
+			find /etc  -group  root
+		-》按照文件类型
+			find /etc  -user root -a  -type  f
+			find /etc  -user root -a  -type  d
+		-》按照时间查找
+		
+七、关机命令及虚拟机的克隆和快照
+	-》重启关机命令：只能root用户执行
+		-》shutdown  -h  now
+		-》halt
+		-》init 0
+		-》重启：reboot
