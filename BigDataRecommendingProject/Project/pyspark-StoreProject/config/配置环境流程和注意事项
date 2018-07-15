@@ -163,7 +163,28 @@ Linux中的软件管理
 		-》java -version
 		
 
-二.mysql和tcal包:
+二.mysql,tcal以及其他工具包:
+配置元数据MySQL
+1、Derby数据库只能启动一个实例
+2、配置元数据的存储
+3、安装MySQL
+	查询当前系统有没有装MySQL
+	$ sudo rpm -qa | grep mysql
+	$ sudo rpm -e --nodeps mysql-libs-5.1.66-2.el6_3.x86_64
+	在线安装MySQL
+	$ sudo yum -y install mysql-server
+	检查MySQL服务有没有启动
+	sudo service mysqld status
+	设置开机启动
+	$ sudo chkconfig mysqld on
+	设置MySQL管理员密码
+	$ mysqladmin -u root password '123456'
+	进入MySQL
+	mysql -uroot -p
+4、配置hive的相关企业配置
+	创建一个hive-site.xml
+	cp hive-default.xml.template hive-site.xml
+	
 创建好mysql后,需要设置用户权限
 1.create user 'root' identified by 'root';
 2.给root授权,这是用本地进行访问时给root用户的权限
@@ -176,8 +197,42 @@ create database mahout;
 5.解压tcl包，需要有gcc编译器
   yum install gcc
   yum install gcc-c++
+  
+免密码登陆
 
-三.安装redis
+直接打
+ssh-keygen -t dsa -P '' -f ~/.ssh/id_dsa
+再打：
+cat ~/.ssh/id_dsa.pub >> ~/.ssh/authorized_keys
+
+第二种:
+ssh-keygen -t rsa
+ssh-copy-id 主机名
+ 
+id_rsa私钥
+id_rsa.pub公钥
+常见错误： 1、格式化 不要多次格式化，如果要格式化，先删除tmp目录 2、集群ID不一致
+
+三.安装hadoop
+
+1. 配置 core-site.xml 存放元数据的地方，也就是默认路径和tmp目录
+
+<configuration>
+<property>
+<name>fs.defaultFS</name>
+<value>hdfs://master:9000</value>
+</property>
+<property>
+<name>hadoop.tmp.dir</name>
+<value>/home/master/tmp</value>
+</property>
+</configuration>
+
+2.
+
+
+
+四.安装redis
 redis 需要的内存是比较大的，只有类型列表，没有表。一定程度上也可以持久化到磁盘上。
 必须在root用户下做
 进入/home/master/tcl8.6.1 也就是在tcl目录下。
@@ -219,7 +274,7 @@ ps -ef|grep redis-server
 redis-cli
 输入ping 如果显示pong就是启动成功了。
 
-四.安装Kafka
+五.安装Kafka
 这里使用kafka自带的zookeeper集群
 进入kafka后
 cd config
@@ -259,7 +314,7 @@ tail -F nohup.out
 查看日志信息
 tail -F nohup.out  
 
-五.安装spark
+六.安装spark
 设置好后，开启命令
 进入spark目录
 运行spark:
@@ -274,7 +329,7 @@ lib/spark-examples*.jar \
 
 spark-shell --master local[2]
 
-六 . 配置hbase文件
+七. 配置hbase文件
 vi hbase-site.xml
 <configuration>
 //设置hbase客户端启动
