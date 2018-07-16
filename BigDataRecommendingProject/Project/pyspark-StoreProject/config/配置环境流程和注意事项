@@ -215,7 +215,7 @@ id_rsa.pub公钥
 
 三.安装hadoop
 
-1. 配置 core-site.xml 存放元数据的地方，也就是默认路径和tmp目录
+1. 配置 core-site.xml hdfs管理者namenode的地址和存放数据的tmp目录
 
 <configuration>
 <property>
@@ -452,7 +452,7 @@ spark-submit --class org.apache.spark.examples.SparkPi \
 --executor-cores 1 \
 lib/spark-examples*.jar \
 10
-
+上面这命令我们一般不用，而是用spark的交互式命令:
 spark-shell --master local[2]
 
 七. 配置hbase文件
@@ -476,6 +476,8 @@ ESC /ZOOKEEPER 这是Citrl+F操作，找到zookeeper看是否配置，我们直�
 start-hbase.sh 打开进程看看。
 会发现给出提示 JAVA_HOME is not 设置。
 去设置java
+vi hbase-env.sh
+找到JAVA_HOME。改成自己的。
 
 hbase shell
 出错:
@@ -485,3 +487,113 @@ java.lang.IncompatibleClassChangeError: Found class jline.Terminal, but interfac
 解决办法： 
 rm -rf  /usr/java/hadoop-2.6.5/share/hadoop/yarn/lib/jline-0.9.94.jar
 cp /usr/java/apache-hive-2.1.1-bin/lib/jline-2.12.jar /usr/java/hadoop-2.6.5/share/hadoop/yarn/lib/
+
+八.Flume  1.5版本
+常见问题汇总:
+
+https://blog.csdn.net/lijinqi1987/article/details/77449889
+
+flume怎么找到hdfs？
+-》找HADOOP_HOME
+-》从core-site
+-》直接写明hdfs的绝对路径
+-》需要hdfs的jar包？
+-》类型：
+-》flume在hadoop集群中
+	-》修改flume-env.sh，添加jdk路径
+-》flume在hadoop集群中，hdfs做了高可用
+	-》第一步同上
+	-》将core-site和hdfs-site拷贝到conf目录
+-》flume不在hadoop集群中
+	-》前两步同上
+	-》将相关jar包放到lib目录
+	-》命令
+			
+Usage: bin/flume-ng <command> [options]...
+
+模板：bin/flume-ng agent  --conf  flume_conf_dir  --name  agent_name --conf-file  file_path  -Dflume.root.logger=INFO,console
+
+为Flume采集数据创建HDFS目录
+hdfs dfs -mkdir -p /DataCollection/weblogs
+
+在Linuex创建Flume采集后的数据的存储目录(会发生后缀名改变)
+sudo mkdir -p /home/master/tmp/flume/weblogs
+
+测试：
+source是我们创建的 /home/master/tmp/flume/weblogs目录下的数据 。
+Sink 是 HDFS sink：
+写文件到HDFS 我们创建的 /DataCollections/weblogs 目录
+设置 hdfs.rollInterval 为 0 来禁用基于时间的文件轮转
+设置 hdfs.rollCount 为 0 来禁用基于事件的文件轮转
+设置 hdfs.rollSize 为 524288 来启用基于尺寸的文件轮转为 512K
+设置 hdfs.fileType 为 DataStream 写原始文本文文件(不是序列文
+件格式)
+ Channel 是 Memory Channel：
+ 使用 capacity 属性可以存储 100000 个事件 。通常设置大。
+ 使用 transactionCapacity 属性设置 10000 个事务容量、通常比capacity小10倍。
+
+在flume-env.sh.template改成flume-env.sh.再把里面java_home修改。
+再修改flume-conf.properties.template成flume-conf.properties。vi到里面
+ESC后修改agent名字: :%s+agent.+wlagent. 改成wlagent.
+
+先配置source
+# For each one of the sources, the type is defined
+wlagent.sources.weblogSrc.type = spooldir
+wlagent.sources.weblogSrc.spoolDir =/home/master/tmp/flume/weblogs_sqooldir  //第二行要告诉路径
+
+配置跟HDFS相关
+# Each sink's type must be defined
+wlagent.sinks.hdfsSink.type = hdfs
+wlagent.sinks.hdfsSink.type.path =/dylan/weblogs      //注意这第二行都要告诉路径，这里是HDFS上
+wlagent.sinks.hdfsSink.hdfs.rollInterval =0
+wlagent.sinks.hdfsSink.hdfs.rollCount =0
+wlagent.sinks.hdfsSink.hdfs.rollSize = 5242880   //都是设置roll
+wlagent.sinks.hdfsSink.hdfs.fileType = DataStream  //原始文本文件
+
+wlagent.channels.memoryChannel.type = memory
+
+wlagent.channels.memoryChannel.capacity = 100000
+wlagent.channels.memoryChannel.transactionCapacity = 10000
+
+开始运行agent
+bin/flume-ng agent -n wlagent --conf /conf --conf-file /home/master/software/apache-flume-1.5.0-bin/conf/flume-conf.properties
+可能出 Unsupported major.minor version 52.0 错误说明你的java版本过低。
+将日志文件复制到tmp/flume/web... 中。此时flume上的日志会变化，开始处理我们复制过去的日志文件。处理完的文件，会打上.completed 。没打上的就是没处理完。
+处理过程中会产生一些可能发生的错误。
+java 的内存溢出。内存不够了。
+因为自身java的堆内内存是20M，很低的。
+vi flume-env.sh
+export JAVA_OPTS=" -Xmx500m"
+记住一般都在xxx-env.sh修改java内存。
+
+再重新启动，此时不用担心前面处理的文件，因为默认机制会继续下个agent处理。
+如果还有溢出
+ps -ef|grep flume
+
+注意:这里会有flume的memeryChannel中transactionCapacity和sink的batchsize需要注意事项
+详细看: https://blog.csdn.net/joy6331/article/details/51279670
+
+
+
+
+启动时修改日志级别的命令  console:终端的意思。
+bin/flume-ng agent -n wlagent --conf/$FLUME_HOME/conf --conf-file flume-conf.properties -Dflume.root.logger=INFO,console, 
+
+最后hdfs dfs -ls /dylan/weblogs  查看日志是否上传到HDFS上。
+可以hdfs dfs -cat /dylan/weblogs/文件名  或者  hdfs dfs -cat /dylan/weblogs/文件名|cat
+此时我们看到的是其他时间日志，因为重启过服务器，因为channel是memory,而1-16日数据会在内存中丢失，所以如果保险就改成filechannel.
+解决方案：将原始日志丢失的重新cp到weblogs文件中，flume会自动直接处理。
+
+小提示: rm -rf logs.2016-12-1[1-7] 可以删除11号到17号的日志
+
+九.Sqoop
+直接安装即可
+
+十.Linux的 IDEA
+
+十一.Mahout
+
+十二.SparkMlib
+
+
+
