@@ -228,9 +228,135 @@ id_rsa.pub公钥
 </property>
 </configuration>
 
-2.
+2.hdfs-site.xml，指定副本数个数
+<property>
+<name>dfs.replication</name>
+<value>1</value>
+</property>
 
+经过查看:
+/home/jin/opt/cdh5.3.6/hadoop-2.5.0-cdh5.3.6/data/tmp/dfs/data/current/BP-1586701327-192.168.153.200-1501304933041/current/finalized/subdir0/subdir0
+里面的blk是存放块文件的,里面是json格式的
 
+/home/jin/opt/cdh5.3.6/hadoop-2.5.0-cdh5.3.6/data/tmp/dfs/name/current
+是存放namenode的元数据,里面有edits和fsimage
+
+/home/jin/opt/cdh5.3.6/hadoop-2.5.0-cdh5.3.6/data/tmp/dfs/namesecondary/current
+
+是存放 namesecondary 的元数据,里面有edits和fsimage
+
+3.slaves，
+指定从节点位置，包括datanode和nodemanager
+格式化namenode，对于元数据进行初始化，否则无法读取元数据
+正常三台分布式配置如下。我们这里是本地就默认localhost
+        
+hadoop-senior01.ibeifeng.com
+hadoop-senior02.ibeifeng.com
+hadoop-senior03.ibeifeng.com
+
+4.mapred-site.xml文件名称，指定MR运行在yarn上
+ <property>
+ <name>mapreduce.framework.name</name>
+ <value>yarn</value>
+ </property>
+ -》yarn-site.xml
+ <property>
+ <name>yarn.nodemanager.aux-services</name>
+ <value>mapreduce_shuffle</value>
+ </property>
+ <property>
+     <name>yarn.resourcemanager.hostname</name>
+     <value>hadoopMaster</value>
+ </property>
+ yarn外部管理界面端口号：8088
+ HDFS外部管理界面端口号：50070
+ secondarynamenode外部管理界面端口号：50090
+
+5.Hadoop自带历史服务器
+    1、mapred-site.xml：
+    <property>
+        <name>mapreduce.jobhistory.address</name>
+        <value>hadoop-senior01.ibeifeng.com:10020</value>
+    </property>
+     
+    <property>
+        <name>mapreduce.jobhistory.webapp.address</name>
+        <value>hadoop-senior01.ibeifeng.com:19888</value>
+    </property>
+    
+开启:
+sbin/mr-jobhistory-daemon.sh start historyserver
+ 
+6.日志聚集
+    ->yarn-site.xml
+<property>
+        <name>yarn.log-aggregation-enable</name>
+        <value>true</value>
+    </property>
+     
+    <property>
+        <name>yarn.log-aggregation.retain-seconds</name>
+        <value>106800</value>
+    </property>
+ 
+7.secondarynamenode
+    1、namenode元数据-》内存-》启动后
+    2、namenode元数据-》本地文件系统文件中-》启动前
+    3、格式化-》fsimage镜像文件
+    4、edits编辑日志文件-》用来记录用户行为记录数据
+    5、减少namenode重启的时间、合并文件
+    6、secondarynamenode读取两类文件，加载到内存
+            -》写到一个新的 fsimage 镜像文件
+            -》再生成一个 edits 编辑日志文件
+    dfs.blocksize
+所以原来的没了，这样相当于找了一个内存让他重新生成，而内存速度快，所以它具有重启速度快的特点。端口号:
+50090
+
+在hdfs-site.xml下配置:
+   <property>
+        <name>dfs.permissions.enabled</name>
+        <value>false</value>
+    </property>
+
+    <property>
+        <name>dfs.namenode.secondary.http-address</name>
+        <value>hadoop-senior01.ibeifeng.com:50090</value>
+    </property>
+    
+    自定义块大小属性，字节
+    
+PS:hadoop常见错误:
+常见错误：
+    1、格式化
+    不要多次格式化，如果要格式化，先删除tmp目录
+    2、集群ID不一致
+    
+    /home/jin/opt/cdh5.3.6/hadoop-2.5.0-cdh5.3.6/data/tmp/dfs/data/current 这里可以查看id地址。
+    clusterID=CID-3ca65fdf-ee12-4d06-be68-1cc39b479f68
+    clusterID=CID-3ca65fdf-ee12-4d06-be68-1cc39b479f68
+    3、端口号被占用
+    4、多用户混用，造成PID文件冲突
+ 
+Hadoop配置文件
+    默认、自定义
+    每个模块对应一个文件
+    系统启动会先加载默认配置文件
+    默认配置文件存放在jar中
+    自定义配置文件优先级高于默认配置文件
+     
+    如果maven pom配置有问题，在这个目录下都删除再重新配置。
+    repository/org/apache/hadoop
+    
+    启动eclipse前需要输入:
+    
+    root用户下 ： xhost + (别忘加空格)
+    或者普通用户下:
+    sudo xhost + (别忘加空格)
+    
+    创建文件后别忘这个:
+    sudo chown -R jin:jin * 
+    
+    我们所说的job是我们要提交的任务。
 
 四.安装redis
 redis 需要的内存是比较大的，只有类型列表，没有表。一定程度上也可以持久化到磁盘上。
