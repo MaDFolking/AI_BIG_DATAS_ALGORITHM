@@ -373,9 +373,9 @@ make &&
 sed -e "s@^\(TCL_SRC_DIR='\).*@\1/usr/include'@" \
 -e "/TCL_B/s@='\(-L\)\?.*unix@='\1/usr/lib@" \
 -i tclConfig.sh
-make install &&
-make install-private-headers &&
-ln -v -sf tclsh8.6 /usr/bin/tclsh &&
+make install &&  
+make install-private-headers &&  
+ln -v -sf tclsh8.6 /usr/bin/tclsh && 
 chmod -v 755 /usr/lib/libtcl8.6.so
 
 top查看虚拟内存
