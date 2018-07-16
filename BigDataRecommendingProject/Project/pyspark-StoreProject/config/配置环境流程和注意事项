@@ -589,11 +589,3 @@ bin/flume-ng agent -n wlagent --conf/$FLUME_HOME/conf --conf-file flume-conf.pro
 九.Sqoop
 直接安装即可
 
-十.Linux的 IDEA
-
-十一.Mahout
-
-十二.SparkMlib
-
-
-
