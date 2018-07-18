@@ -244,23 +244,6 @@ del(rp_test)
 print(train)
 train.shape
 
-rp = pd.DataFrame(RP)
-columns = ["RandomProjection{}".format(i) for i in range(NUM_OF_COM)]
-rp.columns = columns
-rp_train = rp[:ntrain]
-rp_test = rp[ntrain:]
-print(test.shape)
-print(rp_test.shape)
-
-#连接原始矩阵和随机降维的矩阵,用横向连接。
-train = pd.concat([train,rp_train],axis = 1)
-test = pd.concat([test,rp_test],axis = 1)
-
-del(rp_train)
-del(rp_test)
-print(train)
-train.shape
-
 '''
 定义交叉验证方法和模型。xgboost 和 lightgbm 用作基本模型。
 超参数已经通过网格搜索进行了调整, 这里我们直接使用它们。NUM_FOLDS 可作为超参数处理
