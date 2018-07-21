@@ -59,7 +59,6 @@ columns = train.columns
 for i in range(len(columns)-1):
     #一列数据
     v = train[columns[i]].values
-    dupCols = []
     for j in range(i+1,len(columns)):
         #俩个array有相同的shape和元素返回True
         if np.array_equal(v,train[columns[j]].values):
