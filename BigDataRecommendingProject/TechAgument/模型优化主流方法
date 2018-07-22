@@ -1,51 +1,127 @@
-机器学习模型优化之模型融合
-2018年01月07日 15:37:24
-阅读数：1624
-前言：在机器学习训练完模型之后我们要考虑模型的效率问题，常用的模型效率分析手段有：
+1 Ensemble Learning-模型融合
+通过对多个单模型融合以提升整体性能。
 
-研究模型学习曲线，判断模型是否过拟合或者欠拟合，并做出相应的调整；
-对于模型权重参数进行分析，对于权重绝对值高/低的特征，可以对特征进行更细化的工作，也可以进行特征组合；
-进行bad-case分析，对错误的例子分析是否还有什么可以修改挖掘
-模型融合：模型融合就是训练多个模型，然后按照一定的方法集成过个模型，应为它容易理解、实现也简单，同时效果也很好，在工业界的很多应用，在天池、kaggle比赛中也经常拿来做模型集成。
-这篇文章主要机器学习中的模型融合，包括bagging，Boosting两种思想的方法。
+1.1 Voting
+投票制即为，投票多者为最终的结果。例如一个分类问题，多个模型投票（当然可以设置权重）。最终投票数最多的类为最终被预测的类。
 
-一、模型融合的认识、分析： 
-1，模型融合的概念： 下图介绍了模型融合的一般结构:先产生一组”个体学习器 ，再用某种策略将它们结合起来，加强模型效果。 
-这里写图片描述
+1.2 Averaging
+Averaging即所有预测器的结果平均。
 
-2，模型融合应用广发的原因： 可以通过数学证明模型，随着集成中个体分类器数目T 的增大，集成的错误率将指数级下降，最终趋向于零。具体证明在周志华和李航老师的书中都有。
+回归问题，直接取平均值作为最终的预测值。（也可以使用加权平均）
+分类问题，直接将模型的预测概率做平均。（or 加权）
+加权平均，其公式如下：
 
-3，模型融合的条件：个体学习器准确性越高、多样性越大，则融合越好。（这里写图片描述，E代表融合后的误差加权均值，这里写图片描述代表个体学习器的误差加权均值，这里写图片描述代表模型的多样性，也就是各个模型之间的分歧值）
+∑i=1nWeighti∗Pi
+其中n表示模型的个数， Weighti表示该模型权重，Pi表示模型i的预测概率值。
 
-Base Model 之间的相关性要尽可能的小。这就是为什么非 Tree-based Model 往往表现不是最好但还是要将它们包括在 Ensemble 里面的原因。Ensemble 的 Diversity 越大，最终 Model 的 Bias 就越低。 
+例如两个分类器，XGBoost（权重0.4）和LightGBM（权重0.6），其预测概率分别为：0.75、0.5，那么最终的预测概率，(0.4 * 0.75+0.6 * 0.5)/(0.4+0.6)=0.6
+
+模型权重也可以通过机器学习模型学习得到
+
+1.3 Ranking
+Rank的思想其实和Averaging一致，但Rank是把排名做平均，对于AUC指标比较有效。
+
+个人认为其实就是Learning to rank的思想，可以来优化搜索排名。具体公式如下：
+
+∑i=1nWeightiRanki
+其中n表示模型的个数， Weighti表示该模型权重，所有权重相同表示平均融合。Ranki表示样本在第i个模型中的升序排名。它可以较快的利用排名融合多个模型之间的差异，而不需要加权融合概率。
+
+1.4 Binning
+将单个模型的输出放到一个桶中。参考pdf paper ， Guocong Song ，
+
+1.5 Bagging
+使用训练数据的不同随机子集来训练每个 Base Model，最后每个 Base Model 权重相同，分类问题进行投票，回归问题平均。
+
+随机森林就用到了Bagging，并且具有天然的并行性。
+
+1.6 Boosting
+Boosting是一种迭代的方法，每一次训练会更关心上一次被分错的样本，比如改变被错分的样本的权重的Adaboost方法。还有许多都是基于这种思想，比如Gradient Boosting等。
+
+经典问题：随机森林、Adaboost、GBDT、XGBoost的区别是什么？（面试常常被问）
+
+1.7 Stacking
+Stacking
+
+图片来自Wille的博客。
+
+从上图可以看出，类似交叉验证。
+
+将数据集分为K个部分，共有n个模型。
+
+for i in xrange(n):
+
+​ for i in xrange(k):
+
+​ 用第i个部分作为预测，剩余的部分来训练模型，获得其预测的输出作为第i部分的新特征。
+
+​ 对于测试集，直接用这k个模型的预测值均值作为新的特征。
+
+这样k次下来，整个数据集都获得了这个模型构建的New Feature。n个模型训练下来，这个模型就有n个New Features。
+
+把New Features和label作为新的分类器的输入进行训练。然后输入测试集的New Features输入模型获得最终的预测结果。
+
+1.8 Blending
+Blending直接用不相交的数据集用于不同层的训练。
+
+以两层的Blending为例，训练集划分为两部分（d1，d2），测试集为test。
+
+第一层：用d1训练多个模型，讲其对d2和test的预测结果作为第二层的New Features。
+第二层：用d2的New Features和标签训练新的分类器，然后把test的New Features输入作为最终的预测值。
+2 融合的条件
+Base Model 之间的相关性要尽可能的小。这就是为什么非 Tree-based Model 往往表现不是最好但还是要将它们包括在 Ensemble 里面的原因。Ensemble 的 Diversity 越大，最终 Model 的 Bias 就越低。
 Base Model 之间的性能表现不能差距太大。这其实是一个 Trade-off，在实际中很有可能表现相近的 Model 只有寥寥几个而且它们之间相关性还不低。但是实践告诉我们即使在这种情况下 Ensemble 还是能大幅提高成绩。
+3 Python实现
+下面只实现了一些常用的融合方法，其他的类推。
 
-4，模型融合的分类： 按照个体学习器的关系可以分为两类:
+3.1 Stacking
+'''5折stacking'''
+n_folds = 5
+skf = list(StratifiedKFold(y, n_folds))
+for j, clf in enumerate(clfs):
+    '''依次训练各个单模型'''
+    dataset_blend_test_j = np.zeros((X_predict.shape[0], len(skf)))
+    for i, (train, test) in enumerate(skf):
+        '''使用第i个部分作为预测，剩余的部分来训练模型，获得其预测的输出作为第i部分的新特征。'''
+        X_train, y_train, X_test, y_test = X[train], y[train], X[test], y[test]
+        clf.fit(X_train, y_train)
+        y_submission = clf.predict_proba(X_test)[:, 1]
+        dataset_blend_train[test, j] = y_submission
+        dataset_blend_test_j[:, i] = clf.predict_proba(X_predict)[:, 1]
+    '''对于测试集，直接用这k个模型的预测值均值作为新的特征。'''
+    dataset_blend_test[:, j] = dataset_blend_test_j.mean(1)
 
-个体学习器问存在强依赖关系、必须串行生成的序列化方法，代表Boosting方法；
-个体学习器间不存在强依赖关系、可同时生成的并行化方法，代表是Bagging 和”随机森林” 。
-二、个体学习器依赖的融合-boosting： 
-1，boosting方法的思想： 
-Boosting算法的工作机制是首先从训练集用初始权重训练出一个弱学习器1，根据弱学习的学习误差率表现来更新训练样本的权重，使得之前弱学习器1学习误差率高的训练样本点的权重变高，使得这些误差率高的点在后面的弱学习器2中得到更多的重视。然后基于调整权重后的训练集来训练弱学习器2；如此重复进行，直到弱学习器数达到事先指定的数目T，最终将这T个弱学习器通过集合策略进行整合，得到最终的强学习器。 
-这里写图片描述
+'''融合使用的模型'''
+clf = GradientBoostingClassifier(learning_rate=0.02, subsample=0.5, max_depth=6, n_estimators=30)
+clf.fit(dataset_blend_train, y)
+y_submission = clf.predict_proba(dataset_blend_test)[:, 1]
 
-2，Boosting系列算法里最著名算法主要有AdaBoost算法和提升树(boosting tree)系列算法。提升树系列算法里面应用最广泛的是梯度提升树(Gradient Boosting Tree)。
+完整代码见：GitHub_ensemble_stacking
 
-AdaBoost算法：是加法模型、损失函数为指数函数、学习算法为前向分布算法时的二分类算法。
+3.2 Blending
+下面是一个两层的Blending的实现
 
-提升树：是加法模型、学习算法为前向分布算法时的算法。不过它限定基本学习器为决策树。对于二分类问题，损失函数为指数函数，就是把AdaBoost算法中的基本学习器限定为二叉决策树就可以了；对于回归问题，损失函数为平方误差，此时，拟合的是当前模型的残差。
+'''切分训练数据集为d1,d2两部分'''
+X_d1, X_d2, y_d1, y_d2 = train_test_split(X, y, test_size=0.5, random_state=2017)
+dataset_blend_train = np.zeros((X_d2.shape[0], len(clfs)))
+dataset_blend_test = np.zeros((X_predict.shape[0], len(clfs)))
 
-梯度提升树：是对提升树算法的改进，提升树算法只适合误差函数为指数函数和平方误差，对于一般的损失函数，梯度提升树算法利用损失函数的负梯度在当前模型的值，作为残差的近似值。（GBDT算法有两种描述思路，一个是基于残差的版本（当损失函数是均方差损失时，因为对均方差求导后就是2（y-y_hat） 就是真实值和预测值得残差方向，一个是基于梯度gradient的版本（当损失函数是其它损失函数时，例如交叉熵损失）。说白了都是基于梯度的，只不过均方差求导后变成残差了）
+for j, clf in enumerate(clfs):
+    '''依次训练各个单模型'''
+    # print(j, clf)
+    '''使用第1个部分作为预测，第2部分来训练模型，获得其预测的输出作为第2部分的新特征。'''
+    # X_train, y_train, X_test, y_test = X[train], y[train], X[test], y[test]
+    clf.fit(X_train, y_train)
+    y_submission = clf.predict_proba(X_test)[:, 1]
+    dataset_blend_train[:, j] = y_submission
+    '''对于测试集，直接用这k个模型的预测值作为新的特征。'''
+    dataset_blend_test[:, j] = clf.predict_proba(X_predict)[:, 1]
+    print("val auc Score: %f" % roc_auc_score(y_predict, dataset_blend_test[:, j]))
 
-三、个体学习器不依赖依赖的融合-bagging： 
-1,bagging方法的思想： bagging算法的思想是通过对样本采样的方式，使我们的基本学习器存在较大的差异。 
-这里写图片描述
-
-2，bagging系类算法 常见有bagging算法和随机深林算法
-
-bagging算法：采用的是自助采样法（Bootstap sampling）,即对于m个样本的原始训练集，我们每次先随机采集一个样本放入采样集，接着把该样本放回，也就是说下次采样时该样本仍有可能被采集到，这样采集m次，最终可以得到m个样本的采样集，由于是随机采样，这样每次的采样集是和原始训练集不同的，和其他采样集也是不同的，这样得到多个不同的弱学习器。
-
-随机森林： 是对bagging算法的改进。改进一：基本学习器限定为决策树，改进二：除了bagging的在样本上加上扰动，同时在属性上也加上扰动，即是在决策树学习的过程中引入了随机属性选择，对基决策树的每个结点，先从该结点的属性集合中随机选择一个包含k个属性的子集，然后再从这个子集中选择一个最优属性用于划分。
+'''融合使用的模型'''
+# clf = LogisticRegression()
+clf = GradientBoostingClassifier(learning_rate=0.02, subsample=0.5, max_depth=6, n_estimators=30)
+clf.fit(dataset_blend_train, y_test)
+y_submission = clf.predict_proba(dataset_blend_test)[:, 1]
 
 四、模型融合的结合策略： 基本学习器学习完后，需要将各个模型进行融合，常见的策略有：
 
