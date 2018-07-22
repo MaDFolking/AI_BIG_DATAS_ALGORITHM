@@ -1,0 +1,645 @@
+ps:后续随着项目进行，会陆续更新这里内容
+import pandas as pd
+import numpy as np
+import xgboost as xgb
+from xgboost.sklearn import XGBClassifier
+from sklearn import cross_validation, metrics
+from sklearn.model_selection import GridSearchCV
+import matplotlib.pylab as plt
+
+train = pd.read_csv('train_modified.csv')
+target = 'Disbursed'
+IDcol = 'ID'
+
+'''
+参数调节代码
+PS:下面有的是回归，有的是分类，基本上主要是基于这四种树类模型，以后复杂模型都按照这种格式，主要还是要对模型有一定了解才能更好调参。
+'''
+
+
+
+'''
+一.XGB
+XGB有俩种调参:
+xgb - 直接引用xgboost。接下来会用到其中的“cv”函数。
+XGBClassifier - 是xgboost的sklearn包。这个包允许我们像GBM一样使用Grid Search 和并行处理。
+'''
+
+'''
+step1:
+向下进行之前，我们先定义一个函数，它可以帮助我们建立XGBoost models 并进行交叉验证。
+'''
+
+
+def model_fit(alg, dtrain, predictors,useTrainCV=True, cv_folds=5, early_stopping_rounds=50):
+    if useTrainCV:
+        xgb_param = alg.get_xgb_params()
+        xgtrain = xgb.DMatrix(dtrain[predictors].values, label=dtrain[target].values)
+        cvresult = xgb.cv(xgb_param, xgtrain, num_boost_round=alg.get_params()['n_estimators'],nfold=cv_folds,metrics='auc', early_stopping_rounds=early_stopping_rounds,show_stdv=False)
+        alg.set_params(n_estimators=cvresult.shape[0])
+        alg.fit(dtrain[predictors], dtrain['Disbursed'],eval_metric='auc')
+        dtrain_predictions = alg.predict(dtrain[predictors])
+        dtrain_predprob = alg.predict_proba(dtrain[predictors])[:,1]
+        print("/nModel Report")
+        print ("Accuracy : %.4g" % metrics.accuracy_score(dtrain['Disbursed'].values, dtrain_predictions))
+        print ("AUC Score (Train): %f" % metrics.roc_auc_score(dtrain['Disbursed'], dtrain_predprob))
+        feat_imp = pd.Series(alg.booster().get_fscore()).sort_values(ascending=False)
+        feat_imp.plot(kind='bar', title='Feature Importances')
+        plt.ylabel('Feature Importance Score')
+
+'''
+step2
+我们会使用和GBM中相似的方法。需要进行如下步骤：
+1. 选择较高的学习速率(learning rate)。一般情况下，学习速率的值为0.1。但是，对于不同的问题，理想的学习速率有时候会在0.05到0.3之间波动。
+选择对应于此学习速率的理想决策树数量。XGBoost有一个很有用的函数“cv”，这个函数可以在每一次迭代中使用交叉验证，并返回理想的决策树数量。
+2. 对于给定的学习速率和决策树数量，进行决策树特定参数调优(max_depth, min_child_weight, gamma, subsample, colsample_bytree)。
+在确定一棵树的过程中，我们可以选择不同的参数，待会儿我会举例说明。
+3. xgboost的正则化参数的调优。(lambda, alpha)。这些参数可以降低模型的复杂度，从而提高模型的表现。
+4. 降低学习速率，确定理想参数。
+'''
+
+'''
+下面正式开始
+第一步：确定学习速率和tree_based 参数调优的估计器数目。
+为了确定boosting 参数，我们要先给其它参数一个初始值。咱们先按如下方法取值：
+1、max_depth = 5 :这个参数的取值最好在3-10之间。我选的起始值为5，但是你也可以选择其它的值。起始值在4-6之间都是不错的选择。
+2、min_child_weight = 1:在这里选了一个比较小的值，因为这是一个极不平衡的分类问题。因此，某些叶子节点下的值会比较小。因为会有很多特殊点，所以先调小参数。降低特殊点的权重。
+3、gamma = 0: 起始值也可以选其它比较小的值，在0.1到0.2之间就可以。这个参数后继也是要调整的。
+4、subsample,colsample_bytree = 0.8: 这个是最常见的初始值了。典型值的范围在0.5-0.9之间。
+5、scale_pos_weight = 1: 这个值是因为类别十分不平衡。
+注意哦，上面这些参数的值只是一个初始的估计值，后继需要调优。这里把学习速率就设成默认的0.1。然后用xgboost中的cv函数来确定最佳的决策树数量。前文中的函数可以完成这个工作。
+'''
+predictors = [x for x in train.columns if x not in [target,IDcol]]
+xgb1 = XGBClassifier( learning_rate =0.1, n_estimators=1000, max_depth=5, min_child_weight=1, gamma=0, subsample=0.8,
+                      colsample_bytree=0.8, objective= 'binary:logistic', nthread=4, scale_pos_weight=1, seed=27)
+model_fit(xgb1, train, predictors)
+
+'''
+结论:在学习速率为0.1时，理想的决策树数目是140。这个数字对你而言可能比较高，当然这也取决于你的系统的性能。
+'''
+
+'''
+第二步： max_depth 和 min_weight 参数调优
+我们先对这两个参数调优，是因为它们对最终结果有很大的影响。首先，我们先大范围地粗调参数，然后再小范围地微调。
+注意：在这一节我会进行高负荷的栅格搜索(grid search)，这个过程大约需要15-30分钟甚至更久，具体取决于你系统的性能。你也可以根据自己系统的性能选择不同的值。
+我这里转成回归xgb
+注意:开始跨度先为2，我们后面会再进一步调整，这样可以提高性能。
+'''
+param_test1 = {
+    'max_depth': range(3, 10, 2),
+    'min_child_weight': range(1, 10, 2)
+}
+gridSearch1 = GridSearchCV(
+    estimator=xgb.XGBRegressor(learning_rate=0.1, n_estimators=140, max_depth=3, min_child_weight=1,
+                               gamma=0, subsample=0.8, colsample_bytree=0.8, objective='binary:logistic', nthread=-1,
+                               scale_pos_weight=1, seed=2018),
+    param_grid=param_test1, scoring='roc_auc', n_jobs=-1, iid=False, cv=5)
+gridSearch1.fit(train, target)
+print(gridSearch1.best_params_)
+print(gridSearch1.best_score_)
+aa = []
+aa.append(gridSearch1.best_params_)
+aa.append(gridSearch1.best_score_)
+#保存参数持久化
+with open('pagram1.txt', 'w') as writer:
+    writer.writelines(str(aa))
+
+'''
+第二步:至此，我们对于数值进行了较大跨度的12中不同的排列组合，可以看出理想的max_depth值为5，
+理想的min_child_weight值为5。在这个值附近我们可以再进一步调整，来找出理想值。我们把上下范围各拓展1，
+因为之前我们进行组合的时候，参数调整的步长是2。
+'''
+
+param_test2 = { 'max_depth':[4,5,6], 'min_child_weight':[4,5,6]}
+gsearch2 = GridSearchCV(estimator = xgb.XGBRegressor(learning_rate=0.1, n_estimators=140,
+                        max_depth=5, min_child_weight=2, gamma=0, subsample=0.8, colsample_bytree=0.8,
+                        objective= 'binary:logistic', nthread=4, scale_pos_weight=1,seed=27),
+                        param_grid = param_test2, scoring='roc_auc',n_jobs=4,iid=False, cv=5)
+gsearch2.fit(train[predictors],train[target])
+print(gridSearch1.best_params_)
+print(gridSearch1.best_score_)
+aa = []
+aa.append(gridSearch1.best_params_)
+aa.append(gridSearch1.best_score_)
+#保存参数持久化
+with open('pagram1.txt', 'w') as writer:
+    writer.writelines(str(aa))
+
+'''
+第三步:
+至此，我们得到max_depth的理想取值为4，min_child_weight的理想取值为6。同时，我们还能看到cv的得分有了小小一点提高。需要注意的一点是，随着模型表现的提升，进一步提升的难度是指数级上升的，
+尤其是你的表现已经接近完美的时候。当然啦，你会发现，虽然min_child_weight的理想取值是6，但是我们还没尝试过大于6的取值。像下面这样，就可以尝试其它值。
+比如：[6,11,13,15,17] 因为我们之前最大到10，你可以扩张到17再调一次。至此，这俩个参数就调完了。
+'''
+
+'''
+第四步:
+gamma参数调优
+在已经调整好其它参数的基础上，我们可以进行gamma参数的调优了。Gamma参数取值范围可以很大，我这里把取值范围设置为5了。你其实也可以取更精确的gamma值。
+注意:如果gama得到的是个类似0，0.1这样的小值，就不用再调了，如果是0.4，0.5这样的比较大值，就再提升范围:
+param_test3 = { 'gamma':[i/10.0 for i in range(0,10)]} 类似这样写。
+'''
+param_test3 = { 'gamma':[i/10.0 for i in range(0,5)]}
+gsearch3 = GridSearchCV(estimator = xgb.XGBRegressor( learning_rate =0.1, n_estimators=140,
+                                                      max_depth=4, min_child_weight=6, gamma=0, subsample=0.8,
+                                                      colsample_bytree=0.8, objective= 'binary:logistic', nthread=4, scale_pos_weight=1,seed=27),
+                        param_grid = param_test3, scoring='roc_auc',n_jobs=4,iid=False, cv=5)gsearch3.fit(train[predictors],train[target])
+print(gsearch3.grid_scores_, gsearch3.best_params_, gsearch3.best_score_)
+
+'''
+第5步:上面gama调完后为0最好，所以不用再调整。
+调整subsample 和 colsample_bytree 参数
+下一步是尝试不同的subsample 和 colsample_bytree 参数。我们分两个阶段来进行这个步骤。这两个步骤都取0.6,0.7,0.8,0.9作为起始值。
+'''
+
+param_test4 = { 'subsample':[i/10.0 for i in range(6,10)],
+                'colsample_bytree':[i/10.0 for i in range(6,10)]}
+gsearch4 = GridSearchCV(estimator = xgb.XGBRegressor( learning_rate =0.1, n_estimators=177,
+                        max_depth=3, min_child_weight=4, gamma=0.1, subsample=0.8, colsample_bytree=0.8,
+                                                      objective= 'binary:logistic', nthread=4, scale_pos_weight=1,seed=27),
+            param_grid = param_test4, scoring='roc_auc',n_jobs=4,iid=False, cv=5)
+gsearch4.fit(train[predictors],train[target])
+print(gsearch4.grid_scores_, gsearch4.best_params_, gsearch4.best_score_)
+
+'''
+从这里可以看出来，subsample 和 colsample_bytree 参数的理想取值都是0.8。现在，我们以0.05为步长，在这个值附近尝试取值。
+param_test5 = { 'subsample':[i/100.0 for i in range(75,90,5)],
+'colsample_bytree':[i/100.0 for i in range(75,90,5)]}
+gsearch5 = GridSearchCV(estimator = XGBClassifier( learning_rate =0.1, n_estimators=177, max_depth=4, min_child_weight=6, gamma=0, subsample=0.8, colsample_bytree=0.8, objective= 'binary:logistic', nthread=4, scale_pos_weight=1,seed=27),  param_grid = param_test5, scoring='roc_auc',n_jobs=4,iid=False, cv=5)gsearch5.fit(train[predictors],train[target])
+output
+我们得到的理想取值还是原来的值。因此，最终的理想取值是:
+subsample: 0.8
+colsample_bytree: 0.8
+'''
+
+'''
+下一步是应用正则化来降低过拟合。由于gamma函数提供了一种更加有效地降低过拟合的方法，大部分人很少会用到这个参数。
+但是我们在这里也可以尝试用一下这个参数。我会在这里调整’reg_alpha’参数，然后’reg_lambda’参数留给你来完成。
+正则化调优最好用科学计数法，这样更准确。
+param_test6 = { 'reg_alpha':[1e-5, 1e-2, 0.1, 1, 100]}
+gsearch6 = GridSearchCV(estimator = XGBClassifier( learning_rate =0.1, n_estimators=177, max_depth=4,
+min_child_weight=6, gamma=0.1, subsample=0.8, colsample_bytree=0.8, objective= 'binary:logistic', nthread=4, scale_pos_weight=1,seed=27),
+ param_grid = param_test6, scoring='roc_auc',n_jobs=4,iid=False, cv=5)gsearch6.fit(train[predictors],train[target])
+ gsearch6.grid_scores_, gsearch6.best_params_, gsearch6.best_score_
+output
+
+我们可以看到，相比之前的结果，CV的得分甚至还降低了。但是我们之前使用的取值是十分粗糙的，我们在这里选取一个比较靠近理想值(0.01)的取值，来看看是否有更好的表现。
+
+param_test7 = { 'reg_alpha':[0, 0.001, 0.005, 0.01, 0.05]}gsearch7 = GridSearchCV(estimator = XGBClassifier( learning_rate =0.1, n_estimators=177, max_depth=4, min_child_weight=6, gamma=0.1, subsample=0.8, colsample_bytree=0.8, objective= 'binary:logistic', nthread=4, scale_pos_weight=1,seed=27),  param_grid = param_test7, scoring='roc_auc',n_jobs=4,iid=False, cv=5)gsearch7.fit(train[predictors],train[target])gsearch7.grid_scores_, gsearch7.best_params_, gsearch7.best_score_
+output7
+
+可以看到，CV的得分提高了。现在，我们在模型中来使用正则化参数，来看看这个参数的影响。
+
+xgb3 = XGBClassifier( learning_rate =0.1, n_estimators=1000, max_depth=4, min_child_weight=6,
+gamma=0, subsample=0.8, colsample_bytree=0.8, reg_alpha=0.005, objective= 'binary:logistic',
+nthread=4, scale_pos_weight=1, seed=27)modelfit(xgb3, train, predictors)
+out_put3
+
+然后我们发现性能有了小幅度提高。
+'''
+
+'''
+后，我们使用较低的学习速率，以及使用更多的决策树。我们可以用XGBoost中的CV函数来进行这一步工作。
+
+xgb4 = XGBClassifier( learning_rate =0.01, n_estimators=5000, max_depth=4, min_child_weight=6, gamma=0, subsample=0.8,
+ colsample_bytree=0.8, reg_alpha=0.005, objective= 'binary:logistic', nthread=4,
+ scale_pos_weight=1, seed=27)modelfit(xgb4, train, predictors)
+'''
+
+print("################################################################################################################################################")
+
+'''
+二.LGB
+与XGB类似:主要调节以下参数:
+   print ('获取内存占用率： '+(str)(psutil.virtual_memory().percent)+'%')
+    data, labels = make_train_set(24000000,25000000)
+    values = data.values;
+    param_test = {
+        'max_depth': range(5,15,2),
+        'num_leaves': range(10,40,5),
+    }
+    estimator = lgb.LGBMRegressor(
+        num_leaves = 50, # cv调节50是最优值
+        max_depth = 13,
+        learning_rate =0.1,
+        n_estimators = 1000,
+        objective = 'regression',
+        min_child_weight = 1,
+        subsample = 0.8,
+        colsample_bytree=0.8,
+        nthread = 7,
+    )
+    gsearch = GridSearchCV( estimator , param_grid = param_test, scoring='roc_auc', cv=5 )
+    gsearch.fit( values, labels )
+    gsearch.grid_scores_, gsearch.best_params_, gsearch.best_score_
+    print_best_score(gsearch,param_test)
+
+
+'''
+
+'''
+下面是LGB的自己CV调参方法:
+### 导入模块
+  9 import numpy as np
+ 10 import pandas as pd
+ 11 import lightgbm as lgb
+ 12 from sklearn import metrics
+ 13
+ 14 ### 载入数据
+ 15 print('载入数据')
+ 16 dataset1 = pd.read_csv('G:/ML/ML_match/IJCAI/data3.22/3.22ICJAI/data/7_train_data1.csv')
+ 17 dataset2 = pd.read_csv('G:/ML/ML_match/IJCAI/data3.22/3.22ICJAI/data/7_train_data2.csv')
+ 18 dataset3 = pd.read_csv('G:/ML/ML_match/IJCAI/data3.22/3.22ICJAI/data/7_train_data3.csv')
+ 19 dataset4 = pd.read_csv('G:/ML/ML_match/IJCAI/data3.22/3.22ICJAI/data/7_train_data4.csv')
+ 20 dataset5 = pd.read_csv('G:/ML/ML_match/IJCAI/data3.22/3.22ICJAI/data/7_train_data5.csv')
+ 21
+ 22 print('数据去重')
+ 23 dataset1.drop_duplicates(inplace=True)
+ 24 dataset2.drop_duplicates(inplace=True)
+ 25 dataset3.drop_duplicates(inplace=True)
+ 26 dataset4.drop_duplicates(inplace=True)
+ 27 dataset5.drop_duplicates(inplace=True)
+ 28
+ 29 print('数据合并')
+ 30 trains = pd.concat([dataset1,dataset2],axis=0)
+ 31 trains = pd.concat([trains,dataset3],axis=0)
+ 32 trains = pd.concat([trains,dataset4],axis=0)
+ 33
+ 34 online_test = dataset5
+ 35
+ 36 ### 数据拆分(训练集+验证集+测试集)
+ 37 print('数据拆分')
+ 38 from sklearn.model_selection import train_test_split
+ 39 train_xy,offline_test = train_test_split(trains,test_size = 0.2,random_state=21)
+ 40 train,val = train_test_split(train_xy,test_size = 0.2,random_state=21)
+ 41
+ 42 # 训练集
+ 43 y_train = train.is_trade                                               # 训练集标签
+ 44 X_train = train.drop(['instance_id','is_trade'],axis=1)                # 训练集特征矩阵
+ 45
+ 46 # 验证集
+ 47 y_val = val.is_trade                                                   # 验证集标签
+ 48 X_val = val.drop(['instance_id','is_trade'],axis=1)                    # 验证集特征矩阵
+ 49
+ 50 # 测试集
+ 51 offline_test_X = offline_test.drop(['instance_id','is_trade'],axis=1)  # 线下测试特征矩阵
+ 52 online_test_X  = online_test.drop(['instance_id'],axis=1)              # 线上测试特征矩阵
+ 53
+ 54 ### 数据转换
+ 55 print('数据转换')
+ 56 lgb_train = lgb.Dataset(X_train, y_train, free_raw_data=False)
+ 57 lgb_eval = lgb.Dataset(X_val, y_val, reference=lgb_train,free_raw_data=False)
+ 58
+ 59 ### 设置初始参数--不含交叉验证参数
+ 60 print('设置参数')
+ 61 params = {
+ 62           'boosting_type': 'gbdt',
+ 63           'objective': 'binary',
+ 64           'metric': 'binary_logloss',
+ 65           }
+ 66
+ 67 ### 交叉验证(调参)
+ 68 print('交叉验证')
+ 69 min_merror = float('Inf')
+ 70 best_params = {}
+ 71
+ 72 # 准确率
+ 73 print("调参1：提高准确率")
+ 74 for num_leaves in range(20,200,5):
+ 75     for max_depth in range(3,8,1):
+ 76         params['num_leaves'] = num_leaves
+ 77         params['max_depth'] = max_depth
+ 78
+ 79         cv_results = lgb.cv(
+ 80                             params,
+ 81                             lgb_train,
+ 82                             seed=2018,
+ 83                             nfold=3,
+ 84                             metrics=['binary_error'],
+ 85                             early_stopping_rounds=10,
+ 86                             verbose_eval=True
+ 87                             )
+ 88
+ 89         mean_merror = pd.Series(cv_results['binary_error-mean']).min()
+ 90         boost_rounds = pd.Series(cv_results['binary_error-mean']).argmin()
+ 91
+ 92         if mean_merror < min_merror:
+ 93             min_merror = mean_merror
+ 94             best_params['num_leaves'] = num_leaves
+ 95             best_params['max_depth'] = max_depth
+ 96
+ 97 params['num_leaves'] = best_params['num_leaves']
+ 98 params['max_depth'] = best_params['max_depth']
+ 99
+100 # 过拟合
+101 print("调参2：降低过拟合")
+102 for max_bin in range(1,255,5):
+103     for min_data_in_leaf in range(10,200,5):
+104             params['max_bin'] = max_bin
+105             params['min_data_in_leaf'] = min_data_in_leaf
+106
+107             cv_results = lgb.cv(
+108                                 params,
+109                                 lgb_train,
+110                                 seed=42,
+111                                 nfold=3,
+112                                 metrics=['binary_error'],
+113                                 early_stopping_rounds=3,
+114                                 verbose_eval=True
+115                                 )
+116
+117             mean_merror = pd.Series(cv_results['binary_error-mean']).min()
+118             boost_rounds = pd.Series(cv_results['binary_error-mean']).argmin()
+119
+120             if mean_merror < min_merror:
+121                 min_merror = mean_merror
+122                 best_params['max_bin']= max_bin
+123                 best_params['min_data_in_leaf'] = min_data_in_leaf
+124
+125 params['min_data_in_leaf'] = best_params['min_data_in_leaf']
+126 params['max_bin'] = best_params['max_bin']
+127
+128 print("调参3：降低过拟合")
+129 for feature_fraction in [0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]:
+130     for bagging_fraction in [0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]:
+131         for bagging_freq in range(0,50,5):
+132             params['feature_fraction'] = feature_fraction
+133             params['bagging_fraction'] = bagging_fraction
+134             params['bagging_freq'] = bagging_freq
+135
+136             cv_results = lgb.cv(
+137                                 params,
+138                                 lgb_train,
+139                                 seed=42,
+140                                 nfold=3,
+141                                 metrics=['binary_error'],
+142                                 early_stopping_rounds=3,
+143                                 verbose_eval=True
+144                                 )
+145
+146             mean_merror = pd.Series(cv_results['binary_error-mean']).min()
+147             boost_rounds = pd.Series(cv_results['binary_error-mean']).argmin()
+148
+149             if mean_merror < min_merror:
+150                 min_merror = mean_merror
+151                 best_params['feature_fraction'] = feature_fraction
+152                 best_params['bagging_fraction'] = bagging_fraction
+153                 best_params['bagging_freq'] = bagging_freq
+154
+155 params['feature_fraction'] = best_params['feature_fraction']
+156 params['bagging_fraction'] = best_params['bagging_fraction']
+157 params['bagging_freq'] = best_params['bagging_freq']
+158
+159 print("调参4：降低过拟合")
+160 for lambda_l1 in [0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]:
+161     for lambda_l2 in [0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]:
+162         for min_split_gain in [0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]:
+163             params['lambda_l1'] = lambda_l1
+164             params['lambda_l2'] = lambda_l2
+165             params['min_split_gain'] = min_split_gain
+166
+167             cv_results = lgb.cv(
+168                                 params,
+169                                 lgb_train,
+170                                 seed=42,
+171                                 nfold=3,
+172                                 metrics=['binary_error'],
+173                                 early_stopping_rounds=3,
+174                                 verbose_eval=True
+175                                 )
+176
+177             mean_merror = pd.Series(cv_results['binary_error-mean']).min()
+178             boost_rounds = pd.Series(cv_results['binary_error-mean']).argmin()
+179
+180             if mean_merror < min_merror:
+181                 min_merror = mean_merror
+182                 best_params['lambda_l1'] = lambda_l1
+183                 best_params['lambda_l2'] = lambda_l2
+184                 best_params['min_split_gain'] = min_split_gain
+185
+186 params['lambda_l1'] = best_params['lambda_l1']
+187 params['lambda_l2'] = best_params['lambda_l2']
+188 params['min_split_gain'] = best_params['min_split_gain']
+189
+190
+191 print(best_params)
+192
+193 ### 训练
+194 params['learning_rate']=0.01
+195 lgb.train(
+196           params,                     # 参数字典
+197           lgb_train,                  # 训练集
+198           valid_sets=lgb_eval,        # 验证集
+199           num_boost_round=2000,       # 迭代次数
+200           early_stopping_rounds=50    # 早停次数
+201           )
+202
+203 ### 线下预测
+204 print ("线下预测")
+205 preds_offline = lgb.predict(offline_test_X, num_iteration=lgb.best_iteration) # 输出概率
+206 offline=offline_test[['instance_id','is_trade']]
+207 offline['preds']=preds_offline
+208 offline.is_trade = offline['is_trade'].astype(np.float64)
+209 print('log_loss', metrics.log_loss(offline.is_trade, offline.preds))
+210
+211 ### 线上预测
+212 print("线上预测")
+213 preds_online =  lgb.predict(online_test_X, num_iteration=lgb.best_iteration)  # 输出概率
+214 online=online_test[['instance_id']]
+215 online['preds']=preds_online
+216 online.rename(columns={'preds':'predicted_score'},inplace=True)           # 更改列名
+217 online.to_csv("./data/20180405.txt",index=None,sep=' ')                   # 保存结果
+218
+219 ### 保存模型
+220 from sklearn.externals import joblib
+221 joblib.dump(lgb,'lgb.pkl')
+222
+223 ### 特征选择
+224 df = pd.DataFrame(X_train.columns.tolist(), columns=['feature'])
+225 df['importance']=list(lgb.feature_importance())                           # 特征分数
+226 df = df.sort_values(by='importance',ascending=False)                      # 特征排序
+227 df.to_csv("./data/feature_score_20180331.csv",index=None,encoding='gbk')  # 保存分数
+'''
+
+'''
+3.GBDT
+
+'''
+'''
+1.不管任何参数，都用默认的，我们拟合下数据看看：
+gbm0 = GradientBoostingClassifier(random_state=10)
+gbm0.fit(X,y)
+y_pred = gbm0.predict(X)
+y_predprob = gbm0.predict_proba(X)[:,1]
+print "Accuracy : %.4g" % metrics.accuracy_score(y.values, y_pred)
+print "AUC Score (Train): %f" % metrics.roc_auc_score(y, y_predprob)
+'''
+
+'''
+首先我们从步长(learning rate)和迭代次数(n_estimators)入手。
+一般来说,开始选择一个较小的步长来网格搜索最好的迭代次数。这里，我们将步长初始值设置为0.1。对于迭代次数进行网格搜索如下：
+param_test1 = {'n_estimators':range(20,81,10)}
+gsearch1 = GridSearchCV(estimator = GradientBoostingClassifier(learning_rate=0.1, min_samples_split=300,
+                                  min_samples_leaf=20,max_depth=8,max_features='sqrt', subsample=0.8,random_state=10),
+                       param_grid = param_test1, scoring='roc_auc',iid=False,cv=5)
+gsearch1.fit(X,y)
+gsearch1.grid_scores_, gsearch1.best_params_, gsearch1.best_score_
+'''
+
+'''
+找到了一个合适的迭代次数，现在我们开始对决策树进行调参。首先我们对决策树最大深度max_depth和内部节点再划分所需最小样本数min_samples_split进行网格搜索。
+param_test2 = {'max_depth':range(3,14,2), 'min_samples_split':range(100,801,200)}
+gsearch2 = GridSearchCV(estimator = GradientBoostingClassifier(learning_rate=0.1, n_estimators=60, min_samples_leaf=20,
+      max_features='sqrt', subsample=0.8, random_state=10),
+   param_grid = param_test2, scoring='roc_auc',iid=False, cv=5)
+gsearch2.fit(X,y)
+gsearch2.grid_scores_, gsearch2.best_params_, gsearch2.best_score_
+输出如下，可见最好的最大树深度是7，内部节点再划分所需最小样本数是300。
+'''
+
+'''
+由于决策树深度7是一个比较合理的值，我们把它定下来，对于内部节点再划分所需最小样本数min_samples_split，我们暂时不能一起定下来，
+因为这个还和决策树其他的参数存在关联。下面我们再对内部节点再划分所需最小样本数min_samples_split和叶子节点最少样本数min_samples_leaf一起调参。
+param_test3 = {'min_samples_split':range(800,1900,200), 'min_samples_leaf':range(60,101,10)}
+gsearch3 = GridSearchCV(estimator = GradientBoostingClassifier(learning_rate=0.1, n_estimators=60,max_depth=7,
+                                     max_features='sqrt', subsample=0.8, random_state=10),
+                       param_grid = param_test3, scoring='roc_auc',iid=False, cv=5)
+gsearch3.fit(X,y)
+gsearch3.grid_scores_, gsearch3.best_params_, gsearch3.best_score_
+输出结果如下，可见这个min_samples_split在边界值，还有进一步调试小于边界60的必要。
+由于这里只是例子，所以大家可以自己下来用包含小于60的网格搜索来寻找合适的值。
+'''
+
+'''
+我们调了这么多参数了，终于可以都放到GBDT类里面去看看效果了。现在我们用新参数拟合数据：
+gbm1 = GradientBoostingClassifier(learning_rate=0.1, n_estimators=60,max_depth=7, min_samples_leaf =60,
+               min_samples_split =1200, max_features='sqrt', subsample=0.8, random_state=10)
+gbm1.fit(X,y)
+y_pred = gbm1.predict(X)
+y_predprob = gbm1.predict_proba(X)[:,1]
+print "Accuracy : %.4g" % metrics.accuracy_score(y.values, y_pred)
+print "AUC Score (Train): %f" % metrics.roc_auc_score(y, y_predprob)
+'''
+
+'''
+对比我们最开始完全不调参的拟合效果，可见精确度稍有下降，主要原理是我们使用了0.8的子采样，20%的数据没有参与拟合。
+现在我们再对最大特征数max_features进行网格搜索。
+param_test4 = {'max_features':range(7,20,2)}
+gsearch4 = GridSearchCV(estimator = GradientBoostingClassifier(learning_rate=0.1, n_estimators=60,max_depth=7, min_samples_leaf =60,
+               min_samples_split =1200, subsample=0.8, random_state=10),
+                       param_grid = param_test4, scoring='roc_auc',iid=False, cv=5)
+gsearch4.fit(X,y)
+gsearch4.grid_scores_, gsearch4.best_params_, gsearch4.best_score_
+'''
+
+'''
+现在我们再对子采样的比例进行网格搜索：
+param_test5 = {'subsample':[0.6,0.7,0.75,0.8,0.85,0.9]}
+gsearch5 = GridSearchCV(estimator = GradientBoostingClassifier(learning_rate=0.1, n_estimators=60,max_depth=7, min_samples_leaf =60,
+               min_samples_split =1200, max_features=9, random_state=10),
+                       param_grid = param_test5, scoring='roc_auc',iid=False, cv=5)
+gsearch5.fit(X,y)
+gsearch5.grid_scores_, gsearch5.best_params_, gsearch5.best_score_
+'''
+
+'''
+　现在我们基本已经得到我们所有调优的参数结果了。这时我们可以减半步长，最大迭代次数加倍来增加我们模型的泛化能力。再次拟合我们的模型：
+gbm2 = GradientBoostingClassifier(learning_rate=0.05, n_estimators=120,max_depth=7, min_samples_leaf =60,
+               min_samples_split =1200, max_features=9, subsample=0.7, random_state=10)
+gbm2.fit(X,y)
+y_pred = gbm2.predict(X)
+y_predprob = gbm2.predict_proba(X)[:,1]
+print "Accuracy : %.4g" % metrics.accuracy_score(y.values, y_pred)
+print "AUC Score (Train): %f" % metrics.roc_auc_score(y, y_predprob)
+'''
+
+'''
+可以看到AUC分数比起之前的版本稍有下降，这个原因是我们为了增加模型泛化能力，为防止过拟合而减半步长，最大迭代次数加倍，同时减小了子采样的比例，从而减少了训练集的拟合程度。
+下面我们继续将步长缩小5倍，最大迭代次数增加5倍，继续拟合我们的模型：
+gbm3 = GradientBoostingClassifier(learning_rate=0.01, n_estimators=600,max_depth=7, min_samples_leaf =60,
+               min_samples_split =1200, max_features=9, subsample=0.7, random_state=10)
+gbm3.fit(X,y)
+y_pred = gbm3.predict(X)
+y_predprob = gbm3.predict_proba(X)[:,1]
+print "Accuracy : %.4g" % metrics.accuracy_score(y.values, y_pred)
+print "AUC Score (Train): %f" % metrics.roc_auc_score(y, y_predprob)
+'''
+
+'''
+输出如下，可见减小步长增加迭代次数可以在保证泛化能力的基础上增加一些拟合程度。
+最后我们继续步长缩小一半，最大迭代次数增加2倍，拟合我们的模型：
+gbm4 = GradientBoostingClassifier(learning_rate=0.005, n_estimators=1200,max_depth=7, min_samples_leaf =60,
+               min_samples_split =1200, max_features=9, subsample=0.7, random_state=10)
+gbm4.fit(X,y)
+y_pred = gbm4.predict(X)
+y_predprob = gbm4.predict_proba(X)[:,1]
+print "Accuracy : %.4g" % metrics.accuracy_score(y.values, y_pred)
+print "AUC Score (Train): %f" % metrics.roc_auc_score(y, y_predprob)
+'''
+
+'''
+输出如下，此时由于步长实在太小，导致拟合效果反而变差，也就是说，步长不能设置的过小。
+'''
+
+##########################################################################################
+
+'''
+4.RF:
+不管任何参数，都用默认的，我们拟合下数据看看：
+param_test1 = {'n_estimators':range(10,71,10)}
+gsearch1 = GridSearchCV(estimator = RandomForestClassifier(min_samples_split=100,
+                                  min_samples_leaf=20,max_depth=8,max_features='sqrt' ,random_state=10),
+                       param_grid = param_test1, scoring='roc_auc',cv=5)
+gsearch1.fit(X,y)
+gsearch1.grid_scores_, gsearch1.best_params_, gsearch1.best_score_
+'''
+
+'''
+这样我们得到了最佳的弱学习器迭代次数，接着我们对决策树最大深度max_depth和内部节点再划分所需最小样本数min_samples_split进行网格搜索。
+param_test2 = {'max_depth':range(3,14,2), 'min_samples_split':range(50,201,20)}
+gsearch2 = GridSearchCV(estimator = RandomForestClassifier(n_estimators= 60,
+                                  min_samples_leaf=20,max_features='sqrt' ,oob_score=True, random_state=10),
+   param_grid = param_test2, scoring='roc_auc',iid=False, cv=5)
+gsearch2.fit(X,y)
+gsearch2.grid_scores_, gsearch2.best_params_, gsearch2.best_score_
+'''
+
+'''
+我们看看我们现在模型的袋外分数：
+rf1 = RandomForestClassifier(n_estimators= 60, max_depth=13, min_samples_split=110,
+                                  min_samples_leaf=20,max_features='sqrt' ,oob_score=True, random_state=10)
+rf1.fit(X,y)
+print rf1.oob_score_
+
+可见此时我们的袋外分数有一定的提高。也就是时候模型的泛化能力增强了。
+
+对于内部节点再划分所需最小样本数min_samples_split，我们暂时不能一起定下来，
+因为这个还和决策树其他的参数存在关联。下面我们再对内部节点再划分所需最小样本数min_samples_split和叶子节点最少样本数min_samples_leaf一起调参
+param_test3 = {'min_samples_split':range(80,150,20), 'min_samples_leaf':range(10,60,10)}
+gsearch3 = GridSearchCV(estimator = RandomForestClassifier(n_estimators= 60, max_depth=13,
+                                  max_features='sqrt' ,oob_score=True, random_state=10),
+   param_grid = param_test3, scoring='roc_auc',iid=False, cv=5)
+gsearch3.fit(X,y)
+gsearch3.grid_scores_, gsearch2.best_params_, gsearch2.best_score_
+
+最后我们再对最大特征数max_features做调参:
+
+param_test4 = {'max_features':range(3,11,2)}
+gsearch4 = GridSearchCV(estimator = RandomForestClassifier(n_estimators= 60, max_depth=13, min_samples_split=120,
+                                  min_samples_leaf=20 ,oob_score=True, random_state=10),
+   param_grid = param_test4, scoring='roc_auc',iid=False, cv=5)
+gsearch4.fit(X,y)
+gsearch4.grid_scores_, gsearch4.best_params_, gsearch4.best_score_
+
+
+用我们搜索到的最佳参数，我们再看看最终的模型拟合：
+
+rf2 = RandomForestClassifier(n_estimators= 60, max_depth=13, min_samples_split=120,
+                                  min_samples_leaf=20,max_features=7 ,oob_score=True, random_state=10)
+rf2.fit(X,y)
+print rf2.oob_score_
+
+可见此时模型的袋外分数基本没有提高，主要原因是0.984已经是一个很高的袋外分数了，如果想进一步需要提高模型的泛化能力，我们需要更多的数据。
+
+
+'''
