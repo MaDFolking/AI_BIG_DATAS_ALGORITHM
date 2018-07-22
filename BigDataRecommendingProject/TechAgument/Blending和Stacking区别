@@ -1,0 +1,59 @@
+stacking和blending是两种集成分类器的相似方法
+
+Stacking
+一、stacking方法是什么
+stacking是一种分层模型集成框架。以两层为例，第一层由多个基学习器组成，其输入为原始训练集，第二层的模型则是以第一层基学习器的输出作为特征加入训练集进行再训练，从而得到完整的stacking模型。
+
+二、如何构造stacking模型
+以两层stacking模型为例，要得到stacking模型，关键在于如何构造第二层的特征（下记为元特征，meta feature），构造元特征的原则是尽可能的避免信息泄露，因此对原始训练集常常采用类似于K折交叉验证的划分方法。 
+这里写图片描述
+
+以5折划分为例，我们将原始训练集分为5折，分别记为fold1、fold2、fold3、fold4和fold5。此时我们使用fold2-fold5的数据来训练基模型1，并对fold1进行预测，该预测值即作为基模型1对fold1生成的元特征；同样地，使用fold1、fold3-fold5的数据来训练基模型1，并对fold2进行预测，该预测值即作为基模型1对fold2生成的元特征；以此类推，得到基模型1对整个原始训练集生成的元特征。同样地，对其他基模型也采用相同的方法生成元特征，从而构成用于第二层模型（下记为元模型，meta model）训练的完整元特征集。对于测试集，我们可以在每次基模型训练好时预测，再将预测值做均值处理；也可以将基模型拟合全部的训练集之后再对测试集进行预测。 
+需要注意的是，在生成第二层特征的时候，各个基模型要采用相同的Kfold，这样得到的元特征的每一折（对应于之前的K折划分）都将不会泄露进该折数据的目标值信息 ，从而尽可能的降低过拟合的风险。虽然如此，实际上我们得到的元特征还是存在一定程度上的信息泄露，比如我们在预测第二折的时候，是利用了第一折的目标值信息用于训练基模型的，也就是说第一折的目标值信息杂糅在对第二折进行预测的基模型里。但是，实践中，这种程度的信息泄露所造成的过拟合程度很小。
+
+以KNN和SVM为例进行Stacking的流程如下：
+
+假设我们有Training data（有label）和Testing data（无label），我们需要建立起模型对Testing data的label进行预测，我们利用两个基模型KNN和SVM进行stacking，首先我们需要训练好两个基模型
+
+一、KNN（Base model 1） 
+5-fold Cross-Validation + Grid Search确定K的大小
+
+二、SVM（Base model 2） 
+5-fold Cross-Validation + Grid Search确定参数 type 和 cost
+
+三、Stacking（Meta Ensembling）
+
+将training data划分成5个testing folds
+为training data和testing中的每一个样本添加空属性M1、M2（model 1、2的输出），记为train_meta 和 test_meta
+对于每一个test fold:
+
+3.1、将其他4个folds作为一个traing fold，将此training fold作为model 1的输入，对test fold进行预测，将结果存放进train_meta的M1中，类似model 2 的结果存在M2中 
+3.2、将整个training data作为base model的输入，对testing data进行预测，model 1、2的结果分别存在test_meta的M1、M2中
+
+将train_meta作为一个新模型S（也就是stacking model）的输入，对test_meta进行预测
+三、如何对stacking模型调参
+stacking模型调参包括对基模型和元模型进行调参。对于基模型，因为我们在生成元特征的时候要使用相同的K折划分，所以我们使用交叉验证+网格搜索来调参时最好使用与生成元特征相同的Kfold。对于元模型的调参，使用交叉验证+网格搜索来调参时，为了降低过拟合的风险，我们最好也使用与元特征生成时同样的Kfold。
+
+【Tips】：元模型调参使用CV有Data Leakage的风险，使用{fold2, fold3, fold4, fold5}作为S的输入，预测fold1，但是在{fold2, fold3, fold4, fold5}中的meta features（M1、M2）是基模型对fold1的预测结果。
+
+综上，stacking方法从一开始就得确定一个Kfold，这个Kfold将伴随对基模型的调参、生成元特征以及对元模型的调参，贯穿整个stacking流程。当然，由于我们生成基模型时未使用全部数据，我们可以使用多个不同的Kfold来生成多个stacking模型然后进行加权，这样可以进一步提高算法的鲁棒性。 
+另外，基模型的选择需要考虑的是：基模型之间的相关性要尽量小，同时基模型之间的性能表现不能差距太大。
+
+Blending
+Blending与Stacking大致相同，只是Blending的主要区别在于训练集不是通过K-Fold的CV策略来获得预测值从而生成第二阶段模型的特征，而是建立一个Holdout集，例如10%的训练数据，第二阶段的stacker模型就基于第一阶段模型对这10%训练数据的预测值进行拟合。说白了，就是把Stacking流程中的K-Fold CV 改成 HoldOut CV。
+
+Blending的优点在于：
+
+1.比stacking简单（因为不用进行k次的交叉验证来获得stacker feature）
+
+2.避开了一个信息泄露问题：generlizers和stacker使用了不一样的数据集
+
+3.在团队建模过程中，不需要给队友分享自己的随机种子
+
+而缺点在于：
+
+1.使用了很少的数据
+
+2.blender可能会过拟合（其实大概率是第一点导致的）
+
+3.stacking使用多次的CV会比较稳健
