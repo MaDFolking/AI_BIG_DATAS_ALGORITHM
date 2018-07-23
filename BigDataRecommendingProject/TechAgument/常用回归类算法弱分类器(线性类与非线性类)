@@ -1,0 +1,570 @@
+线性:一对一。非线性:一对多，多对多
+PS:RMSE和MAE
+
+量纲一样，RMSE一般比MAE要大一些。RMSE:错误值平方再开跟，RMSE有比较大的错误时平方再开跟结果数值会更大，
+所以尽量让RMSE数值更小，这样就会让样本值最大错误值比较小，这样更稳定。
+MAE是一直很稳定的，没有波动数据集。
+所以为了更好地看出错误波动率，选RMSE更好一些。
+
+
+1.线性回归特点
+针对预测，回归类项目，以及想知道哪些特征影响结果的项目(股票金融房价能源销量等回归问题。)
+解决回归问题。
+许多强大的非线性模型的基础。
+具有很好的可解释性。
+分类问题: 每个点代表俩个样本特征，横轴一个，纵轴一个。输出表示俩种元素、。
+回归问题:横轴是样本，纵轴代表输出结果。
+
+2.常用方法和问题:
+特征缩放：即对特征数据进行归一化操作，进行特征缩放的好处有两点，一是能够提升模型的收敛速度，
+因为如果特征间的数据相差级别较大的话，以两个特征为例，以这两个特征为横纵坐标绘制等高线图，
+绘制出来是扁平状的椭圆，这时候通过梯度下降法寻找梯度方向最终将走垂直于等高线的之字形路线，
+迭代速度变慢。但是如果对特征进行归一化操作之后，整个等高线图将呈现圆形，梯度的方向是指向圆心的，
+迭代速度远远大于前者。二是能够提升模型精度。
+
+学习率α的选取：如果学习率α选取过小，会导致迭代次数变多，收敛速度变慢；学习率α选取过大，
+有可能会跳过最优解，最终导致根本无法收敛。
+
+3.过拟合问题解决:
+(1)：丢弃一些对我们最终预测结果影响不大的特征，具体哪些特征需要丢弃可以通过PCA算法来实现；
+(2)：使用正则化技术，保留所有特征，但是减少特征前面的参数θ的大小，
+具体就是修改线性回归中的损失函数形式即可，岭回归以及Lasso回归就是这么做的。
+
+4.各种回归特点
+(1)线性回归: --预测类问题常用，因为我们要解决问题的同时，还要得到哪些特征维度较大影响我们的结果，它的强可解释性。
+通过正相关和负相关来得到这些因素哪个是促进房价，哪个是抑制房价的因素。
+所以线性回归对数据有可解释型，通过有解释性后，可以采集更多的数据去计算房价。
+比如面积与房价成一个正相关后，再采集关于面积的数据进一步判断房价。比如负相关co2浓度，我们可以采集周边的化工厂位置，
+距离，数量来进一步判断房价。所以拿到一组数据后，先用线性回归看一下，再根据结果的正相关和负相关，
+去采集更多数据进行进一步预测，得到很多正相关和负相关，再根据结果用其他更好的算法去比较。
+缺点:没有正则项，容易过拟合。
+
+(2)多项式回归
+在这种回归技术中，最佳拟合线不是直线。而是一个用于拟合数据点的曲线。
+虽然会有一个诱导可以拟合一个高次多项式并得到较低的错误，但这可能会导致过拟合。你需要经常画出关系图来查看拟合情况，并且专注于保证拟合合理，既没有过拟合又没有欠拟合。
+
+(3)Logistic Regression逻辑回归
+逻辑回归是用来计算“事件=Success”和“事件=Failure”的概率。当因变量的类型属于二元（1 / 0，真/假，是/否）变量时，我们就应该使用逻辑回归。这里，Y的值从0到1，它可以用下方程表示。
+本质是在多项式回归后加sigmod函数来判别各个类的概率，然后决定这个结果属于哪个概率最大就是哪个。
+上述式子中，p表述具有某个特征的概率。你应该会问这样一个问题：“我们为什么要在公式中使用对数log呢？”。
+
+因为在这里我们使用的是的二项分布（因变量），我们需要选择一个对于这个分布最佳的连结函数。它就是Logit函数。在上述方程中，通过观测样本的极大似然估计值来选择参数，而不是最小化平方和误差（如在普通回归使用的）。
+
+特点:
+它广泛的用于分类问题。
+逻辑回归不要求自变量和因变量是线性关系。它可以处理各种类型的关系，因为它对预测的相对风险指数OR使用了一个非线性的log转换。
+为了避免过拟合和欠拟合，我们应该包括所有重要的变量。有一个很好的方法来确保这种情况，就是使用逐步筛选方法来估计逻辑回归。
+它需要大的样本量，因为在样本数量较少的情况下，极大似然估计的效果比普通的最小二乘法差。
+自变量不应该相互关联的，即不具有多重共线性。然而，在分析和建模中，我们可以选择包含分类变量相互作用的影响。
+如果因变量的值是定序变量，则称它为序逻辑回归。
+如果因变量是多类的话，则称它为多元逻辑回归。
+
+(4)Stepwise Regression逐步回归
+
+在处理多个自变量时，我们可以使用这种形式的回归。在这种技术中，自变量的选择是在一个自动的过程中完成的，其中包括非人为操作。
+这一壮举是通过观察统计的值，如R-square，t-stats和AIC指标，来识别重要的变量。逐步回归通过同时添加/删除基于指定标准的协变量来拟合模型。下面列出了一些最常用的逐步回归方法：
+
+特点:
+标准逐步回归法做两件事情。即增加和删除每个步骤所需的预测。
+向前选择法从模型中最显著的预测开始，然后为每一步添加变量。
+向后剔除法与模型的所有预测同时开始，然后在每一步消除最小显着性的变量。
+这种建模技术的目的是使用最少的预测变量数来最大化预测能力。这也是处理高维数据集的方法之一。
+
+(5)(Ridge)岭回归: 
+在上述线性回归的基础上。
+有L2正则项，使其更平滑。因为是平方，所以参数要更小，更像曲线。
+α趋近于无穷大时，当θ都趋近于0时,我们用梯度下降法来看θ是如何变成0的。
+梯度△和梯度下降图示:因为梯度需要求偏导数，每次求导除了当前θ本身其他θ6都没了，所以就如下
+初始点蓝点会逐渐达到0点。
+
+(6)Lasso回归:
+有L1正则项，使其更平滑，因为不是平方，所以前面参数可以更大，因为不是平方，所以更接近一对一，更像直线，让一些θ变为0.
+如果α趋近于无穷时，也就是只看公式后面部分。因为不是平方是不可导，
+但可以分类来看导数为sin(θ)。
+因为LASSO会让θ先变为0，且只有-1,0,1三个选项。
+所以sin(X) = 0,α会先到0，然后一直往下走。方向是(0,-1)。LASSO
+曲线只能用这种直线方式走，而不是像Ridge曲线偶组。
+
+(7)ElasticNet回归
+ElasticNet是Lasso和Ridge回归技术的混合体。它使用L1来训练并且L2优先作为正则化矩阵。
+当有多个相关的特征时，ElasticNet是很有用的。Lasso 会随机挑选他们其中的一个，而ElasticNet则会选择两个。
+
+在高度相关变量的情况下，它会产生群体效应；
+选择变量的数目没有限制；
+它可以承受双重收缩。
+
+以上三种回归总结:
+总结:
+
+L1和L2的结合。增加一个超参数r.
+通常先尝试岭回归,ridge,如果特征数特别大，ridge会很慢，此时就优先选择弹性网络。
+类似小批量梯度下降法，优势结合。
+机器学习领域经常使用这类方法，将俩种方式结合在一起。多个超参数结合。
+
+4.参数配置
+(1)线性回归
+fit_intercept：boolean 截距
+normalize : 归一化，如果设置为true: 则回归量X将在回归之前通过减去平均值并除以l2范数来归一化。
+				 如果您希望标准化，请 在使用估算器sklearn.preprocessing.StandardScaler之前fit使用normalize=False。
+copy_X：boolean:复制。
+n_jobs:这俩参数下面我都不会再写。
+
+(2)逐步回归
+skt-learn没有，简单说下方法。类似贪心的Ridge回归。
+前向逐步回归算法属于一种贪心算法，即每一步都尽可能减少误差。一开始，所有的权重都设置为1，然后每一步所做的决策是对某个权重增加或减少一个很小的值。 
+观察每次循环得到的回归系数，一段时间后会出现系数达到饱和并在特定值之间来回震荡的情况，这是由于步长设置过大导致的。 
+当我们构建一个模型后，运行该算法找到重要的特征，这样就有可能及时停止对那些不重要特征（非常小，趋于零的回归系数）的收集。 
+
+(3)逻辑回归
+常调的参数有:
+（1）C：float，默认值：1.0 
+正规化强度逆; 必须是积极的浮动。与支持向量机一样，较小的值指定更强的正则化。
+（2）dual：bool，默认值：False
+双重或原始配方。双配方仅用于利用liblinear解算器的l2惩罚。当n_samples> n_features时，首选dual = False。
+（3）penalty : l1/l2惩罚
+（4）max_iter：int默认值：100 仅适用于newton-cg，sag和lbfgs求解器。求解器收敛的最大迭代次数。
+（5）multi_class：str {'ovr'，'multinomial'}，默认值：'ovr'
+多类选项可以是'ovr'或'multinomial'。如果选择的选项是'ovr'，那么二进制问题适合每个标签。另外，最小化损失是整个概率分布中的多项式损失拟合。不适用于liblinear解算器。
+版本0.18中的新功能： “多项式”案例的随机平均梯度下降求解器。
+（6）solver : 求解器: {‘newton-cg’, ‘lbfgs’, ‘liblinear’, ‘sag’, ‘saga’}
+default：'liblinear'在优化问题中使用的算法。
+对于小型数据集，'liblinear'是一个不错的选择，而'sag'和
+'saga'对于大型的更快。
+对于多类问题，只有'newton-cg'，'sag'，'saga'和'lbfgs'
+处理多项损失; 'liblinear'仅限于一对一休息方案。
+'newton-cg'，'lbfgs'和'sag'只处理L2惩罚，而
+'liblinear'和'saga'处理L1惩罚。
+请注意，“sag”和“saga”快速收敛仅在具有大致相同比例的要素上得到保证。您可以使用sklearn.preprocessing中的缩放器预处理数据。
+版本0.17中的新功能：随机平均梯度下降求解器。
+版本0.19中的新功能： SAGA求解器。
+
+(4)岭回归
+具有l2正则化的线性最小二乘法。
+alpha：正则参数
+下面都与LR一样。
+normalize 与LR一样
+max_iter：int
+solver 
+
+(5)Lasso归回
+跟上面差不多，多了：
+precompute：True 是否使用预先计算的Gram矩阵来加速计算。如果设置'auto'让我们决定。Gram矩阵也可以作为参数传递。对于稀疏输入，此选项始终True用于保留稀疏性。
+
+(6)弹性网络
+多了l1_ratio : 浮动
+ElasticNet混合参数，带。为 惩罚是L2惩罚。这是一个L1惩罚。因为，惩罚是L1和L2的组合。0 <= l1_ratio <= 1l1_ratio = 0For l1_ratio = 10 < l1_ratio < 1
+
+
+5.代码演示:
+(1)线性回归:
+from sklearn.linear_model import LinearRegression
+X_train, X_test, y_train, y_test = data
+#通过sklearn的linear_model创建线性回归对象
+linearRegression = linear_model.LinearRegression()
+#进行训练
+linearRegression.fit(X_train, y_train)
+#通过LinearRegression的coef_属性获得权重向量,intercept_获得b的值
+print("权重向量:%s, b的值为:%.2f" % (linearRegression.coef_, linearRegression.intercept_))
+#计算出损失函数的值
+print("损失函数的值: %.2f" % np.mean((linearRegression.predict(X_test) - y_test) ** 2))
+#计算预测性能得分
+print("预测性能得分: %.2f" % linearRegression.score(X_test, y_test))
+
+(2)逐步回归
+伪代码如下：
+
+数据标准化，使其分布满足0均值和单位方差
+每次迭代过程中：
+    设置当前最小误差lowestError为正无穷
+    对每个特称：
+        增大或减小：
+            改变一个系数得到一个新的w
+            计算新的w下的误差
+            如果当前误差w小雨最小误差lowestError，那么将wbest设置为w
+
+Python代码如下：
+
+### Front stage-wise Regression ###
+def rssError(yArr, yHatArr):
+    return ((yArr - yHatArr) ** 2).sum()
+
+def regularize(xMat):  # regularize by columns  
+    inMat = xMat.copy()
+    inMeans = mean(inMat, 0)  # calc mean then subtract it off  
+    inVar = var(inMat, 0)  # calc variance of Xi then divide by it  
+    inMat = (inMat - inMeans) / inVar
+    return inMat
+
+def stageWise(xArr, yArr, step=0.01, numIt=100):
+    xMat = mat(xArr)
+    xMat = regularize(xMat)
+    yMat = mat(yArr).T
+    yMean = mean(yMat)
+    yMat = yMat - yMean
+    N, n = shape(xMat)
+    returnMat = zeros((numIt, n))
+    ws = zeros((n, 1))
+    wsTest = ws.copy()
+    weMax = ws.copy()
+    for ii in range(numIt):
+        print(ws.T)
+        lowestErr = inf
+        for jj in range(n):
+            for sign in [-1, 1]:
+                wsTest = ws.copy()
+                wsTest[jj] += step * sign
+                yTest = xMat * wsTest
+                rssE = rssError(yMat.A, yTest.A)
+                if rssE < lowestErr:
+                    lowestErr = rssE
+                    wsMax = wsTest
+        ws = wsMax.copy()
+        returnMat[ii, :] = ws.T
+    return returnMat
+
+(3)逻辑回归
+model = LogisticRegression ()
+
+(4)岭回归
+from sklearn.linear_model import Ridge
+ X_train, X_test, y_train, y_test = data
+ridgeRegression = linear_model.Ridge()
+ridgeRegression.fit(X_train, y_train)
+print("权重向量:%s, b的值为:%.2f" % (ridgeRegression.coef_, ridgeRegression.intercept_))
+print("损失函数的值:%.2f" % np.mean((ridgeRegression.predict(X_test) - y_test) ** 2))
+print("预测性能得分: %.2f" % ridgeRegression.score(X_test, y_test))
+
+(5)Lasso归回
+X_train, X_test, y_train, y_test = data
+lassoRegression = linear_model.Lasso()
+lassoRegression.fit(X_train, y_train)
+print("权重向量:%s, b的值为:%.2f" % (lassoRegression.coef_, lassoRegression.intercept_))
+print("损失函数的值:%.2f" % np.mean((lassoRegression.predict(X_test) - y_test) ** 2))
+print("预测性能得分: %.2f" % lassoRegression.score(X_test, y_test))
+
+(6)弹性网络
+
+>>> from sklearn.linear_model import ElasticNet
+>>> from sklearn.datasets import make_regression
+>>>
+>>> X, y = make_regression(n_features=2, random_state=0)
+>>> regr = ElasticNet(random_state=0)
+>>> regr.fit(X, y)
+ElasticNet(alpha=1.0, copy_X=True, fit_intercept=True, l1_ratio=0.5,
+      max_iter=1000, normalize=False, positive=False, precompute=False,
+      random_state=0, selection='cyclic', tol=0.0001, warm_start=False)
+>>> print(regr.coef_) 
+[ 18.83816048  64.55968825]
+>>> print(regr.intercept_) 
+1.45126075617
+>>> print(regr.predict([[0, 0]])) 
+[ 1.45126076]
+
+
+6.应用领域
+在多类回归模型中，基于自变量和因变量的类型，数据的维数以及数据的其它基本特征的情况下，选择最合适的技术非常重要。以下是你要选择正确的回归模型的关键因素：
+
+数据探索是构建预测模型的必然组成部分。在选择合适的模型时，比如识别变量的关系和影响时，它应该首选的一步。
+比较适合于不同模型的优点，我们可以分析不同的指标参数，如统计意义的参数，R-square，Adjusted R-square，AIC，BIC以及误差项，另一个是Mallows' Cp准则。这个主要是通过将模型与所有可能的子模型进行对比（或谨慎选择他们），检查在你的模型中可能出现的偏差。
+交叉验证是评估预测模型最好额方法。在这里，将你的数据集分成两份（一份做训练和一份做验证）。使用观测值和预测值之间的一个简单均方差来衡量你的预测精度。
+如果你的数据集是多个混合变量，那么你就不应该选择自动模型选择方法，因为你应该不想在同一时间把所有变量放在同一个模型中。
+它也将取决于你的目的。可能会出现这样的情况，一个不太强大的模型与具有高度统计学意义的模型相比，更易于实现。
+回归正则化方法（Lasso，Ridge和ElasticNet）在高维和数据集变量之间多重共线性情况下运行良好。
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+下面是特殊的其他常用处理回归的弱分类器。
+
+（1）Kernel Ridge Regression：特点，适合比较小的数据量。
+利用核函数，所以适合比较小的数据量。速度慢于SVM/SVR。一般是调节其他模型作用。
+
+即使用核技巧的岭回归（L2正则线性回归），
+它的学习形式和SVR（support vector regression）相同，但是两者的损失函数不同：KRR使用的L2正则均方误差；SVR使用的是带L2正则的-insensitive loss：。 
+KRR有近似形式的解，并且在中度规模的数据时及其有效率，由于KRR没有参数稀疏化的性能，因此速度上要慢于SVR（它的损失函数有利于得到稀疏化的解）。 
+KRR的最小二乘解：，这里的是核函数。最小二乘解不适用于大规模数据。
+
+参数:
+alpha：{float，array-like}，shape = [n_targets]
+
+α的小正值可改善问题的条件并减少估计的方差。Alpha对应 (2*C)^-1于其他线性模型，例如LogisticRegression或LinearSVC。如果数组通过，则假定惩罚特定于目标。因此，它们必须在数量上对应。
+
+kernel：string或callable，default =“linear”
+
+内部使用的内核映射。一个callable应该接受两个参数，并将关键字参数作为kernel_params传递给该对象，并且应该返回一个浮点数。
+
+gamma：float，默认=无
+
+RBF，laplacian，多项式，指数chi2和sigmoid内核的Gamma参数。解释默认值留给内核; 请参阅sklearn.metrics.pairwise的文档。被其他内核忽略。
+
+度：浮点数，默认= 3
+
+多项式核的度数。被其他内核忽略。
+
+coef0：float，默认= 1
+
+多项式和S形核的零系数。被其他内核忽略。
+
+kernel_params：string到any的映射，可选
+
+内核函数的附加参数（关键字参数）作为可调用对象传递。
+
+代码：
+>>> from sklearn.kernel_ridge import KernelRidge
+>>> import numpy as np
+>>> n_samples, n_features = 10, 5
+>>> rng = np.random.RandomState(0)
+>>> y = rng.randn(n_samples)
+>>> X = rng.randn(n_samples, n_features)
+>>> clf = KernelRidge(alpha=1.0)
+>>> clf.fit(X, y) 
+KernelRidge(alpha=1.0, coef0=1, degree=3, gamma=None, kernel='linear',
+            kernel_params=None)
+            
+ 
+（2）BayesianRidge
+针对数据量较少的。
+
+贝叶斯岭回归： 具体看 https://blog.csdn.net/u010016927/article/details/75000152
+贝叶斯线性回归的引入主要是在最大似然估计中很难决定模型的复杂程度，ridge回归加入的惩罚参数其实也是解决这个问题的，同时可以采用的方法还有对数据进行正规化处理，另一个可以解决此问题的方法就是采用贝叶斯方法
+
+BayesianRidge 对上述的回归问题估计了一个概率模型。先验参数 w 由下面的球形高斯给出：
+p(w|\lambda) =\mathcal{N}(w|0,\lambda^{-1}\bold{I_{p}})
+先验参数 \alpha 和 \lambda 的选择满足 gamma distributions ，即高斯函数精度的共轭先验
+生成的模型称为 Bayesian Ridge Regression ,和经典的 Ridge 类似。 参数 w, \alpha 以及 \lambda 在模型的拟合中被共同估计。 其他的参数是 \alpha 和 \lambda 的gamma 先验的参数。（待校正） 这些通常被选择为 non-informative*（参考贝叶斯无信息先验）。参数统计通过最大化 *marginal log likelihood.
+拟合贝叶斯脊模型并优化正则化参数lambda（权重的精度）和alpha（噪声的精度）。
+
+参数：	
+n_iter：int，可选
+
+最大迭代次数。默认值为300。
+
+tol：float，可选
+
+如果w已收敛，则停止算法。默认值为1.e-3。
+
+alpha_1：float，可选
+
+超参数：Gamma分布的形状参数优先于alpha参数。默认值为1.e-6
+
+alpha_2：float，可选
+
+超参数：在alpha参数之前的Gamma分布的反比例参数（速率参数）。默认值为1.e-6。
+
+lambda_1：float，可选
+
+超参数：在λ参数之前的Gamma分布的形状参数。默认值为1.e-6。
+
+lambda_2：float，可选
+
+超参数：在λ参数之前的Gamma分布的反比例参数（速率参数）。默认值为1.e-6
+
+compute_score：布尔值，可选
+
+如果为True，则在模型的每个步骤计算目标函数。默认值为False
+
+fit_intercept：boolean，optional
+
+是否计算此模型的截距。如果设置为false，则不会在计算中使用截距（例如，预期数据已经居中）。默认为True。
+
+normalize：布尔值，可选，默认为False
+
+fit_intercept设置为False 时，将忽略此参数。如果为真，则回归量X将在回归之前通过减去平均值并除以l2范数来归一化。如果您希望标准化，请 在使用估算器sklearn.preprocessing.StandardScaler之前fit使用normalize=False。
+
+copy_X：boolean，optional，默认为True
+
+如果为True，则将复制X; 否则，它可能会被覆盖。
+
+verbose：布尔值，可选，默认为False
+
+拟合模型时的详细模式。
+
+>>> from sklearn import linear_model
+>>> clf = linear_model.BayesianRidge()
+>>> clf.fit([[0,0], [1, 1], [2, 2]], [0, 1, 2])
+... 
+BayesianRidge(alpha_1=1e-06, alpha_2=1e-06, compute_score=False,
+        copy_X=True, fit_intercept=True, lambda_1=1e-06, lambda_2=1e-06,
+        n_iter=300, normalize=False, tol=0.001, verbose=False)
+>>> clf.predict([[1, 1]])
+array([ 1.])
+
+
+优势:
+根据数据调节参数
+在估计过程中包含正则化参数
+劣势:
+模型的推理比较耗时
+
+(3) SGDRegressor 适用于: 大规模稀疏  具体看 http://d0evi1.com/sklearn/sgd/
+
+梯度下降法（SGD）是一个简单有效的方法，用于判断使用凸loss函数（convex loss function）的分类器（SVM或logistic回归）。即使SGD在机器学习社区已经存在了很久，到它被广泛接受也是最近几年。
+
+SGD被成功地应用在大规模稀疏机器学习问题上（large-scale and sparse machine learning），经常用在文本分类及自然语言处理上。假如数据是稀疏的，该模块的分类器可以轻松地解决这样的问题：超过10^5的训练样本、超过10^5的features。
+
+SGD的优点是：
+
+高效
+容易实现（有许多机会进行代码调优）
+SGD的缺点是：
+
+SGD需要许多超参数：比如正则项参数、迭代数。
+SGD对于特征归一化（feature scaling）是敏感的。
+
+SGDRegressor类实现了一个普通的随机梯度下降学习，它支持不同的loss函数和罚项来拟合线性回归模型。SGDRegressor对于大数据量训练集（》10000）的回归问题很合适。对于其它问题：我们推荐你使用Ridge, Lasso, or ElasticNet。
+
+loss函数可以通过loss参数进行设置。SGDRegressor支持以下的loss函数：
+
+loss=”squared_loss”: 普通最小二乘法
+loss=”huber”: 对于稳健回归（robust regression）的Huber loss
+loss=”epsilon_insensitive”: 线性SVM
+Huber 和 epsilon-insensitive loss函数可以用于稳健回归（robust regression）。敏感区的宽度可以通过参数epsilon来指定。该参数依赖于target变量的规模。
+
+SGDRegressor和SGDClassifier一样支持ASGD。通过设置
+
+1
+average=True
+来开启。
+对于使用最小二乘loss和l2罚项的回归来说，可以使用SGD的另一个变种SAG算法，由Ridge的solver提供。
+
+4.稀疏数据的SGD
+注意：稀疏实现与dense实现相比会产生不同结果，由于在intercept的learning rate上有shrink。
+
+稀疏矩阵由scipy.sparse支持。出于最大化的效率，使用CSR矩阵格式可以由scipy.sparse.csr_matrix定义。
+
+示例：
+
+Classification of text documents using sparse features
+5.复杂度
+SGD的主要优点在于它的高效，它与训练样本数成线性关系。如果X是一个size(n,p)的训练矩阵，具有一个cost为，其中k为迭代数（epochs），而是每个样本的非零属性平均数。
+
+最近的理论结果表明，优化正确率问题的runtime并不会随着训练样本大小的增加而增加。
+
+6.实用tips
+SGD对于特征归一化（feature scaling）很敏感，因此强烈推荐你对数据进行归一化。例如，将输入向量X的每个属性归一化到[0,1]或者[-1,1]，或者将它标准化到均值为0、方差为1。注意，必须对测试集向量也使用相同的归一化操作以获取有意义的结果。这可以通过StandardScaler做到：
+from sklearn.preprocessing import StandardScaler
+scaler = StandardScaler()
+scaler.fit(X_train)  # Don't cheat - fit only on training data
+X_train = scaler.transform(X_train)
+X_test = scaler.transform(X_test)  # apply same transformation to test data
+如果你的属性项本身就做了归一化（例如：词频、或者指示器feature），那就不需要再做归一化了。
+
+可以通过GridSearchCV找到一个合适的正则项，通常范围在：10.0**-np.arange(1,7)。
+经验上，我们发现SGD在接近10^6的训练样本时进行收敛。因此，第一步合理的猜想是，将迭代数设置成：n_iter = np.ceil(10**6 / n)，其中n是训练集的size。
+如果你在使用PCA提取的feature上使用SGD，我们发现，对于feature值进行归一化是明智的，通过一些常数c，以便训练数据的平均L2范式等于1。
+我们发现ASGD在当feature很大和eta0很大时运转很好。
+
+
+代码：
+>>> import numpy as np
+>>> from sklearn import linear_model
+>>> n_samples, n_features = 10, 5
+>>> np.random.seed(0)
+>>> y = np.random.randn(n_samples)
+>>> X = np.random.randn(n_samples, n_features)
+>>> clf = linear_model.SGDRegressor()
+>>> clf.fit(X, y)
+... 
+SGDRegressor(alpha=0.0001, average=False, epsilon=0.1, eta0=0.01,
+       fit_intercept=True, l1_ratio=0.15, learning_rate='invscaling',
+       loss='squared_loss', max_iter=None, n_iter=None, penalty='l2',
+       power_t=0.25, random_state=None, shuffle=True, tol=None,
+       verbose=0, warm_start=False)
+       
+ 
+ 
+ 
+ (4) SVR(SVM的回归算法) 可以支持非线性。 因为机制是核函数，数据量也不能太大。
+由支持向回归就是一种回归方法，就像最小二乘法，岭回归，梯度下降法一样，是一种方法，就像支持向量机也是一种方法，所以它们都不叫做模型，而是叫做支持向量机和支持向量回归。
+支持向量回归是在我们做拟合时，采用了支持向量的思想，和拉格朗日乘子式的方式，来对数据进行回归分析的。相对于经济学领域常用的最小二乘法而言，它有诸多好处：
+
+最小二乘法只能用于线性回归，对于非线性模型则不再适用；而支持向量回归并没有这个限制
+最小二乘法对于具有多重共线性的变量之间的回归效果很差；而支持向量回归并不需要担心多重共线性问题
+支持向量回归对虽然不会在过程中直接排除异常点，但会是的由异常点引起的偏误更小。 
+
+SVR和SVM比较: http://www.cnblogs.com/wuxiangli/p/6831229.html
+
+核函数: 具体看SVM笔记。
+我们要求一个函数转化，需要xi=>xi' xj=>xj'
+而我们用核函数就是将xi,xj放入核函数里直接变成
+xi',xj'
+K（xi,xj）=xi',xj'
+所以核函数核心就是去掉xi,xj变形xi',xj'的过程。将其带入到一个函数中直接生成xi',xj'
+省去了原来的样本先变形，再进行乘法这个步骤。这样减少了计算量，以及减少存储空间。
+因为通常变形是低维变高维，用核函数我们不需要关心维度问题。、
+
+ 参数:
+ C：float，可选（默认= 1.0）
+
+错误术语的惩罚参数C.
+
+epsilon：float，optional（默认值= 0.1）
+
+Epsilon在epsilon-SVR模型中。它指定了ε-管，其中训练损失函数中没有惩罚与在与实际值的距离epsilon内预测的点相关联。
+
+kernel：string，optional（default ='rbf'）
+
+指定要在算法中使用的内核类型。它必须是'linear'，'poly'，'rbf'，'sigmoid'，'precomputed'或者callable之一。如果没有给出，将使用'rbf'。如果给出了callable，则它用于预先计算内核矩阵。
+
+度：int，可选（默认= 3）
+
+多项式核函数的次数（'poly'）。被所有其他内核忽略。
+
+gamma：float，optional（默认='auto'）
+
+'rbf'，'poly'和'sigmoid'的核系数。如果gamma是'auto'，那么将使用1 / n_features。
+
+coef0：float，optional（默认值= 0.0）
+
+核函数中的独立项。它只在'poly'和'sigmoid'中很重要。
+
+收缩：布尔值，可选（默认= True）
+
+是否使用收缩启发式。
+
+tol：float，optional（默认值= 1e-3）
+
+容忍停止标准。
+
+cache_size：float，可选
+
+指定内核缓存的大小（以MB为单位）。
+
+详细说明：bool，默认值：False
+
+启用详细输出。请注意，此设置利用libsvm中的每进程运行时设置，如果启用，则可能无法在多线程上下文中正常运行。
+
+max_iter：int，optional（默认值= -1）
+
+求解器内迭代的硬限制，或无限制的-1。
+
+代码:
+>>> from sklearn.svm import SVR
+>>> import numpy as np
+>>> n_samples, n_features = 10, 5
+>>> np.random.seed(0)
+>>> y = np.random.randn(n_samples)
+>>> X = np.random.randn(n_samples, n_features)
+>>> clf = SVR(C=1.0, epsilon=0.2)
+>>> clf.fit(X, y) 
+SVR(C=1.0, cache_size=200, coef0=0.0, degree=3, epsilon=0.2, gamma='auto',
+    kernel='rbf', max_iter=-1, shrinking=True, tol=0.001, verbose=False)
+
+
+总结: SGD->大量稀疏数据。 其他都是小量数据。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
