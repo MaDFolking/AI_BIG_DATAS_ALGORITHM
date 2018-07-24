@@ -1,0 +1,432 @@
+import pickle
+import numpy as np
+import pandas as pd
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, cross_val_score, train_test_split,ShuffleSplit
+from sklearn.feature_selection import RFE
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from sklearn.model_selection._split import check_cv
+from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_selection import VarianceThreshold
+from scipy.stats import skew, kurtosis
+from scipy import sparse
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.random_projection import SparseRandomProjection
+from sklearn.linear_model import LinearRegression
+import matplotlib
+import itertools
+import operator
+import warnings
+warnings.filterwarnings("ignore")
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.base import TransformerMixin
+from matplotlib import pylab as plt
+
+
+'''
+在model_draft.py 草稿模型中我们通过可视化和偏值/方差值已经了解了数据业务，下面是我们正式项目的开发流程:
+1.读取数据，平滑目标值,注意，这里测试集和训练集存在很多不同的feature，所以这里我不建议合并数据，我之前这吃了大亏。
+2.分析出是回归问题，所以标准化所有数值型数据,因为最后都是销量，所以先不用归一化操作。
+3.离散化连续数值时间和促销变量
+4.处理nan值，看是否有需要二值化特征,这时候再(处理非数值型数据我们最后再处理，因为太慢了。)
+5.特征选择
+6.拆分数据，开始做特征提取，根据情况选择降维。
+7.最后利用数学柯尔莫哥洛夫-斯米尔诺夫测试测试训练数据和测试数据。以便删掉特征性差的特征。
+8.构造模型，因为是回归问题，我们用gbdt xgb lgb rf 进行处理。
+9.网格搜索得出最佳参数
+10.交叉验证得出最佳样本数，提高学习能力
+11.模型融合，调节权重，得到最终结果。我们假设第一层用gbdt +  rf 第二层用gbdt+rf+xgb+lgb,具体还要根据结果再调整
+12.设计pip通道，处理main函数，生成最终模型。
+ps:该模块业务具体看该页其他地方有详细说明。另外开局删除 Customers 是因为这个元素绝对成正比，成一个绝对正比，所以我认为可以删掉。
+ps: pd.drop_duplicates:是去除重复行。
+ps: 我们除了四大集成树:rf gbdt xgb lgb 还要使用很多回归算法，因为我们是回归销量，要知道哪些特征影响我们的结果来做实验。最后进行融合。
+ps: apply是对每列进行计算。
+    如果是train['data'].apply(lambda x:115-int(x)) 就是对每一行，因为第一个train['data']就代表一列了。
+ps: 我们将文本值转化为数值后，这个列就可以删除了。
+ps: 对文本数据缺失值处理: train['Date'] = train['Date'].apply(lambda x: 1 if pd.isnull(x) else 0 )
+ps: 可以train['date'].describe() 对一列进行描述。
+    然后对该列可以缺失值填充: train['date'].fillna(0,inplace = True)
+    可以这样写: train['date'].fillna(train['date'].median(),inplace = True) median:中位数
+ps: LabelEncoder:
+    for col in train_object:
+        train[col] = le.fit_transform(train[col])
+    但我们常常出错，所以我一般用 get_dummies 取代。
+    一般先LabelEncoder把类别值转化数值型，再用 get_dummies 进一步拆分分类。
+    pd.get_dummies(data,columns=[你要分类的列])
+ps: 这次弱分类器，我们讲常用的回归类模型都一一尝试，理论上，像SGD,lasso这种处理高维度的不适合我们这次数据集，但由于是第一个项目案例，我都比较下加深印象，最后选取好的与四大树形
+    集成学习进行blending融合。
+ps: 不是所有项目都适合融合，比如那些rdige,krdige等小算法，不适合做超多维度的数据集，这时候用他们融合再跟xgb,lgb结合反而不好，此时不如xgb,lgb融合，或者带个catboost。用randomgForset打辅助。
+ps: 网格搜索的异常错误: Check the list of available parameters with `estimator.get_params().keys()`.
+    这里是参数出问题，而底层代码中还有，那就说明我们版本问题，所以要不就不用，要不就更新版本。
+ps: 网格搜索的异常错误: ValueError: continuous format is not supported
+    你网格搜索的参数与你创建的模型初始化参数不匹配，尽量让其匹配，初始值为网格搜索里的数，最好是第一个数。
+ps: RandomizedLasso和RFE有时间可以好好看看。
+ps: TypeError: unhashable type: 'slice' 异常，这个类型不能被哈希。一般是可变类型。
+ps: 特征选择处用VarianceThreshold方法不错，删除特征之间方差大的。
+'''
+
+'''
+后期想提升准确率，还可以利用自己设定偏差，峰度来调节，但这个项目中维度并不是太多，我会再后面项目高维度中做相关操作。
+'''
+
+def load_data():
+    train = pd.read_csv('D:\\kaggle比赛\\装潢公司销量预测\\data\\train.csv')
+    test = pd.read_csv('D:\\kaggle比赛\\装潢公司销量预测\\data\\test.csv')
+    company = pd.read_csv('D:\\kaggle比赛\\装潢公司销量预测\\data\\store.csv')
+    train = train[train['Sales']>0]
+    train_y = np.log1p(train['Sales'])
+    test_ID = test['Id']
+    train_customers = train['Customers']
+    train.drop('Sales',axis = 1 ,inplace=True)
+    test.drop('Id',axis = 1,inplace = True)
+    #train.drop('Customers',axis = 1,inplace = True)
+    train = pd.merge(train,company,on='Store',how='left')
+    test = pd.merge(test,company,on='Store',how='left')
+    print(train.shape," ",test.shape)
+    print(train.dtypes)  #查看数据类型,object我们通常叫类别值。
+    return train, train_y, test, test_ID,train_customers
+
+def parse_time_scale(X_train,X_test):
+    date_num_train = pd.DataFrame(columns=['year', 'month', 'day','jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'])
+
+    date_num_train['year'] = X_train.Date.apply(lambda x: x.split('/')[0]).astype(float)
+    date_num_train['month'] = X_train.Date.apply(lambda x: x.split('/')[1]).astype(float)
+    date_num_train['day'] = X_train.Date.apply(lambda x: x.split('/')[2]).astype(float)
+
+    date_num_train['jan'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jan" in x else 0)
+    date_num_train['feb'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Feb" in x else 0)
+    date_num_train['mar'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Mar" in x else 0)
+    date_num_train['apr'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Apr" in x else 0)
+    date_num_train['may'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "May" in x else 0)
+    date_num_train['jun'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jun" in x else 0)
+    date_num_train['jul'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jul" in x else 0)
+    date_num_train['aug'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Aug" in x else 0)
+    date_num_train['sep'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Sep" in x else 0)
+    date_num_train['oct'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Oct" in x else 0)
+    date_num_train['nov'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Nov" in x else 0)
+    date_num_train['dec'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Dec" in x else 0)
+    X_train = pd.concat((X_train, date_num_train), axis=1)
+
+    date_num_test = pd.DataFrame(columns=['year', 'month', 'day', 'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov'])
+
+    date_num_test['year'] = X_test.Date.apply(lambda x: x.split('-')[0]).astype(float)
+    date_num_test['month'] = X_test.Date.apply(lambda x: x.split('-')[1]).astype(float)
+    date_num_test['day'] = X_test.Date.apply(lambda x: x.split('-')[2]).astype(float)
+
+    date_num_test['jan'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jan" in x else 0)
+    date_num_test['feb'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Feb" in x else 0)
+    date_num_test['feb'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Mar" in x else 0)
+    date_num_test['apr'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Apr" in x else 0)
+    date_num_test['may'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "May" in x else 0)
+    date_num_test['jun'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jun" in x else 0)
+    date_num_test['jul'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jul" in x else 0)
+    date_num_test['aug'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Aug" in x else 0)
+    date_num_test['sep'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Sep" in x else 0)
+    date_num_test['oct'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Oct" in x else 0)
+    date_num_test['nov'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Nov" in x else 0)
+    date_num_test['dec'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Dec" in x else 0)
+    X_test = pd.concat((X_test, date_num_test), axis=1)
+
+    return X_train,X_test
+
+def merge_data(X_train,X_test):
+    all_df = pd.concat((X_train,X_test),axis=0)
+    #别忘了删除上面的日期和促销。因为我们已经拆分完了。
+    all_df.drop('Date',axis=1,inplace=True)
+    all_df.drop('PromoInterval',axis=1,inplace=True)
+    print(all_df.shape)
+    print(all_df.head())
+    print(all_df.isnull().sum().sort_values(ascending=False))
+    return all_df
+
+#非数值型大部分都是分类方法，用get_dummies来离散化
+def Standard_data(all_df):
+    #feature = X_train.columns.tolist()
+    #numeric_feature = X_train.columns[X_train.dtypes!=object]
+    #numeric_non_feature = [i for i in feature if i not in numeric_feature]
+    #标准化数值型
+    numeric_feature = all_df.columns[all_df.dtypes != object]
+    numeric_mean = all_df.loc[:, numeric_feature].mean()
+    numeric_std = all_df.loc[:, numeric_feature].std()
+    all_df.loc[:, numeric_feature] = (all_df.loc[:, numeric_feature] - numeric_mean) / numeric_std
+
+    #标准化非数值
+    # numeric_non_feature = ['Assortment','StoreType']
+    # print(all_df[numeric_non_feature])
+    # le = LabelEncoder()
+    # for i in numeric_non_feature:
+    #     le.fit(all_df[i])
+    #     all_df[i] = le.transform(all_df[i])
+
+    #拆分标准化后的非数值型
+    print(all_df.shape)
+    numeric_non_feature = all_df.columns[all_df.dtypes==object]
+    #注意:进行get_dummies离散化类别特征时，容易出现重复特征，需要处理掉。
+    for i in numeric_non_feature:
+        all_df_scale = pd.get_dummies(all_df[i],prefix=all_df[i])
+        all_df.drop(i,axis=1,inplace=True)
+        all_df = pd.concat((all_df,all_df_scale),axis=1)
+
+    print(all_df.shape)
+    print(all_df.columns)
+    return all_df
+
+#删除Nan值
+def parse_nan(all_df):
+    print(all_df.shape)
+    print(all_df.isnull().sum().sort_values(ascending=False))
+    all_df.CompetitionDistance.fillna(all_df.CompetitionDistance.mean(), inplace=True)
+    all_df.Open.fillna(1, inplace=True)
+    all_df.fillna(0,inplace = True)
+    print(all_df.isnull().sum().sort_values(ascending=False).head())
+    print(all_df.head())
+    return all_df
+
+#特征选择: VarianceThreshold删除所有低方差的列。
+def feature_selection(all_df):
+    selector = VarianceThreshold(0.01)
+    selector.fit_transform(all_df)
+    print(all_df.shape)
+    # 删除唯一性数据，这种数据没意义，特征性为0
+    uniques = all_df.columns[all_df.nunique()==1]
+    if len(uniques)>0:
+        all_df.drop(uniques, axis=1, inplace=True)
+
+    # 删除俩列相同的数据
+    all_columns = all_df.columns
+    colsToRemove = []
+    for i in range(len(all_columns) - 1):
+        m = all_df[all_columns[i]].values
+        for j in range(i + 1, len(all_columns)):
+            if np.array_equal(m, all_df[all_columns[j]].values):
+                colsToRemove.append(all_columns[j])
+
+    all_df.drop(colsToRemove, axis=1, inplace=True)
+    print(all_df.shape)
+    return all_df
+
+#拆分数据集
+def split_data(all_df):
+    train_x_df = all_df[:844338]
+    test_x_df = all_df[844338:]
+    return train_x_df,test_x_df
+
+#下面对三个常用的特征选择方法依次调参做实验，调参主要是针对选取多少个参数效果更好，当然不一定越准越好，最后我会选取个适合的特征数。
+#随机森林+交叉验证
+def feature_extraction_rf(X_train,X_test,y_train):
+    rd_model = RandomForestRegressor(n_estimators=150,max_depth=3)
+    scores = []
+    names = X_train.columns
+    for i in range(X_train.shape[1]):
+        score = cross_val_score(rd_model, X_train, y_train, scoring="r2",
+                                cv=ShuffleSplit(len(X_train), 3, .3))
+        scores.append((round(np.mean(score), 3), names[i]))
+    featureList = sorted(zip(map(lambda x:x,scores),names),reverse=True)
+    featureList = [i[1] for i in featureList][:7]
+    X_train = X_train[featureList]
+    X_test = X_test[featureList]
+    return X_train,X_test
+
+#递归特征消除 Recursive feature elimination (RFE)
+def feature_extraction_ref(X_train,X_test,y_train):
+    lr = LinearRegression()
+    ref = RFE(lr, n_features_to_select=18)
+    ref.fit(X_train,y_train)
+    features = ref.ranking_
+    print(features)
+    score = X_train.columns
+    features_list = []
+    for i in range(len(features)):
+        if (features[i]==1):
+            features_list.append(score[i])
+
+    X_train = X_train[features_list]
+    X_test = X_test[features_list]
+    print(X_train.shape," ",X_test.shape)
+    return X_train,X_test
+
+#稳定性选择 Stability selection 经过我们层层验证。比稳定性选择整体效果好,同时也优于随机森林+交叉验证。所以最后选这个作为特征提取。而有14个特征性为1的，所以取14
+def feature_extraction_RandomLasso(X_train,X_test,y_train):
+    from sklearn.linear_model import RandomizedLasso
+    randomLasso = RandomizedLasso()
+    randomLasso.fit(X_train, y_train)
+    features = randomLasso.scores_
+    score = X_train.columns
+    print(features)
+    print(sorted(zip(map(lambda x:round(x,4),features),score),reverse = True))
+    featureList = sorted(zip(map(lambda x:round(x,4),features),score),reverse = True)
+    featureList = [i[1] for i in featureList][:17]
+    X_train = X_train[featureList]
+    X_test = X_test[featureList]
+    print(X_train.shape," ",X_test.shape)
+    return X_train,X_test
+
+#最后用柯尔莫哥洛夫-斯米尔诺夫测试测试训练数据和测试数据--针对都是数值型数据
+def ks_sample(X_train,X_test):
+    from scipy.stats import ks_2samp
+    KS_VALUE = 0.01
+    KS_P= 0.3
+    different_feature = []
+    for i in X_train.columns:
+        ks_p,ks_value = ks_2samp(X_train[i].values,X_test[i].values)
+        if ks_value<=KS_VALUE and ks_p >KS_P:
+            different_feature.append(i)
+
+    for j in different_feature:
+        if j in X_train.columns:
+            X_train.drop(j,axis = 1,inplace=True)
+            X_test.drop(j,axis = 1,inplace=True)
+
+    print(X_train.shape," ",X_test.shape)
+    print(X_train.head()," ",X_test.shape)
+    return X_train,X_test
+
+
+from sklearn.linear_model import ElasticNet
+from sklearn.linear_model import Lasso
+from sklearn.linear_model import ElasticNet
+from sklearn.kernel_ridge import KernelRidge
+from sklearn.linear_model import Ridge
+from sklearn import linear_model
+
+#根据业务写损失函数
+#PS:我们的损失计算维平方根误差，即:真实值-预测值的平方和的平均值开根号。也就是rmspe = np.sqrt(np.mean(w * (y - yhat)**2))。
+#我们为了增强学习能力，加了权重。
+def ToWeight(y):
+    w = np.zeros(y.shape, dtype=float)
+    ind = y != 0
+    w[ind] = 1./(y[ind]**2)
+    return w
+
+def rmspe(yhat, y):
+    w = ToWeight(y)
+    rmspe = np.sqrt(np.mean( w * (y - yhat)**2 ))
+    return rmspe
+
+def rmspe_xg(yhat, y):
+    # y = y.values
+    y = y.get_label()
+    w = ToWeight(y)
+    rmspe = np.sqrt(np.mean(w * (y - yhat)**2))
+    return "rmspe", rmspe
+
+def rmspe_other(yhat, y):
+    # y = y.values
+    #y = y.get_label()
+    w = ToWeight(y)
+    rmspe = np.sqrt(np.mean(w * (y - yhat)**2))
+    return "rmspe", rmspe
+
+
+#Lasso回归:比较通吃，但效果往往不如ridge
+#alpha如果设置太小，随着迭代次数增加，容易使得一些特征变为0.
+#def Lasso_model(train_x, test_x ,train_y , test_y):
+
+
+# #Ridge回归:针对特征数不能太大。
+def Ridge_model(train_x, test_x ,train_y , test_y):
+    X_train,X_test,y_train,y_test = train_test_split(train_x,train_y,test_size=0.2)
+    ridge_model = Ridge()
+    ridge_model.fit(X_train,np.expm1(y_train))
+    pre_ridge = ridge_model.predict(X_test)
+    print(pre_ridge)
+    print("Ridge的rmspe损失值为:",rmspe_other(np.expm1(pre_ridge),np.expm1(y_test)))
+    rmpse_ridge = rmspe_other(pre_ridge,np.expm1(y_test))
+    return rmpse_ridge
+
+# #弹性网络:可以做特征数比较大的。
+# def ElasticNet_model(train_x, test_x ,train_y , test_y):
+#
+#
+# #svr针对非线性更好，数据量不能太大
+# def SVR_model(train_x, test_x ,train_y , test_y):
+#
+#
+# #ker 主要是线性,针对小数据量，太大容易内存溢出
+# def KernelRidge_model(train_x, test_x ,train_y , test_y):
+#
+#
+# #bay线性，数据量不能太大
+# def BayesianRidge_model(train_x, test_x ,train_y , test_y):
+#
+#
+# #sgd 梯度下降，然后不断的降低学习率，以便改变权重参数，说以针对大量稀疏矩阵比较好，原始深度学习通常用这个优化器。
+# def SGD_model(train_x, test_x ,train_y , test_y):
+#
+#
+# #随机森林
+# def RF_model(train_x, test_x ,train_y , test_y):
+#
+#
+# #GBDT
+# def GBDT_model(train_x, test_x ,train_y , test_y):
+#
+#
+#XGB
+#经过网格搜索后:
+def XGB_model(train_x, test_x ,train_y , test_y):
+    depth = 13
+    eta = 0.01
+    trees = 8000
+    mcw = 3
+    NUM_FOLDS = 5
+    num_round = 10
+    param_xgb = {"objective": "reg:linear",
+              "booster": "gbtree",
+              "eta": eta,
+              "max_depth": depth,
+              "min_child_weight": mcw,
+              'reg_alpha':1e-2,
+              'reg_lambda':10.756,
+              "subsample": 0.9,
+              "colsample_bytree": 0.7,
+              "silent": 1
+              }
+    #这里就不需要使用交叉验证了。
+    X_train, X_test,y_train,y_test = train_test_split(train_x,train_y, test_size=0.1)
+    D_train = xgb.DMatrix(X_train,np.expm1(y_train))
+    D_valid = xgb.DMatrix(X_test,np.expm1(y_test))
+    watchlist = [(D_valid,"valid"),(D_train, 'train')]
+    #交叉验证
+    xgb.cv(param_xgb,D_train,num_round,NUM_FOLDS,metrics=['error'],early_stopping_rounds=10,verbose_eval=True)
+    xgb_model = xgb.train(param_xgb, D_train, trees, evals=watchlist, early_stopping_rounds=10, feval=rmspe_xg,verbose_eval=True)
+    predict_train = xgb_model.predict(xgb.DMatrix(X_test))
+    #防止有小于0的数
+    inf = predict_train < 0
+    predict_train[inf] = 0
+    print(predict_train)
+    rmspe_test = rmspe(predict_train, np.expm1(y_test).values)
+    print("测试集rmspe的损失值为:{}".format(rmspe_test))
+    return rmspe_test
+# #LGB
+# def LGB_model(train_x, test_x ,train_y , test_y):
+
+
+
+
+
+
+def main():
+    train_x, train_y, test_x, test_y, train_customers = load_data()
+    train_x, test_x = parse_time_scale(train_x,test_x)
+    all_df = merge_data(train_x,test_x)
+    all_df = Standard_data(all_df)
+    all_df = parse_nan(all_df)
+    all_df = feature_selection(all_df)
+    train_x, test_x = split_data(all_df)
+    #train_x, test_x = feature_extraction_rf(train_x,test_x,train_y)
+    #train_x, test_x = feature_extraction_ref(train_x, test_x,train_y)
+    train_x, test_x = feature_extraction_RandomLasso(train_x, test_x,train_y)
+    train_x, test_x = ks_sample(train_x, test_x)
+    rmpse_ridge = Ridge_model(train_x, test_x, train_y, test_y)
+    rmpse_xgb = XGB_model(train_x, test_x, train_y, test_y)
+    print("Ridge的rmpse损失值为:",rmpse_ridge)
+    print("XGB的rmpse损失值为:",rmpse_xgb)
+
+if __name__ == '__main__':
+    main()
