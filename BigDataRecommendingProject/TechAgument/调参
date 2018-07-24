@@ -622,15 +622,6 @@ gsearch3 = GridSearchCV(estimator = RandomForestClassifier(n_estimators= 60, max
 gsearch3.fit(X,y)
 gsearch3.grid_scores_, gsearch2.best_params_, gsearch2.best_score_
 
-最后我们再对最大特征数max_features做调参:
-
-param_test4 = {'max_features':range(3,11,2)}
-gsearch4 = GridSearchCV(estimator = RandomForestClassifier(n_estimators= 60, max_depth=13, min_samples_split=120,
-                                  min_samples_leaf=20 ,oob_score=True, random_state=10),
-   param_grid = param_test4, scoring='roc_auc',iid=False, cv=5)
-gsearch4.fit(X,y)
-gsearch4.grid_scores_, gsearch4.best_params_, gsearch4.best_score_
-
 
 用我们搜索到的最佳参数，我们再看看最终的模型拟合：
 
