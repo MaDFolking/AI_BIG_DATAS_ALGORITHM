@@ -1,0 +1,224 @@
+ps: 在jupyter notebook作分析阶段，因为开始摸索阶段，会有很多错误思路，但这是个提升自己的过程。
+
+import pickle
+import numpy as np
+import pandas as pd
+import xgboost as xgb
+import lightgbm as lgb
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from sklearn.model_selection._split import check_cv
+from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_selection import VarianceThreshold
+from scipy.stats import skew, kurtosis
+from scipy import sparse
+from sklearn.cross_validation import StratifiedKFold
+from sklearn.cross_validation import KFold
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.random_projection import SparseRandomProjection
+import matplotlib
+import itertools
+import operator
+import warnings
+warnings.filterwarnings("ignore")
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.base import TransformerMixin
+from sklearn import cross_validation
+from matplotlib import pylab as plt
+
+train = pd.read_csv('Untitled Folder 1/train.csv',index_col = 0)
+test = pd.read_csv('Untitled Folder 1/test.csv',index_col = 0)
+store = pd.read_csv('Untitled Folder 1/store.csv',index_col = 0)
+
+print(store.head())
+
+#join它们，并提取目标函数为了下面分析数据做准备，同时提取出数值型和非数值型
+#这里直接去Sales大于0的，小于等于0没意义
+train = train[train['Sales']>0]
+train_df = pd.merge(train,store,on = 'Store',how = 'left')
+test_df = pd.merge(test,store,on = 'Store',how = 'left')
+train_df_y = train_df['Sales']
+train_df_x = train_df.drop('Sales',axis = 1)
+print(train_df.shape," ",test_df.shape)
+
+#注意:此时不能做可视化，因为我们是left join的数据，会出现大量nan值。我们可以先做偏差风度等查看特征性
+def min_x(x):
+    return x.mean()
+def max_x(x):
+    return x.max()
+def std_x(x):
+    return x.std()
+def median_x(x):
+    return x.median()
+def count_x(x):
+    return x.count()
+train_df_feature_numeric = train_df.loc[:,feature_numeric]
+train_num = pd.DataFrame({'count':train_df_feature_numeric.apply(count_x),
+                         'min':train_df_feature_numeric.apply(min_x),
+                         'max':train_df_feature_numeric.apply(max_x),
+                         'std':train_df_feature_numeric.apply(std_x),
+                         'median':train_df_feature_numeric.apply(median_x),
+                         'skew':train_df_feature_numeric.apply(skew),
+                         'kurtosis':train_df_feature_numeric.apply(kurtosis)})
+train_num
+
+# 由上面可推断出: CompetitionDistance CompetitionOpenSinceMonth  Promo2SinceWeek Promo2SinceYear 特征性很强
+#同理推出: PromoInterval 特征性很强，我们需要对这种时间类的特征性强数据，进行离散化，使其数据更平滑，更趋近于正态
+#分布。而距离这块，我们会重点关注其维度。
+#而这里的日期根据业务取决于促销活动和节假日影响，所以我们离散化俩种日期，一个是查看是否促销，一个月份离散化。
+#(1)拆分训练集函数
+#注意:train_df取大于0的数
+#日期分成12个月份
+date_num_train = pd.DataFrame(
+    columns=['year','month','day','jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'
+            ,'promojan'
+            ,'promofeb'
+            ,'promomar'
+            ,'promoapr'
+            ,'promomay'
+            ,'promojun'
+            ,'promojul'
+            ,'promoaug'
+            ,'promosep'
+            ,'promooct'
+            ,'promonov'
+            ,'promodec'])
+print(train_df_x.Date.head())
+date_num_train['year'] = train_df_x.Date.apply(lambda x:x.split('/')[0]).astype(float)
+date_num_train['month'] = train_df_x.Date.apply(lambda x:x.split('/')[1]).astype(float)
+date_num_train['day'] = train_df.Date.apply(lambda x:x.split('/')[2]).astype(float)
+
+#离散化月时间点，构建稀疏矩阵，主要是离散化时间。
+date_num_train['jan'] = date_num_train.month.apply(lambda x:1 if x == 1. else 0)
+date_num_train['feb'] = date_num_train.month.apply(lambda x:1 if x == 2. else 0)
+date_num_train['mar'] = date_num_train.month.apply(lambda x:1 if x == 3. else 0)
+date_num_train['apr'] = date_num_train.month.apply(lambda x:1 if x == 4. else 0)
+date_num_train['may'] = date_num_train.month.apply(lambda x:1 if x == 5. else 0)
+date_num_train['jun'] = date_num_train.month.apply(lambda x:1 if x == 6. else 0)
+date_num_train['jul'] = date_num_train.month.apply(lambda x:1 if x == 7. else 0)
+date_num_train['aug'] = date_num_train.month.apply(lambda x:1 if x == 8. else 0)
+date_num_train['sep'] = date_num_train.month.apply(lambda x:1 if x == 9. else 0)
+date_num_train['oct'] = date_num_train.month.apply(lambda x:1 if x == 10. else 0)
+date_num_train['nov'] = date_num_train.month.apply(lambda x:1 if x == 11. else 0)
+date_num_train['dec'] = date_num_train.month.apply(lambda x:1 if x == 12. else 0)
+
+#离散化促销活动时间点，以便使其平滑化
+date_num_train['promojan'] = train_df_x.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jan" in x else 0)
+date_num_train['promofeb'] = train_df_x.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Feb" in x else 0)
+date_num_train['promomar'] = train_df_x.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Mar" in x else 0)
+date_num_train['promoapr'] = train_df_x.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Apr" in x else 0)
+date_num_train['promomay'] = train_df_x.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "May" in x else 0)
+date_num_train['promojun'] = train_df_x.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jun" in x else 0)
+date_num_train['promojul'] = train_df_x.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jul" in x else 0)
+date_num_train['promoaug'] = train_df_x.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Aug" in x else 0)
+date_num_train['promosep'] = train_df_x.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Sep" in x else 0)
+date_num_train['promooct'] = train_df_x.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Oct" in x else 0)
+date_num_train['promonov'] = train_df_x.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Nov" in x else 0)
+date_num_train['promodec'] = train_df_x.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Dec" in x else 0)
+train_df_x = pd.concat((train_df_x,date_num_train),axis = 1)
+print(train_df_x.shape)
+train_df_x.head()
+
+#拆分测试集
+date_num_test = pd.DataFrame(
+    columns=['year','month','day','jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'
+            ,'promojan'
+            ,'promofeb'
+            ,'promomar'
+            ,'promoapr'
+            ,'promomay'
+            ,'promojun'
+            ,'promojul'
+            ,'promoaug'
+            ,'promosep'
+            ,'promooct'
+            ,'promonov'
+            ,'promodec'])
+print(test_df.Date.head())
+date_num_test['year'] = test_df.Date.apply(lambda x:x.split('-')[0]).astype(float)
+date_num_test['month'] = test_df.Date.apply(lambda x:x.split('-')[1]).astype(float)
+date_num_test['day'] = test_df.Date.apply(lambda x:x.split('-')[2]).astype(float)
+
+#离散化月时间点，构建稀疏矩阵，主要是离散化时间。
+date_num_test['jan'] = date_num_test.month.apply(lambda x:1 if x == 1. else 0)
+date_num_test['feb'] = date_num_test.month.apply(lambda x:1 if x == 2. else 0)
+date_num_test['mar'] = date_num_test.month.apply(lambda x:1 if x == 3. else 0)
+date_num_test['apr'] = date_num_test.month.apply(lambda x:1 if x == 4. else 0)
+date_num_test['may'] = date_num_test.month.apply(lambda x:1 if x == 5. else 0)
+date_num_test['jun'] = date_num_test.month.apply(lambda x:1 if x == 6. else 0)
+date_num_test['jul'] = date_num_test.month.apply(lambda x:1 if x == 7. else 0)
+date_num_test['aug'] = date_num_test.month.apply(lambda x:1 if x == 8. else 0)
+date_num_test['sep'] = date_num_test.month.apply(lambda x:1 if x == 9. else 0)
+date_num_test['oct'] = date_num_test.month.apply(lambda x:1 if x == 10. else 0)
+date_num_test['nov'] = date_num_test.month.apply(lambda x:1 if x == 11. else 0)
+date_num_test['dec'] = date_num_test.month.apply(lambda x:1 if x == 12. else 0)
+
+#离散化促销活动时间点，以便使其平滑化,这里x不能属于float类型，所以我们增加了俩层判断，下面可解释为:
+'''
+if isinstance(x,float)
+    x =0
+else:
+    if "Jan" in x:
+        x = 1
+    else:
+        0
+'''
+date_num_test['promojan'] = test_df.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jan" in x else 0)
+date_num_test['promofeb'] = test_df.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Feb" in x else 0)
+date_num_test['promomar'] = test_df.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Mar" in x else 0)
+date_num_test['promoapr'] = test_df.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Apr" in x else 0)
+date_num_test['promomay'] = test_df.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "May" in x else 0)
+date_num_test['promojun'] = test_df.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jun" in x else 0)
+date_num_test['promojul'] = test_df.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jul" in x else 0)
+date_num_test['promoaug'] = test_df.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Aug" in x else 0)
+date_num_test['promosep'] = test_df.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Sep" in x else 0)
+date_num_test['promooct'] = test_df.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Oct" in x else 0)
+date_num_test['promonov'] = test_df.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Nov" in x else 0)
+date_num_test['promodec'] = test_df.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Dec" in x else 0)
+test_df = pd.concat((test_df,date_num_test),axis = 1)
+print(test_df.shape)
+test_df.head()
+
+#合并数据，去缺省值。
+all_df = pd.concat((train_df_x,test_df),axis = 0)
+#查看缺省值情况
+all_df.isnull().sum().sort_values(ascending=False)
+#nan值过多的我直接删去
+all_df.drop('Store',axis = 1,inplace=True)
+all_df.drop('Promo2SinceWeek',axis = 1,inplace=True)
+all_df.drop('Promo2SinceYear',axis = 1,inplace=True)
+all_df.drop('PromoInterval',axis = 1,inplace=True)
+all_df.drop('CompetitionOpenSinceMonth',axis = 1,inplace=True)
+all_df.drop('CompetitionOpenSinceYear',axis = 1,inplace=True)
+#查看缺省值情况
+all_df.isnull().sum().sort_values(ascending=False)
+#根据业务情况，customer,distance取均值，open剩下都取1,记住要改变原对象，所以加inplace = True
+all_df.Customers.fillna(all_df.Customers.mean(),inplace=True)
+all_df.CompetitionDistance.fillna(all_df.CompetitionDistance.mean(),inplace=True)
+all_df.Open.fillna(1.,inplace = True)
+all_df.isnull().sum().sort_values(ascending=False)
+
+#考虑到离散化后的特征改变，以及后面可能用到深度学习对特征敏感，所以进行归一化操作。
+#提取数值型和非数值型
+features = all_df.columns.tolist()
+number_types = ['int16','int32','int64','float16','float32','float64']
+feature_numeric = all_df.select_dtypes(include = number_types).columns.tolist()
+feature_non_numeric = [i for i in features if i not in feature_numeric]
+#print(features," ",feature_numeric," ",feature_non_numeric)
+#(1)非数值型
+label = LabelEncoder()
+for i in feature_non_numeric:
+    label.fit(list(all_df[i]))
+    all_df[i] = label.transform(i)
+
+#(2)数值型
+stand = StandardScaler()
+for j in set(features)-set(feature_non_numeric)-set([]):
+    stand.fit(list(all_df[j]))
+    all_df[j] = stand.transform(j)
+
+all_df.head()
+
+
+
