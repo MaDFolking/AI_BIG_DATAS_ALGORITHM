@@ -1,0 +1,411 @@
+#PS:四大集成学习详细请看集成学习调参模板，我这里只是把一般常用的参数都列举，具体还要根据业务来定义，我这里的业务需要写rmspe。
+
+import pickle
+import numpy as np
+import pandas as pd
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, cross_val_score, train_test_split,ShuffleSplit
+from sklearn.feature_selection import RFE
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from sklearn.model_selection._split import check_cv
+from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_selection import VarianceThreshold
+from scipy.stats import skew, kurtosis
+from scipy import sparse
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.random_projection import SparseRandomProjection
+from sklearn.linear_model import LinearRegression
+import matplotlib
+import itertools
+import operator
+import warnings
+warnings.filterwarnings("ignore")
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.base import TransformerMixin
+from matplotlib import pylab as plt
+
+
+'''
+ps: 网格搜索的异常错误: Check the list of available parameters with `estimator.get_params().keys()`.
+    这里是参数出问题，而底层代码中还有，那就说明我们版本问题，所以要不就不用，要不就更新版本。
+ps: 网格搜索的异常错误: ValueError: continuous format is not supported
+    你网格搜索的参数与你创建的模型初始化参数不匹配，尽量让其匹配，初始值为网格搜索里的数，最好是第一个数。
+'''
+
+train = pd.read_csv('D:\\kaggle比赛\\装潢公司销量预测\\data\\train.csv')
+test = pd.read_csv('D:\\kaggle比赛\\装潢公司销量预测\\data\\test.csv')
+company = pd.read_csv('D:\\kaggle比赛\\装潢公司销量预测\\data\\store.csv')
+train = train[train['Sales'] > 0]
+train_y = np.log1p(train['Sales'])
+test_ID = test['Id']
+train_customers = train['Customers']
+train.drop('Sales', axis=1, inplace=True)
+test.drop('Id', axis=1, inplace=True)
+train.drop('Customers', axis=1, inplace=True)
+train = pd.merge(train, company, on='Store', how='left')
+test = pd.merge(test, company, on='Store', how='left')
+print(train.shape, " ", test.shape)
+print(train.dtypes)  # 查看数据类型,object我们通常叫类别值。
+
+from sklearn.linear_model import ElasticNet
+from sklearn.linear_model import Lasso
+from sklearn.linear_model import ElasticNet
+from sklearn.kernel_ridge import KernelRidge
+from sklearn.linear_model import Ridge
+from sklearn import linear_model
+
+#根据业务写损失函数
+#PS:我们的损失计算维平方根误差，即:真实值-预测值的平方和的平均值开根号。也就是rmspe = np.sqrt(np.mean(w * (y - yhat)**2))。
+#我们为了增强学习能力，加了权重。
+def ToWeight(y):
+    w = np.zeros(y.shape, dtype=float)
+    ind = y != 0
+    w[ind] = 1./(y[ind]**2)
+    return w
+
+def rmspe(yhat, y):
+    w = ToWeight(y)
+    rmspe = np.sqrt(np.mean( w * (y - yhat)**2 ))
+    return rmspe
+
+def rmspe_xg(yhat, y):
+    # y = y.values
+    #y = y.get_label()
+    y = np.exp(y) - 1
+    yhat = np.exp(yhat) - 1
+    w = ToWeight(y)
+    rmspe = np.sqrt(np.mean(w * (y - yhat)**2))
+    return "rmspe", rmspe
+
+
+#Lasso回归:比较通吃，但效果往往不如ridge
+#alpha如果设置太小，随着迭代次数增加，容易使得一些特征变为0.
+def Lasso_model(train_x, test_x ,train_y , test_y):
+    from sklearn.model_selection import GridSearchCV
+    # 先调节max_depth和min_weight
+    param_test1 = {
+        'alpha': [0.0005,0.00005,0.000005],
+        'max_iter': [400,500,800,1000,10000]
+    }
+    lasso = Lasso()
+    gridLasso = GridSearchCV(lasso,param_test1,n_jobs=-1,verbose=2,cv = 5)
+    gridLasso.fit(train_x, train_y)
+    print(gridLasso.best_params_)
+    print(gridLasso.best_estimator_)
+    print(gridLasso.best_score_)
+    aa = []
+    aa.append(gridLasso.best_params_)
+    aa.append(gridLasso.best_score_)
+    aa.append(gridLasso.best_estimator_)
+
+    with open('D:\\kaggle比赛\\装潢公司销量预测\\example\\pagram_Lasso_1.txt', 'w') as writer:
+        writer.writelines(str(aa))
+    predict_lasso = gridLasso.predict(test_x)
+    print(predict_lasso.shape)
+    print(rmspe_xg(predict_lasso,test_y))
+
+
+#Ridge回归:针对特征数不能太大。
+def Ridge_model(train_x, test_x ,train_y , test_y):
+    from sklearn.model_selection import GridSearchCV
+    # 先调节max_depth和min_weight
+    param_test1 = {
+        'alpha': [0.0005, 0.00005, 0.5,5,50],
+        'max_iter': [400, 500, 800, 1000,1500, 10000]
+    }
+    ridge = Ridge()
+    gridRidge = GridSearchCV(ridge, param_test1, n_jobs=-1, verbose=2, cv=5)
+    gridRidge.fit(train_x, train_y)
+    print(gridRidge.best_params_)
+    print(gridRidge.best_estimator_)
+    print(gridRidge.best_score_)
+    aa = []
+    aa.append(gridRidge.best_params_)
+    aa.append(gridRidge.best_score_)
+    aa.append(gridRidge.best_estimator_)
+
+    with open('D:\\kaggle比赛\\装潢公司销量预测\\example\\pagram_Ridge_1.txt', 'w') as writer:
+        writer.writelines(str(aa))
+    predict_ridge = gridRidge.predict(test_x)
+    print(predict_ridge.shape)
+    print(rmspe_xg(predict_ridge, test_y))
+
+#弹性网络:可以做特征数比较大的。
+def ElasticNet_model(train_x, test_x ,train_y , test_y):
+    from sklearn.model_selection import GridSearchCV
+    # 先调节max_depth和min_weight
+    param_test1 = {
+        'alpha': [0.0005, 0.00005, 0.000005],
+        'max_iter': [400, 500, 800, 1000, 10000],
+        'l1_ratio':[0.5,0.6,0.7,0.8,0.9]
+    }
+    eln = ElasticNet()
+    gridEln = GridSearchCV(eln, param_test1, n_jobs=-1, verbose=2, cv=5)
+    gridEln.fit(train_x, train_y)
+    print(gridEln.best_params_)
+    print(gridEln.best_estimator_)
+    print(gridEln.best_score_)
+    aa = []
+    aa.append(gridEln.best_params_)
+    aa.append(gridEln.best_score_)
+    aa.append(gridEln.best_estimator_)
+
+    with open('D:\\kaggle比赛\\装潢公司销量预测\\example\\pagram_Eln_1.txt', 'w') as writer:
+        writer.writelines(str(aa))
+    predict_eln = gridEln.predict(test_x)
+    print(predict_eln.shape)
+    print(rmspe_xg(predict_eln, test_y))
+
+#svr针对非线性更好，数据量不能太大
+def SVR_model(train_x, test_x ,train_y , test_y):
+    from sklearn.model_selection import GridSearchCV
+    from sklearn.svm import SVR
+    # 先调节max_depth和min_weight
+    param_test1 = {
+        'C':[0.001,0.01,0.1,1,10,100],
+        'epsilon':[0.001,0.01,0.1,1]
+    }
+    svr_model = SVR()
+    gridSvr = GridSearchCV(svr_model, param_test1, n_jobs=-1, verbose=2, cv=5)
+    gridSvr.fit(train_x, train_y)
+    print(gridSvr.best_params_)
+    print(gridSvr.best_estimator_)
+    print(gridSvr.best_score_)
+    aa = []
+    aa.append(gridSvr.best_params_)
+    aa.append(gridSvr.best_score_)
+    aa.append(gridSvr.best_estimator_)
+
+    with open('D:\\kaggle比赛\\装潢公司销量预测\\example\\pagram_Svr_1.txt', 'w') as writer:
+        writer.writelines(str(aa))
+    predict_svr = gridSvr.predict(test_x)
+    print(predict_svr.shape)
+    print(rmspe_xg(predict_svr, test_y))
+
+#ker 主要是线性,针对小数据量，太大容易内存溢出
+def KernelRidge_model(train_x, test_x ,train_y , test_y):
+    from sklearn.model_selection import GridSearchCV
+    # 先调节max_depth和min_weight
+    param_test1 = {
+        'alpha': [0.1, 0.2, 0.3,0.4,0.5,0.6,0.7,0.8,0.9]
+        #'degree':[1,2,3,4,5]
+    }
+    ker_model = KernelRidge()
+    gridKer = GridSearchCV(ker_model, param_test1, n_jobs=-1, verbose=2, cv=5)
+    gridKer.fit(train_x, train_y)
+    print(gridKer.best_params_)
+    print(gridKer.best_estimator_)
+    print(gridKer.best_score_)
+    aa = []
+    aa.append(gridKer.best_params_)
+    aa.append(gridKer.best_score_)
+    aa.append(gridKer.best_estimator_)
+
+    with open('D:\\kaggle比赛\\装潢公司销量预测\\example\\pagram_Ker_1.txt', 'w') as writer:
+        writer.writelines(str(aa))
+    predict_ker = gridKer.predict(test_x)
+    print(predict_ker.shape)
+    print(rmspe_xg(predict_ker, test_y))
+
+#bay线性，数据量不能太大
+def BayesianRidge_model(train_x, test_x ,train_y , test_y):
+    from sklearn.model_selection import GridSearchCV
+    from sklearn.linear_model import BayesianRidge
+    #PS:这里涉及到a_ph1,a_ph2,gama1,gama2是关于内部gama和a_pha比例的调整，我这里就不调了，有兴趣去官网和相关文档根据业务来调整。
+    # 先调节max_depth和min_weight
+    param_test1 = {
+        'n_iter':[300,400,500,600,700,800,900,1000]
+    }
+    bys_model = BayesianRidge()
+    gridBys = GridSearchCV(bys_model, param_test1, n_jobs=-1, verbose=2, cv=5)
+    gridBys.fit(train_x, train_y)
+    print(gridBys.best_params_)
+    print(gridBys.best_estimator_)
+    print(gridBys.best_score_)
+    aa = []
+    aa.append(gridBys.best_params_)
+    aa.append(gridBys.best_score_)
+    aa.append(gridBys.best_estimator_)
+
+    with open('D:\\kaggle比赛\\装潢公司销量预测\\example\\pagram_bys_1.txt', 'w') as writer:
+        writer.writelines(str(aa))
+    predict_bys = gridBys.predict(test_x)
+    print(predict_bys.shape)
+    print(rmspe_xg(predict_bys, test_y))
+
+#sgd 梯度下降，然后不断的降低学习率，以便改变权重参数，说以针对大量稀疏矩阵比较好，原始深度学习通常用这个优化器。
+def SGD_model(train_x, test_x ,train_y , test_y):
+    from sklearn.model_selection import GridSearchCV
+    from sklearn.linear_model import SGDRegressor
+    # 先调节max_depth和min_weight
+    param_test1 = {
+        'alpha': [0.0005, 0.00005, 0.000005],
+        'max_iter': [400, 500, 800, 1000, 10000]
+    }
+    sgd_model = SGDRegressor()
+    gridSgd = GridSearchCV(sgd_model, param_test1, n_jobs=-1, verbose=2, cv=5)
+    gridSgd.fit(train_x, train_y)
+    print(gridSgd.best_params_)
+    print(gridSgd.best_estimator_)
+    print(gridSgd.best_score_)
+    aa = []
+    aa.append(gridSgd.best_params_)
+    aa.append(gridSgd.best_score_)
+    aa.append(gridSgd.best_estimator_)
+
+    with open('D:\\kaggle比赛\\装潢公司销量预测\\example\\pagram_Sgd_1.txt', 'w') as writer:
+        writer.writelines(str(aa))
+    predict_sgd = gridSgd.predict(test_x)
+    print(predict_sgd.shape)
+    print(rmspe_xg(predict_sgd, test_y))
+
+#网格化搜索
+#XGB
+#https://www.cnblogs.com/haobang008/p/5909207.html
+def xgb_model_action(train_x, test_x ,train_y , test_y):
+    from sklearn.model_selection import GridSearchCV
+    #用学习率0.1调决策树数量。然后再开始正式调参
+
+    #先调节max_depth和min_weight
+    param_test1 = {
+        'n_estimators':[100,200,300,400,500,600,700,800,900,1000],
+        'learning_rate':[0.1,0.05,0.01,0.005,0.001,0.0001],
+        'max_depth':[4,5,6],
+        'min_child_weight':[1,2,3,4,5,6,7,8,9],
+        'gamma':[i/10.0 for i in range(0,20)],
+        'subsample':[0.5,0.6,0.7,0.8,0.9,1.0],
+        'colsample_bytree':[0.5,0.6,0.7,0.8,0.9,1.0],
+        'reg_alpha' :[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9],
+        'reg_lambda':[0.5,1.0,2.0,3.0,4.0,5.0,6.0,7.0,8.0,9.0,10.0,11.0]
+    }
+    xgb_model = xgb.XGBRegressor(objective='reg:linear',scale_pos_weight=1,seed=2018)
+    gridSearch1 = GridSearchCV(xgb_model,param_test1,n_jobs=-1,verbose=5,scoring='roc_auc',iid=False,cv = 5)
+    gridSearch1.fit(train_x,train_y)
+    print(gridSearch1.best_params_)
+    print(gridSearch1.best_score_)
+    print(gridSearch1.best_estimator_)
+    aa = []
+    aa.append(gridSearch1.best_params_)
+    aa.append(gridSearch1.best_score_)
+    aa.append(gridSearch1.best_estimator_)
+
+    with open('D:\\kaggle比赛\\装潢公司销量预测\\example\\pagram_xgb_1.txt','w') as writer:
+        writer.writelines(str(aa))
+
+    xgb_predict = gridSearch1.predict(test_x)
+    print(rmspe(xgb_predict,test_y))
+
+
+
+def lgb_model_action(train_x, test_x ,train_y , test_y):
+    from sklearn.model_selection import GridSearchCV
+    #先调节max_depth和min_weight,如果参数太多导致内存溢出，就减少轮回调试
+    param_test1 = {
+        # "max_depth": [25,50,75],
+        # "learning_rate" : [0.01,0.05,0.1],
+        # "num_leaves": [300,900,1200],
+        # "n_estimators": [100,200,300,400,500,600,700,800,900,1000],
+        "max_bin":range(1,255,5),
+        "min_child_weight":range(1,11),
+        "feature_fraction":[0.5,0.6,0.7,0.8,0.9,1.0],
+        "bagging_fraction ":[0.5,0.6,0.7,0.8,0.9,1.0],
+        "bagging_freq":range(0,50,5),
+        "reg_alpha":[0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0],
+        "reg_lambda":[0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0],
+        "min_split_gain":[0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0]
+    }
+    lgb_model = lgb.LGBMRegressor(silent=False)
+    gridSearch_lgb = GridSearchCV(lgb_model, n_jobs=-1, param_grid=param_test1, scoring="roc_auc", verbose=5)
+    gridSearch_lgb.fit(train_x,train_y)
+    print(gridSearch_lgb.best_params_)
+    print(gridSearch_lgb.best_score_)
+    print(gridSearch_lgb.best_estimator_)
+    aa = []
+    aa.append(gridSearch_lgb.best_params_)
+    aa.append(gridSearch_lgb.best_score_)
+    aa.append(gridSearch_lgb.best_estimator_)
+
+    with open('D:\\kaggle比赛\\装潢公司销量预测\\example\\pagram_lgb_1.txt','w') as writer:
+        writer.writelines(str(aa))
+
+    lgb_predict = gridSearch_lgb.predict(test_x)
+    print(rmspe(lgb_predict,test_y))
+
+def gbd_model_action(train_x, test_x ,train_y , test_y):
+    from sklearn.model_selection import GridSearchCV
+    from sklearn.ensemble import GradientBoostingRegressor
+    #注意当你想一次调多个参数时，初始化时尽量都不加这些参数，否则报错。
+    #学习率都是最后调。
+    param_test1 = {
+        'n_estimators':[50,70,80,100,150,300,500,700,1000],
+        'max_depth': [4, 5, 6],
+        'min_samples_split': range(100, 801, 200),
+        'min_samples_leaf': range(60, 101, 10),
+        'subsample': [ 0.8, 0.9],
+        'max_features': range(3, 12)
+        # 'learning_rate':[0.0001,0.0005,0.001,0.002,0.005,0.01,0.02,0.05,0.1]
+    }
+    # 当调错时，一定要去掉random_state
+    # rf_model = GradientBoostingRegressor(random_state = 2018) 当确定没事时再加random_state
+    #最好还是俩个俩个调，初始化如下所示。
+    gbd_model = GradientBoostingRegressor(learning_rate=0.1, n_estimators=60, min_samples_leaf=20,
+      max_features='sqrt', subsample=0.8, random_state=2018)
+    gridSearch1 = GridSearchCV(gbd_model,n_jobs=-1, param_grid=param_test1,scoring="roc_auc", verbose=5)
+    gridSearch1.fit(train_x, train_y)
+    print(gridSearch1.best_params_)
+    print(gridSearch1.best_score_)
+    print(gridSearch1.best_estimator_)
+    aa = []
+    aa.append(gridSearch1.best_params_)
+    aa.append(gridSearch1.best_score_)
+    aa.append(gridSearch1.best_estimator_)
+
+    with open('D:\\kaggle比赛\\装潢公司销量预测\\example\\pagram_gbdt_1.txt', 'w') as writer:
+        writer.writelines(str(aa))
+
+    gbd_predict = gridSearch1.predict(test_x)
+    print(rmspe(gbd_predict, test_y))
+
+def rf_model_action(train_x, test_x ,train_y , test_y):
+    from sklearn.model_selection import GridSearchCV
+    #按照下面参数，每俩个之间来回调试。
+    param_test1 = {
+        'n_estimators':range(10,71,10),
+        'max_depth': range(5, 10, 1),
+        'min_samples_split': range(50, 201, 20),
+        'min_samples_leaf': range(10, 60, 10)
+    }
+    #当调错时，一定要去掉random_state
+    #rf_model = RandomForestRegressor(random_state = 2018)
+    rf_model = RandomForestRegressor(min_samples_split=100,
+                                  min_samples_leaf=10,max_depth=8)
+    gridSearch1 = GridSearchCV(rf_model, n_jobs=-1, param_grid=param_test1, scoring="roc_auc", verbose=5)
+    gridSearch1.fit(train_x, train_y)
+    print(gridSearch1.best_params_)
+    print(gridSearch1.best_score_)
+    print(gridSearch1.best_estimator_)
+    aa = []
+    aa.append(gridSearch1.best_params_)
+    aa.append(gridSearch1.best_score_)
+    aa.append(gridSearch1.best_estimator_)
+
+    with open('D:\\kaggle比赛\\装潢公司销量预测\\example\\pagram_rf_1.txt', 'w') as writer:
+        writer.writelines(str(aa))
+
+    rf_predict = gridSearch1.predict(test_x)
+    print(rmspe(rf_predict, test_y))
+
+
+
+
+
+
+
+
+
+
