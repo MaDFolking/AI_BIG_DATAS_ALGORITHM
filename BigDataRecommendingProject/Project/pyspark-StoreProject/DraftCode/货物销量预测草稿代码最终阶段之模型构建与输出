@@ -1,0 +1,193 @@
+from sklearn.linear_model import ElasticNet
+from sklearn.linear_model import Lasso
+from sklearn.linear_model import ElasticNet
+from sklearn.kernel_ridge import KernelRidge
+from sklearn.linear_model import Ridge
+from sklearn import linear_model
+import pickle
+import numpy as np
+import pandas as pd
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, cross_val_score, train_test_split,ShuffleSplit
+from sklearn.feature_selection import RFE
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from sklearn.model_selection._split import check_cv
+from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_selection import VarianceThreshold
+from scipy.stats import skew, kurtosis
+from scipy import sparse
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.random_projection import SparseRandomProjection
+from sklearn.linear_model import LinearRegression
+import matplotlib
+import itertools
+import operator
+import warnings
+warnings.filterwarnings("ignore")
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.base import TransformerMixin
+from matplotlib import pylab as plt
+
+
+
+
+
+#根据业务写损失函数
+#PS:我们的损失计算维平方根误差，即:真实值-预测值的平方和的平均值开根号。也就是rmspe = np.sqrt(np.mean(w * (y - yhat)**2))。
+#因为最后需要除以n，所以我们先设定一个权重值。
+def ToWeight(y):
+    w = np.zeros(y.shape, dtype=float)
+    ind = y != 0
+    w[ind] = 1./(y[ind]**2)
+    return w
+
+def rmspe(yhat, y):
+    w = ToWeight(y)
+    rmspe = np.sqrt(np.mean(w * (y - yhat) ** 2))
+    return rmspe
+#返回加上"rmspe"是为了与后面的xgb的watchlist的参数更好的拼接。
+def rmspe_xg(yhat, y):
+    # y = y.values
+    y = y.get_label()
+    w = ToWeight(y)
+    rmspe = np.sqrt(np.mean(w * (y - yhat) ** 2))
+    return "rmspe", rmspe
+
+def rmspe_other(yhat, y):
+    # y = y.values
+    #y = y.get_label()
+    w = ToWeight(y)
+    rmspe = np.sqrt(np.mean(w * (y - yhat) ** 2))
+    return "rmspe", rmspe
+
+
+#Lasso回归:比较通吃，但效果往往不如ridge
+#alpha如果设置太小，随着迭代次数增加，容易使得一些特征变为0.
+#def Lasso_model(train_x, test_x ,train_y , test_y):
+
+
+# #Ridge回归:针对特征数不能太大。
+def Ridge_model(train_x ,train_y):
+    X_train,X_test,y_train,y_test = train_test_split(train_x,train_y,test_size=0.2)
+    ridge_model = Ridge()
+    ridge_model.fit(X_train,np.expm1(y_train))
+    pre_ridge = ridge_model.predict(X_test)
+    print(pre_ridge)
+    print("Ridge的rmspe损失值为:",rmspe_other(np.expm1(pre_ridge),np.expm1(y_test)))
+    rmpse_ridge = rmspe_other(pre_ridge,np.expm1(y_test))
+    return rmpse_ridge
+
+# #弹性网络:可以做特征数比较大的。
+# def ElasticNet_model(train_x, test_x ,train_y , test_y):
+#
+#
+# #svr针对非线性更好，数据量不能太大
+# def SVR_model(train_x, test_x ,train_y , test_y):
+#
+#
+# #ker 主要是线性,针对小数据量，太大容易内存溢出
+# def KernelRidge_model(train_x, test_x ,train_y , test_y):
+#
+#
+# #bay线性，数据量不能太大
+# def BayesianRidge_model(train_x, test_x ,train_y , test_y):
+#
+#
+# #sgd 梯度下降，然后不断的降低学习率，以便改变权重参数，说以针对大量稀疏矩阵比较好，原始深度学习通常用这个优化器。
+# def SGD_model(train_x, test_x ,train_y , test_y):
+#
+#
+# #随机森林
+# def RF_model(train_x, test_x ,train_y , test_y):
+#
+#
+# #GBDT
+# def GBDT_model(train_x, test_x ,train_y , test_y):
+#
+#
+#XGB
+#经过网格搜索后:
+def XGB_model(train_x ,train_y ):
+    depth = 13
+    eta = 0.01
+    trees = 8000
+    mcw = 3
+    NUM_FOLDS = 5
+    num_round = 10
+    param_xgb = {"objective": "reg:linear",
+              "booster": "gbtree",
+              "eta": eta,
+              "max_depth": depth,
+              "min_child_weight": mcw,
+              'reg_alpha':1e-2,
+              'reg_lambda':10.756,
+              "subsample": 0.9,
+              "colsample_bytree": 0.7,
+              "silent": 1
+              }
+    #这里就不需要使用交叉验证了。
+    X_train, X_test,y_train,y_test = train_test_split(train_x,train_y, test_size=0.1)
+    D_train = xgb.DMatrix(X_train,np.expm1(y_train))
+    D_valid = xgb.DMatrix(X_test,np.expm1(y_test))
+    watchlist = [(D_valid,"valid"),(D_train, 'train')]
+    #交叉验证
+    xgb.cv(param_xgb,D_train,num_round,NUM_FOLDS,metrics=['error'],early_stopping_rounds=10,verbose_eval=True)
+    xgb_model = xgb.train(param_xgb, D_train, trees, evals=watchlist, early_stopping_rounds=10, feval=rmspe_xg,verbose_eval=True)
+    predict_train = xgb_model.predict(xgb.DMatrix(X_test))
+    #防止有小于0的数
+    inf = predict_train < 0
+    predict_train[inf] = 0
+    print(predict_train)
+    rmspe_test = rmspe(predict_train, np.expm1(y_test).values)
+    print("测试集rmspe的损失值为:{}".format(rmspe_test))
+    return rmspe_test
+# #LGB
+# def LGB_model(train_x, test_x ,train_y , test_y):
+
+'''
+添加行方法:
+
+RF_PATH = 'datapath/1.csv'
+titile = ["time0","time1","time2"]
+
+R2G = pd.read_csv(RF_PATH, header = None)
+insertRow = pd.DataFrame([titile])
+#R2G = pd.concat([instertRow, R2G], ignore_index = True)
+R2G = insertRow.append(R2G,ignore_index=True)
+df = R2G.to_csv('datapath/1-titile.csv', header = None, index = None)
+'''
+
+def main():
+    train_x = pd.read_csv("D:\\kaggle比赛\\装潢公司销量预测\\data\\train_x_end.csv")
+    train_y = train_x['Sales']
+    train_x.drop('Sales',axis = 1,inplace=True)
+    print(train_x.shape,"  ",train_y.shape)
+
+    Ridge_model(train_x,train_y)
+    XGB_model(train_x,train_y)
+
+if __name__ == '__main__':
+    main()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
