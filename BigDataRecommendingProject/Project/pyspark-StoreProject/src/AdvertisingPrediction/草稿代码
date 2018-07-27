@@ -1,0 +1,926 @@
+import pickle
+import numpy as np
+import pandas as pd
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, cross_val_score, train_test_split,ShuffleSplit
+from sklearn.feature_selection import RFE
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from sklearn.model_selection._split import check_cv
+from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_selection import VarianceThreshold
+from scipy.stats import skew, kurtosis
+from scipy import sparse
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.random_projection import SparseRandomProjection
+from sklearn.linear_model import LinearRegression
+import matplotlib
+import itertools
+import operator
+import warnings
+warnings.filterwarnings("ignore")
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.base import TransformerMixin
+from matplotlib import pylab as plt
+from sklearn import metrics
+from sklearn.externals import joblib
+
+'''
+PS:这里复制一个大神写的标准化处理，可以看看里面的一些方法。
+        nonzero_rows = all_df[col] != 0
+        # numpy.all() 测试沿给定轴的所有数组元素是否都计算为True。nan,无穷大，无穷小都是False,其他为True
+        if np.isfinite(all_df.loc[nonzero_rows, col]).all():
+            # 标准化数据,标准化: 以均值和分量方式为中心，以单位方差为中心。
+            all_df.loc[nonzero_rows, col] = scale(all_df.loc[nonzero_rows, col])
+            if np.isfinite(all_df[col]).all():
+                # 每一列都标准化。
+                all_df[col] = scale(all_df[col])
+        # 因为启动了progressbar,最后要collect下，collect是收集无法访问的内存垃圾。
+        gc.collect()
+    p.finish()
+'''
+
+#处理大数据量的加载方法
+#鉴于本数据集太大，我们用下采样方式，而下采样的样本数取决于正负样本比例，当然我这里先注释，因为我这个数据集是比较少的。
+#uniform是随机平均,下面这个方法是将其分解成1/6的一种方式,
+#最后每个模型可以调用一次这个函数进行随机采样，那时候可以注释掉np.random.seed(2018)
+#np.ix[条件] 取该条件下所有行的数据。如果是np.ix[条件,:] 就是该条件下所有行和列的数据。
+#我们每次读入一列数据，然后将其合并成6个文件再随机化，生成42个csv文件，因为如果文件太少会内存溢出。
+def under_sample_load_data():
+    train_id = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['id'],index_col=0)
+    train_click = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['click'],index_col=0)
+    train_hour = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['hour'],index_col=0)
+    train_C1 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['C1'],index_col=0)
+    train_banner_pos = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['banner_pos'],index_col=0)
+    train_site_id = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['site_id'],index_col=0)
+    train_site_domain = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['site_domain'],index_col=0)
+    train_site_category = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['site_category'],index_col=0)
+    train_app_id = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['app_id'],index_col=0)
+    train_app_domain = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['app_domain'],index_col=0)
+    train_app_category = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['app_category'],index_col=0)
+    train_device_id = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['device_id'],index_col=0)
+    train_device_ip = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['device_ip'],index_col=0)
+    train_device_model = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['device_model'],index_col=0)
+    train_device_type = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['device_type'],index_col=0)
+    train_device_conn_type = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['device_conn_type'],index_col=0)
+    train_C14 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['C14'],index_col=0)
+    train_C15 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['C15'],index_col=0)
+    train_C16 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['C16'],index_col=0)
+    train_C17 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['C17'],index_col=0)
+    train_C18 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['C18'],index_col=0)
+    train_C19 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['C19'],index_col=0)
+    train_C20 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['C20'],index_col=0)
+    train_C21 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train.csv", usecols=['C21'],index_col=0)
+
+    for i in range(6):
+        train11 = np.random.uniform(0,1,train_id.shape[0])
+        train21 = train_id.ix[train11<0.17,:]
+        train21.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train1{}.csv".format(i))
+        train12 = np.random.uniform(0, 1, train_click.shape[0])
+        train22 = train_click.ix[train12 < 0.17, :]
+        train22.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train2{}.csv".format(i))
+        train13 = np.random.uniform(0, 1, train_hour.shape[0])
+        train23 = train_hour.ix[train13 < 0.17, :]
+        train23.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train3{}.csv".format(i))
+        train14 = np.random.uniform(0, 1, train_C1.shape[0])
+        train24 = train_C1.ix[train14 < 0.17, :]
+        train24.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train4{}.csv".format(i))
+        train15 = np.random.uniform(0, 1, train_banner_pos.shape[0])
+        train25 = train_banner_pos.ix[train15 < 0.17, :]
+        train25.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train5{}.csv".format(i))
+        train16 = np.random.uniform(0, 1, train_site_id.shape[0])
+        train26 = train_site_id.ix[train16 < 0.17, :]
+        train26.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train6{}.csv".format(i))
+        train17 = np.random.uniform(0, 1, train_site_domain.shape[0])
+        train27 = train_site_domain.ix[train17 < 0.17, :]
+        train27.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train7{}.csv".format(i))
+        train18 = np.random.uniform(0, 1, train_site_category.shape[0])
+        train28 = train_site_category.ix[train18 < 0.17, :]
+        train28.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train8{}.csv".format(i))
+        train19 = np.random.uniform(0, 1, train_app_id.shape[0])
+        train29 = train_app_id.ix[train19 < 0.17, :]
+        train29.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train9{}.csv".format(i))
+        train190 = np.random.uniform(0, 1, train_app_domain.shape[0])
+        train290 = train_app_domain.ix[train190 < 0.17, :]
+        train290.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train10{}.csv".format(i))
+        train191 = np.random.uniform(0, 1, train_app_category.shape[0])
+        train291 = train_app_category.ix[train191 < 0.17, :]
+        train291.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train11{}.csv".format(i))
+        train192 = np.random.uniform(0, 1, train_device_id.shape[0])
+        train292 = train_device_id.ix[train192 < 0.17, :]
+        train292.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train12{}.csv".format(i))
+        train111 = np.random.uniform(0, 1, train_device_ip.shape[0])
+        train211 = train_device_ip.ix[train111 < 0.17, :]
+        train211.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train13{}.csv".format(i))
+        train122 = np.random.uniform(0, 1, train_device_model.shape[0])
+        train222 = train_device_model.ix[train122 < 0.17, :]
+        train222.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train14{}.csv".format(i))
+        train133 = np.random.uniform(0, 1, train_device_type.shape[0])
+        train233 = train_device_type.ix[train133 < 0.17, :]
+        train233.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train15{}.csv".format(i))
+        train144 = np.random.uniform(0, 1, train_device_conn_type.shape[0])
+        train244 = train_device_conn_type.ix[train144 < 0.17, :]
+        train244.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train16{}.csv".format(i))
+        train155 = np.random.uniform(0, 1, train_C14.shape[0])
+        train255 = train_C14.ix[train155 < 0.17, :]
+        train255.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train17{}.csv".format(i))
+        train166 = np.random.uniform(0, 1, train_C15.shape[0])
+        train266 = train_C15.ix[train166 < 0.17, :]
+        train266.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train18{}.csv".format(i))
+        train177 = np.random.uniform(0, 1, train_C16.shape[0])
+        train277 = train_C16.ix[train177 < 0.17, :]
+        train277.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train19{}.csv".format(i))
+        train188 = np.random.uniform(0, 1, train_C17.shape[0])
+        train288 = train_C17.ix[train188 < 0.17, :]
+        train288.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train20{}.csv".format(i))
+        train199 = np.random.uniform(0, 1, train_C18.shape[0])
+        train299 = train_C18.ix[train199 < 0.17, :]
+        train299.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train21{}.csv".format(i))
+        train1900 = np.random.uniform(0, 1, train_C19.shape[0])
+        train2900 = train_C19.ix[train1900 < 0.17, :]
+        train2900.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train22{}.csv".format(i))
+        train1911 = np.random.uniform(0, 1, train_C20.shape[0])
+        train2911 = train_C20.ix[train1911 < 0.17, :]
+        train2911.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train23{}.csv".format(i))
+        train1922 = np.random.uniform(0, 1, train_C21.shape[0])
+        train2922 = train_C21.ix[train1922 < 0.17, :]
+        train2922.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train24{}.csv".format(i))
+'''
+PS: Reindexing only valid with uniquely valued Index objects :Concat DataFrame重新索引仅对具有唯一值的Index对象有效
+解析: pd.concat要求指数是唯一的。要删除具有重复索引的行，请使用 df = df.loc[~df.index.duplicated(keep='first')]
+但这样的效果就是删除了重复值，会对结果产生影响，所以目前不是我们应该考虑的方法。
+
+'''
+def merge_excel_data():
+    train1 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train10.csv",nrows=6800000,index_col=0)
+    train2 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train20.csv",nrows=6800000, index_col=0)
+    train3 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train30.csv",nrows=6800000,index_col=0)
+    train4 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train40.csv",nrows=6800000, index_col=0)
+    train5 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train50.csv",nrows=6800000, index_col=0)
+    train6 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train60.csv",nrows=6800000, index_col=0)
+    train7 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train70.csv",nrows=6800000, index_col=0)
+    train8 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train80.csv",nrows=6800000, index_col=0)
+    train9 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train90.csv",nrows=6800000, index_col=0)
+    train10 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train100.csv",nrows=6800000, index_col=0)
+    train11 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train110.csv",nrows=6800000, index_col=0)
+    train12 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train120.csv",nrows=6800000, index_col=0)
+    train13 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train130.csv",nrows=6800000, index_col=0)
+    train14 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train140.csv",nrows=6800000, index_col=0)
+    train15 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train150.csv",nrows=6800000, index_col=0)
+    train16 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train160.csv",nrows=6800000, index_col=0)
+    train17 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train170.csv",nrows=6800000, index_col=0)
+    train18 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train180.csv",nrows=6800000, index_col=0)
+    train19 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train190.csv",nrows=6800000, index_col=0)
+    train20 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train200.csv",nrows=6800000, index_col=0)
+    train21 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train210.csv",nrows=6800000, index_col=0)
+    train22 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train220.csv",nrows=6800000, index_col=0)
+    train23 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train230.csv",nrows=6800000, index_col=0)
+    train24 = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train240.csv",nrows=6800000, index_col=0)
+
+    train1 =  train1 .loc[~train1 .index.duplicated(keep='first')]
+    train2 =  train2 .loc[~train2 .index.duplicated(keep='first')]
+    train3 =  train3 .loc[~train3 .index.duplicated(keep='first')]
+    train4 =  train4 .loc[~train4 .index.duplicated(keep='first')]
+    train5 =  train5 .loc[~train5 .index.duplicated(keep='first')]
+    train6 =  train6 .loc[~train6 .index.duplicated(keep='first')]
+    train7 =  train7 .loc[~train7 .index.duplicated(keep='first')]
+    train8 =  train8 .loc[~train8 .index.duplicated(keep='first')]
+    train9 =  train9 .loc[~train9 .index.duplicated(keep='first')]
+    train10 = train10.loc[~train10.index.duplicated(keep='first')]
+    train11 = train11.loc[~train11.index.duplicated(keep='first')]
+    train12 = train12.loc[~train12.index.duplicated(keep='first')]
+    train13 = train13.loc[~train13.index.duplicated(keep='first')]
+    train14 = train14.loc[~train14.index.duplicated(keep='first')]
+    train15 = train15.loc[~train15.index.duplicated(keep='first')]
+    train16 = train16.loc[~train16.index.duplicated(keep='first')]
+    train17 = train17.loc[~train17.index.duplicated(keep='first')]
+    train18 = train18.loc[~train18.index.duplicated(keep='first')]
+    train19 = train19.loc[~train19.index.duplicated(keep='first')]
+    train20 = train20.loc[~train20.index.duplicated(keep='first')]
+    train21 = train21.loc[~train21.index.duplicated(keep='first')]
+    train22 = train22.loc[~train22.index.duplicated(keep='first')]
+    train23 = train23.loc[~train23.index.duplicated(keep='first')]
+    train24 = train24.loc[~train24.index.duplicated(keep='first')]
+
+    print(train1.shape,train16.shape,train17.shape,train18.shape,train19.shape,train20.shape,train21.shape,train22.shape,train23.shape,train24.shape)
+    train_end = pd.concat((train1,train2,train3,train4,train5,train6,train7,train8,train9,train10,train11,train12,train13,train14,train15,train16,train17,train18,train19,train20,train21,train22,train23,train24),axis=1)
+    train_end.to_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\trainend123.csv")
+
+
+#读取数据,我们先加载小数据量做测试，最后全部调完后再用大数据量做最终处理。
+#我们这里用技巧方法来处理大数据量文件。
+def load_input():
+    train = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\train_small.csv",index_col=0)
+    test = pd.read_csv("D:\\kaggle比赛\\预测广告点击率真比赛\\data\\test.csv",index_col = 0)
+    train_y = train['click']
+    train_x = train.drop('click',axis = 1)
+    print(train_y.shape," ",train_x.shape," ",test.shape)
+    # # 查看点击率,得到0.17490174901749017。所以正负样本比例大概是1:6
+    print("点击率为:",train_y.mean())
+    return train,train_y,train_x,test
+
+#下面都是数据处理阶段，也就是数据探索和数据处理。
+
+#第一步,数据探索，查看主要维度的方差，偏差，峰度值等。统计频率，找到特征性强的特征，和特征中频率大的值。
+#我们这么做是为了下一步离散一些维度并增加一些维度做准备。
+#PS:std 为标准差，我们这里当做方差。 skew 为偏度或者叫偏差  kurtosis 为峰度。
+#统计学中:误差=方差+偏差。 方差:样本的离散程度。方差大容易过拟合，因为太分散曲线容易扩张拟合，这样离散点太多真实的样本放里面容易错误。
+#偏差:样本输出与真实之间的差异。偏差大容易欠你和。
+#Boosting全样本抽取计算-》降低偏差(同时也稍微降低方差)。Bagging随机抽样->降低方差。(因为随机取样，如果离散化大也是集中一个区域，这样容易拟合。)
+#kurtosis 峰度:数据序列的四阶中心矩与标准差的四次幂之比。设若先将数据标准化，则峰度（系数）相当于标准化数据序列的四阶中心矩。
+#简单说:峰度（系数）是一个用于衡量离群数据离群度的指标(峰度越大，离群值越多)。这个用于正态分布。
+def data_exploration(train):
+    #整体描述
+    print(train.describe())
+    #查看数据类型
+    print(train.dtypes)
+    #查看数值特征的主要特征:偏差，方差，峰度,
+    feature_numeric = train.columns[train.dtypes!=object]
+
+    def std_x(x):
+        return x.std()
+    def median_x(x):
+        return x.median()
+
+    train_df_feature_numeric = train.loc[:, feature_numeric]
+    train_num = pd.DataFrame({ 'std':train_df_feature_numeric.apply(std_x),
+                               'median':train_df_feature_numeric.apply(median_x),
+                               'skew':train_df_feature_numeric.apply(skew),
+                               'kurtosis':train_df_feature_numeric.apply(kurtosis)})
+    print(train_num)
+    #由显示结果得到:
+    #device_type，C15，C16，C19 峰度比较大，也就是离群点比较多。但第一个是手机型号正常，后三个也可能是类别型，所以我们后面做特征性处理。
+    #C14,C17,C20 方差比较大，也做特征性强弱处理。
+
+    list_feature = ['device_type','C15','C16','C19','C14','C17','C20']
+    #查看一些关键特征的特征性强弱和频率
+    for i in list_feature:
+        print("{}特征维度的特征性查看:".format(i))
+        print("{}特征与点击率的均值的特征性为:".format(i),train.groupby(i)['click'].mean().sort_values(ascending=False))
+        print("{}特征与点击率的方差的特征性为:".format(i),train.groupby(i)['click'].std().sort_values(ascending=False))
+        print("{}特征与点击率的偏差的特征性为:".format(i),train.groupby(i)['click'].apply(kurtosis).sort_values(ascending=False))
+        print("{}特征与点击率的峰度的特征性为:".format(i),train.groupby(i)['click'].apply(skew).sort_values(ascending=False))
+        print("{}特征与点击率的频率的特征性为:".format(i),train[i].value_counts())
+        print("*"*50)
+
+    #最后需要查看所有特征与点击率的频率，因为我们主计算就是这个,我们得出前三频率的数。
+    for i in train.columns:
+        print("{}特征与点击率的频率的特征性为:".format(i), train[i].value_counts().head(10))
+    print("*" * 50)
+##########################################################################################################################################################################
+'''
+总结:通过我们做的一系列数据探索，得到了一些特征的数据大致分布，以及一些特征类别对点击率的影响，下面我们需要做数据处理
+我们将各个特征最大的各个数值贴出来。Nan值一般为无限小。
+    device_type   C15              C16             C19              C14                 C17                C20
+均值 0:0.227499   300: 0.438882    250: 0.472133   1063:0.541162    很多都是1           550:1.00000        100229/100177/100213: 1.000
+方差 0:0.419267   300: 0.496314    250: 0.499296   425: 0.577350    很多: 0.707107      2438: 0.707107     100143/100138/100133/100043: 0.707107
+偏差 4:8.869843   120: -3.00000    20/90:-3.0000   291: 80.51183    17163:108.508889    1955: 108.508889   100063:  60.015625
+峰度 4:3.296944   320: 1.816797    50:  1.814214   291: 9.083602    17163: 10.512321    1955: 10.512321    100063:  7.875000
+频率 0:4211       300: 3935        250: 3427       39:  21930       18993: 6770         2161: 13579        100084:11567
+
+除了一些值我们得到的信息外，还得出很多时候，偏差和峰度大的是一个值。频率很多时候与均值和方差有关系。 方差与均值有时有关联。
+
+下面是所有频率大的特征值
+click特征与点击率的频率的特征性为:
+0    82509
+1    17490
+
+hour特征与点击率的频率的特征性为:
+14102100    99999
+
+C1特征与点击率的频率的特征性为:
+1005    92454
+1002     4211
+1010     3191
+
+banner_pos特征与点击率的频率的特征性为:
+0    80248
+1    19714
+2       21
+
+site_id特征与点击率的频率的特征性为:
+1fbe01fe    35051
+85f751fd    21773
+543a539e     7186
+
+site_domain特征与点击率的频率的特征性为:
+f3845767    35051
+c4e18dd6    23398
+c7ca3108     7186
+
+site_category特征与点击率的频率的特征性为:
+28905ebd    37696
+50e219e0    25398
+f028772b    19760
+
+app_id特征与点击率的频率的特征性为:
+ecad2386    78226
+febd1138     2367
+e2fcccd2     1755
+
+app_domain特征与点击率的频率的特征性为:
+7801e8d9    82885
+2347f47a     7509
+82e27996     2367
+
+app_category特征与点击率的频率的特征性为:
+07d7df22    78827
+0f2161f8    14971
+f95efa07     2895
+
+device_id 特征与点击率的频率的特征性为:
+a99f214a    86935
+c357dbff      167
+31da1bd0       62
+
+device_ip 特征与点击率的频率的特征性为:
+6b9769f2    838
+9b1fe278    376
+ceffea69    370
+
+device_model 特征与点击率的频率的特征性为:
+8a4875bd    6886
+d787e91b    5438
+1f0bc64f    3769
+
+device_type 特征与点击率的频率的特征性为:
+1    92597
+0     4211
+4     2979
+
+device_conn_type 特征与点击率的频率的特征性为:
+0    90707
+2     8097
+3     1121
+
+C14 特征与点击率的频率的特征性为:
+20596    6809
+18993    6770
+15701    4618
+
+C15 特征与点击率的频率的特征性为:
+320    95132
+300     3935
+216      912
+
+C16 特征与点击率的频率的特征性为:
+50     95620
+250     3427
+36       912
+
+C17 特征与点击率的频率的特征性为:
+1722    38456
+2161    13579
+2333    10734
+
+C18 特征与点击率的频率的特征性为:
+0    69496
+3    18133
+2    12163
+
+C19 特征与点击率的频率的特征性为:
+35     55796
+39     21930
+297     4034
+
+C20 特征与点击率的频率的特征性为:
+ -1         62161
+ 100084    11567
+ 100111     3997
+C21 特征与点击率的频率的特征性为:
+79     38456
+157    24313
+23      7005
+
+'''
+
+#第二步,根据我们的业务特点，可以直接合并数据，有时候如果出现训练集和测试集关键点格式不明确，需要做一些处理再合并数据，比如时间拆分的格式不同。
+def merge_data(train_x,test):
+    assert len(train_x)>0 and len(test)>0
+    print("数据合并开始")
+    all_df = pd.concat((train_x,test),axis=0)
+    if len(all_df)>0:
+        print("数据合并成功,合并后维度为{}".format(all_df.shape))
+    return all_df
+
+'''
+第三步，离散时间(可选)
+
+#当做预测销售货物时，精确到日，月，年即可，或者销售月，日。
+#但我们这个项目中涉及到用户任何时间点的点击率，所以我们要精确到日，小时，当天的第几小时，当天的该小时时的前一个小时，当天该小时时的后一个小时这些。
+'''
+def parse_time(all_df):
+    assert len(all_df)>0
+    print("离散时间处理开始...")
+    nn1 = all_df.shape[1]
+    #增加日，根据业务可知我们多了2位，所以取10000的余数再除以100,我们最终得到日期第几号。
+    all_df['day'] = np.round(all_df.hour%10000/100)
+    print(all_df['day'].head())
+    #这个是小时变量，我们上面得到的日期如果最后俩位数是0，这里就是0，也就是12点，根据测试数据得出，时间点无非也就是0-8点期间段的统计。
+    all_df['hour1'] = np.round(all_df.hour%100)
+    print(all_df['hour1'].head())
+    #取当天的第几小时，将时间按照小时离散化。
+    all_df['day_hour'] = (all_df.day.values-21)*24+all_df.hour1.values
+    print(all_df['day_hour'].head())
+    #当前小时的前一个小时，便于我们后期分析。
+    all_df['day_hour_prev'] = all_df['day_hour'] - 1
+    print(all_df['day_hour_prev'].head())
+    #当前小时的后一个小时, 便于我们后期分析。
+    all_df['day_hour_next'] = all_df['day_hour'] + 1
+    print(all_df['day_hour_next'].head())
+    #根据业务需求，我们只计算当月21日-31日之间，所以删除掉当月之外的数据
+    all_df = all_df.ix[np.logical_and(all_df.day.values>=21,all_df.day.values<32),:]
+    print(all_df.head())
+    print(all_df.shape)
+    if all_df.shape[1] > nn1:
+        print("离散时间处理结束...")
+    else:
+        raise NotImplementedError("离散时间处理失败...")
+    return all_df
+
+'''
+特征扩张(可选)
+根据业务情况增加特征数
+增加一个手机端或web端的维度，初始化为0
+PS:(1) numpy.logical_and:计算x1,x2的真值,x1,x2的shape必须相同。返回的是位置。
+:>>> np.logical_and(True, False)
+False
+>>> np.logical_and([True, False], [False, False])
+array([False, False])
+>>>
+>>> x = np.arange(5)
+>>> np.logical_and(x>1, x<4)
+array([False, False,  True,  True, False])
+PS:(2) sys.stdout.flush:刷新输出。
+aggregate：groupby.aggregate()这样使用可以起到分组计算。
+'''
+def parse_feature(all_df):
+    assert len(all_df)>0
+    print("特征扩张开始...")
+    nn1 = all_df.shape[1]
+    #设置一些强特征性的特征维度,注意是类别特征维度，数值没意义。
+    all_df['site_or_web'] = 0
+    all_df['app_or_web'] = 0
+    all_df['device_or_web'] = 0
+    #根据上面数据探索，我们将频率最高的一些类别特征性大的做一下强特征性处理。处理到我们新增加的维度当中，注意是:类别型数据。
+    all_df.ix[all_df.site_id.values=='85f751fd','site_or_web'] = 1
+    all_df.ix[all_df.app_id.values == 'ecad2386','app_or_web'] = 1
+    all_df.ix[all_df.device_id.values == 'a99f214a','device_or_web'] = 1
+    print(all_df.head())
+    print(all_df.shape)
+    if all_df.shape[1] > nn1:
+        print("特征扩张处理结束...")
+    else:
+        raise NotImplementedError("特征扩张处理失败...")
+    return all_df
+
+'''
+特征拼接/组合，(可选项)
+主要是寻求强特征性数据。注意如果是数值型需要astype('string')
+比如:我们有时候根据国家，节日等因素发现拼接后形成特征性强的属性，这里我们根据数据探索结果，拼接一些特征。
+我们这里主要针对数据探索得到的高频率类别特征进行处理，尝试拼接app与手机和site之间的拼接。因为这几个是类别特征。并做一定量的交叉特征拼接进行尝试。
+device的ip->app和site的domain
+device的mode->app和site的category
+异常:TypeError: data type not understood
+
+'''
+def feature_splicing(all_df):
+    assert len(all_df)>0
+    print("特征组合处理开始...")
+    nn1 = all_df.shape[1]
+    all_df['app_site_id'] = np.add(all_df.app_id.values, all_df.site_id.values)
+    all_df['app_device_id'] = np.add(all_df.app_id.values,all_df.device_id.values)
+    all_df['dev_site_id'] = np.add(all_df.device_id.values,all_df.site_id.values)
+    all_df['app_site_category'] = np.add(all_df.app_category.values, all_df.site_category.values)
+    all_df['app_device_model'] = np.add(all_df.app_category.values, all_df.device_model.values)
+    all_df['dev_site_category'] = np.add(all_df.device_model.values, all_df.site_category.values)
+    all_df['app_site_domain'] = np.add(all_df.app_domain.values, all_df.site_domain.values)
+    all_df['app_device_ip'] = np.add(all_df.app_domain.values, all_df.device_ip.values)
+    all_df['app_site_category'] = np.add(all_df.device_model.values, all_df.app_site_id.values)
+    #all_df['app_site_category_web'] = np.add(all_df.app_site_category.values, all_df.app_or_web.astype('string').values)
+    all_df['device_ip_app_site'] = np.add(all_df.device_ip.values, all_df.app_site_id.values)
+    print(all_df.head())
+    print(all_df.shape)
+    if all_df.shape[1]>nn1:
+        print("特征组合处理结束...")
+    else:
+        raise NotImplementedError("特征组合处理失败...")
+    return all_df
+
+'''
+拆分数值型和非数值型函数
+'''
+def parse_numeric(all_df):
+    assert len(all_df)>0
+    features = all_df.columns
+    numeric_feature = all_df.columns[all_df.dtypes!=object]
+    numeric_non_feature = [i for i in features if i not in numeric_feature]
+    return features,numeric_feature,numeric_non_feature
+
+'''
+非数值型编码
+'''
+def numeric_non_scale(all_df):
+    assert len(all_df)>0
+    print("非数值型编码处理开始...")
+    #先LabelEncoder处理
+    _,_,numeric_non_feature = parse_numeric(all_df)
+    print(numeric_non_feature)
+    le = LabelEncoder()
+    for i in numeric_non_feature:
+        le.fit(list(all_df[i]))
+        all_df[i] = le.transform(all_df[i])
+    print(all_df.head())
+    print(all_df.shape)
+    print(all_df.isnull().sum().sort_values(ascending=False))
+    print("非数值型编码处理结束...")
+    return all_df
+
+'''
+类别型(非数值)特征离散
+手工处理(可选)
+'''
+def parse_feature_disperse(all_df):
+    assert len(all_df)>0
+    _, _, numeric_non_feature = parse_numeric(all_df)
+    '''
+    '''
+    return all_df
+
+'''
+类别型(非数值)特征离散
+One-Hot处理(可选)
+pd.iloc[[1,2],2] 通过坐标获取数据
+pd.loc['a','b']通过行列名获取数据
+pd.ix['a','b']通过行列名提取数据
+all_df.apply(pd.value_counts)返回一个DataFrame类型，再进行矩阵运算。
+ps: feature_num = all_df[i].value_counts()[lambda x:x>1000].index 提取1000维度以上的，研究很久的出的方法，好好复习这个。
+'''
+def parse_hot(all_df):
+    assert len(all_df)>0
+    print("类别离散化处理开始...")
+    _, _, numeric_non_feature = parse_numeric(all_df)
+    print(all_df.shape)
+    print(len(numeric_non_feature))
+    #再 One - Hot 处 理 , 只处理频率大于20000的进行离散化类别。
+    for i in numeric_non_feature:
+        feature_num = all_df[i].value_counts()[lambda x:x>30000].index
+        print(len(feature_num))
+        all_num = pd.get_dummies(feature_num)
+        all_df = pd.concat((all_df,all_num),axis=1)
+        print(all_df.shape)
+    print(all_df.shape)
+    if all_df.shape[1]<50:
+        raise NotImplementedError("类别离散化处理失败")
+    else:
+        print("类别离散化处理结束...")
+        return all_df
+
+'''
+数值类型标准化
+'''
+def numeric_acale(all_df):
+    assert len(all_df)>0
+    print("数值标准化处理开始...")
+    _,numeric_feature,_ = parse_numeric(all_df)
+    numeric_mean = all_df.loc[:,numeric_feature].mean()
+    numeric_std = all_df.loc[:,numeric_feature].std()
+    all_df.loc[:,numeric_feature] = (all_df.loc[:,numeric_feature]-numeric_mean)/numeric_std
+    print(all_df.head())
+    print(all_df.shape)
+    print(all_df.isnull().sum().sort_values(ascending=False).head())
+    print(type(all_df.isnull().sum().sort_values(ascending=False).head()))
+    print(type(all_df.isnull().sum().sort_values(ascending=False)[0]))
+    #我们这次并没有nan值。所以函数里只是注释一些内容
+    if all_df.isnull().sum().sort_values(ascending=False)[0]>0:
+        parse_nan(all_df)
+    print(all_df.head())
+    print(all_df.shape)
+    feature, numeric_feature, _ = parse_numeric(all_df)
+    if len(feature)==len(numeric_feature):
+        print("数值标准化处理结束...")
+        return all_df
+    else:
+        raise NotImplementedError("数值标准化处理失败...")
+
+'''
+去除nan值
+'''
+def parse_nan(all_df):
+    assert len(all_df)>0
+    print("异常值处理开始...")
+    print(all_df.isnull().sum().sort_values(ascending=False).head())
+    # all_df.CompetitionDistance.fillna(all_df.CompetitionDistance.mean(), inplace=True)
+    # all_df.Open.fillna(1, inplace=True)
+    # all_df.fillna(0, inplace=True)
+    print(all_df.isnull().sum().sort_values(ascending=False).head())
+    print("异常值处理结束...")
+
+
+'''
+特征选择
+删除一列只有一个数的特征
+删除俩个列完全相同的特征
+VarianceThreshold删除所有方差过低的列,因为方差太低特征性太差了。
+'''
+def feature_selection(all_df):
+    assert len(all_df)>0
+    print("特征选择处理开始...")
+    #检查异常点nan或inf
+    #print(np.all(np.isfinite(all_df)))
+    selector = VarianceThreshold(0.01)
+    selector.fit_transform(all_df)
+    print(all_df.shape)
+    # 删除唯一性数据，这种数据没意义，特征性为0
+    uniques = all_df.columns[all_df.nunique()==1]
+    if len(uniques)>0:
+        all_df.drop(uniques, axis=1, inplace=True)
+
+    # 删除俩列相同的数据
+    all_columns = all_df.columns
+    colsToRemove = []
+    for i in range(len(all_columns) - 1):
+        m = all_df[all_columns[i]].values
+        for j in range(i + 1, len(all_columns)):
+            if np.array_equal(m, all_df[all_columns[j]].values):
+                colsToRemove.append(all_columns[j])
+
+    all_df.drop(colsToRemove, axis=1, inplace=True)
+    print(all_df.shape)
+    print("特征选择处理结束...")
+    return all_df
+
+'''
+根据业务情况处理大的噪点(可选)
+即: 去除偏差特别大的点
+这里要用到归一化处理
+'''
+from sklearn.preprocessing import scale, MinMaxScaler
+def feature_noisy(all_df):
+    print("去燥处理开始...")
+    # 平方方差缩放所有列,将偏差大的去掉。
+    columnsCount = len(all_df.columns)
+    for col in all_df.columns:
+        # 每个特征维度的列向量。
+        data = all_df[col].values
+        # 标准偏差:S = Sqr(∑(xn-x拨)^2 /(n-1))
+        # 一种量度数据分布的分散程度之标准，用以衡量数据值偏离算术平均值的程度。
+        # 标准偏差越小，这些值偏离平均值就越少，反之亦然。
+        # 标准偏差的大小可通过标准偏差与平均值的倍率关系来衡量。
+        data_mean, data_std = np.mean(data), np.std(data)
+        # 扩大标准差
+        cut_off = data_std * 3
+        # 取范围值，平均值-标准偏差*3为下届，上界是平均值+标准偏差*3
+        lower, upper = data_mean - cut_off, data_mean + cut_off
+        # 将每个特征维度上偏差大的去掉，重新放在一个列表中
+        outList = [i for i in data if i > lower and i < upper]
+        if (len(outList) > 0):
+            non_zero_idx = data != 0
+            # loc是返回的是相应轴的数目，可以添加条件来去掉不想要的。将偏差小的重新赋值到列表中
+            #可以用log进行平滑化，后期会考虑去掉log,毕竟我已经做完了标准化np.log(data[non_zero_idx])
+            all_df.loc[non_zero_idx, col] = data[non_zero_idx]
+    print(all_df.shape)
+    if(all_df.shape[1]>100):
+        all_df = SparseRandomProjection_parse(all_df)
+    print(all_df.shape)
+    print("去燥处理结束...")
+    return all_df
+
+
+'''
+降维(可选)
+'''
+def SparseRandomProjection_parse(all_df):
+    assert len(all_df)>0
+    print("降维处理开始...")
+    sp = SparseRandomProjection(n_components=50)
+    sp.fit(all_df)
+    all_df_num = sp.transform(all_df)
+    print(all_df_num.head())
+    print(all_df.shape)
+    print("降维处理结束...")
+    return all_df_num
+
+'''
+拆分数据集
+'''
+def split_data(all_df,train_x,test):
+    assert len(all_df) > 0 and len(train_x) > 0 and len(test) > 0
+    print("拆分数据集开始...")
+    train_x_df = all_df.loc[train_x.index]
+    test_x_df = all_df.loc[test.index]
+    print(train_x_df.shape," ",test_x_df.shape)
+    if train_x_df.shape[1]==all_df.shape[1] or test_x_df.shape[1]==all_df.shape[1]:
+        raise NotImplementedError("拆分数据集失败...")
+    print("拆分数据集结束...")
+    return train_x_df,test_x_df
+
+'''
+离群点处理(可选，很少用,这次先不用，最后看情况调用)
+离群点就是突然有些数特别大，这个要根据业务来考虑是否去掉。skt-learn用EllipticEnvelope检测离群点。
+离群点具体看: https://www.cnblogs.com/Gihub/p/3828940.html
+高斯分布下，EmpiricalCovariance效果好于OneClassSVM。plot_outlier_detection_0011111
+在非高斯分布下，OneClassSVM效果好于EmpiricalCovariance。
+plot_outlier_detection_0021111
+在非高斯分布下，OneClassSVM效果好于EmpiricalCovariance。
+plot_outlier_detection_0031111
+除了上述算法外，Python 的Sklearn机器学习库还提供了EmpiricalCovariance和MinCovDet两种算法。
+EmpiricalCovariance是基于最大似然协方差估计的算法。MinCovDet是基于最小协方差行列式（Minimum Covariance Determinant，简称MCD）的算法，是鲁棒协方差估计。
+'''
+from sklearn.covariance import EllipticEnvelope
+from sklearn.random_projection import SparseRandomProjection
+def feature_outlier(X_train,y_train,test):
+    #是得到一个预测值。
+    assert len(X_train)>0 and len(y_train)>0
+    eln = EllipticEnvelope(contamination=0.261)
+    eln.fit(X_train)
+    all_df_y = eln.predict(y_train)
+    return all_df_y
+
+'''
+特征提取,用三个方法分别尝试。
+(1)随机森林提取特征
+'''
+def feature_extraction_rf(X_train,X_test,y_train):
+    assert len(X_train) > 0 and len(X_test) > 0 and len(y_train) > 0
+    print("递归特征消除选择法提取特征开始...")
+    NUM = 17
+    rd_model = RandomForestRegressor(n_estimators=150,max_depth=3)
+    scores = []
+    names = X_train.columns
+    for i in range(X_train.shape[1]):
+        score = cross_val_score(rd_model, X_train, y_train, scoring="r2",
+                                cv=ShuffleSplit(len(X_train), 3, .3))
+        scores.append((round(np.mean(score), 3), names[i]))
+    featureList = sorted(zip(map(lambda x:x,scores),names),reverse=True)
+    featureList = [i[1] for i in featureList][:NUM]
+    X_train = X_train[featureList]
+    X_test = X_test[featureList]
+    if X_train.shape[1]!= NUM or X_test.shape[1] != NUM:
+        raise NotImplementedError("随机森林提取特征处理失败")
+    print("随机森林提取特征结束...")
+    return X_train,X_test
+
+'''
+(2)递归特征消除选择法提取特征(可选)
+'''
+def feature_extraction_ref(X_train,X_test,y_train):
+    assert len(X_train)>0 and len(X_test)>0 and len(y_train)>0
+    print("递归特征消除选择法提取特征开始...")
+    NUM = 17
+    lr = LinearRegression()
+    ref = RFE(lr, n_features_to_select=NUM)
+    ref.fit(X_train,y_train)
+    features = ref.ranking_
+    print(features)
+    score = X_train.columns
+    features_list = []
+    for i in range(len(features)):
+        if (features[i]==1):
+            features_list.append(score[i])
+
+    X_train = X_train[features_list]
+    X_test = X_test[features_list]
+    print(X_train.shape," ",X_test.shape)
+    if X_train.shape[1]!= NUM or X_test.shape[1] != NUM:
+        raise NotImplementedError("递归特征消除选择法处理失败")
+    print("递归特征消除选择法提取特征结束...")
+    return X_train,X_test
+
+'''
+(3)稳定性选择法提取特征(可选)
+'''
+def feature_extraction_RandomLasso(X_train,X_test,y_train):
+    from sklearn.linear_model import RandomizedLasso
+    assert len(X_train) > 0 and len(X_test) > 0 and len(y_train) > 0
+    print("稳定性选择法提取特征开始...")
+    NUM = 17
+    randomLasso = RandomizedLasso()
+    randomLasso.fit(X_train, y_train)
+    features = randomLasso.scores_
+    score = X_train.columns
+    print(features)
+    print(sorted(zip(map(lambda x:round(x,4),features),score),reverse = True))
+    featureList = sorted(zip(map(lambda x:round(x,4),features),score),reverse = True)
+    featureList = [i[1] for i in featureList][:NUM]
+    X_train = X_train[featureList]
+    X_test = X_test[featureList]
+    print(X_train.shape," ",X_test.shape)
+    if X_train.shape[1]!= NUM or X_test.shape[1] != NUM:
+        raise NotImplementedError("稳定性选择法提取特征处理失败")
+    print("稳定性选择法提取特征结束...")
+    return X_train,X_test
+
+'''
+柯尔莫哥洛夫-斯米尔诺夫测试测试训练数据和测试数据
+'''
+def ks_sample(X_train,X_test):
+    from scipy.stats import ks_2samp
+    assert len(X_train) > 0 and len(X_test) > 0
+    print("柯尔莫哥洛夫-斯米尔诺夫测试开始...")
+    KS_VALUE = 0.01
+    KS_P= 0.3
+    different_feature = []
+    for i in X_train.columns:
+        ks_p,ks_value = ks_2samp(X_train[i].values,X_test[i].values)
+        if ks_value<=KS_VALUE and ks_p >KS_P:
+            different_feature.append(i)
+
+    for j in different_feature:
+        if j in X_train.columns:
+            X_train.drop(j,axis = 1,inplace=True)
+            X_test.drop(j,axis = 1,inplace=True)
+
+    print(X_train.shape," ",X_test.shape)
+    print(X_train.head()," ",X_test.shape)
+    print("柯尔莫哥洛夫-斯米尔诺夫测试结束...")
+    return X_train,X_test
+
+
+'''
+LR构建
+'''
+
+'''
+随机森林构建
+'''
+
+'''
+GBDT构建
+'''
+
+'''
+XGB构建
+'''
+
+'''
+LGB构建
+'''
+
+'''
+LASSO构建
+'''
+
+'''
+FM构建
+'''
+
+'''
+FFM构建
+'''
+
+'''
+下面都是一些功能函数
+'''
+# 结果衡量
+def print_metrics(true_values, predicted_values):
+    print ("Accuracy: ", metrics.accuracy_score(true_values, predicted_values))
+    print ("AUC: ", metrics.roc_auc_score(true_values, predicted_values))
+    print ("Confusion Matrix: ", + metrics.confusion_matrix(true_values, predicted_values))
+    print (metrics.classification_report(true_values, predicted_values))
+
+# 拟合分类器
+def classify(classifier_class, train_input, train_targets):
+    classifier_object = classifier_class()
+    classifier_object.fit(train_input, train_targets)
+    return classifier_object
+
+# 模型存储
+def save_model(clf):
+    joblib.dump(clf, 'classifier.pkl')
+
+def main():
+    #under_sample_load_data()                                        #拆分数据集
+    #merge_excel_data()                                              #读取拆分后的数据
+    train, train_y, train_x, test = load_input()                        #加载数据
+    data_exploration(train)                                          #数据探索
+    all_df = merge_data(train_x,test)                                #数据合并
+    all_df = parse_time(all_df)                                      #离散时间，后续可能根据结果更新(可选)
+    all_df = parse_feature(all_df)                                   #增加特征，后续可能根据结果更新(可选)
+    all_df = feature_splicing(all_df)                                #特征拼接, 后续可能根据结果更新(可选)
+    all_df = parse_hot(all_df)                                       #非数值型离散化
+    all_df = numeric_non_scale(all_df)                               #非数值型编码
+    all_df = numeric_acale(all_df)                                   #数值型标准化(里面包含了去nan值)
+    all_df = feature_selection(all_df)                               #特征选择
+    all_df = feature_noisy(all_df)                                   #去噪点(可选),里面附带降维操作。
+    #all_df = SparseRandomProjection_parse(all_df)                    #降维(可选)
+    train_x, test = split_data(all_df,train_x,test)                                #数据集拆分
+    train_x, test = feature_extraction_ref(train_x, test,train_y)    #特征提取(可选)
+    train_x, test = ks_sample(train_x, test)                         #柯尔莫哥洛夫-斯米尔诺夫测试训练集和测试集差异性
+    all_df = feature_outlier(train_x, train_y,test)                  #去离群点(可选)由于业务中确实会出现离群点，而一些限制条件我们之前已经限制完，所以这次先不处理离群点看看结果而定。
+    print(all_df)
+
+if __name__ == '__main__':
+    main()
+
+
+
+
+
+
+
+
