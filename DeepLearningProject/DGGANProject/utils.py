@@ -14,11 +14,12 @@ from six.moves import xrange
 pp = pprint.PrettyPrinter()
 
 get_stddev = lambda x, k_h, k_w: 1/math.sqrt(k_w*k_h*x.get_shape()[-1])
-
+#读取图像数据
 def get_image(image_path, input_height, input_width,
               resize_height=64, resize_width=64,
               is_crop=True, is_grayscale=False):
   image = imread(image_path, is_grayscale)
+  #做图像转换，也就是中心化操作。也就是crop,以中心开始取图像来缩小。
   return transform(image, input_height, input_width,
                    resize_height, resize_width, is_crop)
 
@@ -55,7 +56,7 @@ def center_crop(x, crop_h, crop_w,
   i = int(round((w - crop_w)/2.))
   return scipy.misc.imresize(
       x[j:j+crop_h, i:i+crop_w], [resize_h, resize_w])
-
+#图像的中心化操作，也就是crop,以中心开始取图像来缩小。input是指定的，resize是我们希望得到的大小。
 def transform(image, input_height, input_width, 
               resize_height=64, resize_width=64, is_crop=True):
   if is_crop:
