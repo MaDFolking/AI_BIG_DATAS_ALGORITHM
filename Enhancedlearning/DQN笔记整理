@@ -1,0 +1,707 @@
+Deep Q-Network 学习笔记（一）—— Q-Learning 学习与实现过程中碰到的一些坑
+这方面的资料比较零散，学起来各种碰壁，碰到各种问题，这里就做下学习记录。
+
+ 
+
+参考资料：
+
+https://morvanzhou.github.io/
+
+非常感谢莫烦老师的教程
+
+ 
+
+http://mnemstudio.org/path-finding-q-learning-tutorial.htm
+
+http://www.cnblogs.com/dragonir/p/6224313.html
+
+这篇文章也是用非常简单的说明将 Q-Learning 的过程给讲解清楚了
+
+ 
+
+http://www.cnblogs.com/jinxulin/tag/%E5%A2%9E%E5%BC%BA%E5%AD%A6%E4%B9%A0/
+
+还有感谢这位园友，将增强学习的原理讲解的非常清晰
+
+ 
+
+这里还是先以上面教程中的例子来实现 Q-Learning。
+
+ 
+
+目录：
+
+Deep Q-Network 学习笔记（一）—— Q-Learning
+
+Deep Q-Network 学习笔记（二）—— Q-Learning与神经网络结合使用
+
+ 
+
+一、思路
+ 
+
+                                     图 1.1
+
+ 
+
+这里，先自己对那个例子的理解总结一下。
+
+要解决的问题是：如上图 1.1 中有 5 个房间，分别被标记成 0-4，房间外可以看成是一个大的房间，被标记成 5，现在智能程序 Agent 被随机丢在 0-4 号 5 个房间中的任意 1 个，目标是让它寻找到离开房间的路（即：到达 5 号房间）。
+
+图片描述如下：
+
+
+
+                                   图 1.2
+
+ 
+
+给可以直接移动到 5 号房间的动作奖励 100 分，即：图1.2中，4 到 5 、 1 到 5 和 5 到 5 的红线。
+
+在其它几个可移动的房间中移动的动作奖励 0 分。
+
+如下图：
+
+
+
+                                   图 1.3
+
+ 
+
+假设 Agent 当前的位置是在 2 号房间，这里就将 Agent 所在的位置做为“状态”，也就是 Agent 当前的状态是 2，当前 Agent 只能移动到 3 号房间，当它移动到 3 号房间的时候，状态就变为了 3，此时得到的奖励是 0 分。
+
+而 Agent 根据箭头的移动则是一个“行为”。
+
+根据状态与行为得到的奖励可以组成以下矩阵。
+
+
+
+                          图 1.4
+
+同时，可以使用一个 Q 矩阵，来表示 Agent 学习到的知识，在图 1.4 中，“-1”表示不可移动的位置，比如从 2 号房间移动到 1 号房间，由于根本就没有门，所以没办法过去。
+
+
+
+                    图 1.5
+
+该 Q 矩阵就表示 Agent 在各种状态下，做了某种行为后自己给打的分，也就是将经验数据化，由于 Agent 还没有行动过，所以这里全是 0。
+
+在 Q-Learning 算法中，计算经验得分的公式如下：
+
+Q(state, action) = Q(state, action) + α(R(state, action) + Gamma * Max[Q(next state, all actions)] - Q(state, action))
+
+当 α 的值是 1 时，公式如下：
+
+Q(state, action) = R(state, action) + Gamma * Max[Q(next state, all actions)]
+
+ 
+
+state： 表示 Agent 当前状态。
+
+action： 表示 Agent 在当前状态下要做的行为。
+
+next state： 表示 Agent 在 state 状态下执行了 action 行为后达到的新的状态。
+
+Q(state, action)： 表示 Agent 在 state 状态下执行了 action 行为后学习到的经验，也就是经验分数。
+
+R(state, action)： 表示 Agent 在 state 状态下做 action 动作后得到的即时奖励分数。
+
+Max[Q(next state, all actions)]： 表示 Agent 在 next state 状态下，自我的经验中，最有价值的行为的经验分数。
+
+Gamma： ，γ，表示折损率，也就是未来的经验对当前状态执行 action 的重要程度。
+
+ 
+
+二、算法流程
+Agent 通过经验去学习。Agent将会从一个状态到另一个状态这样去探索，直到它到达目标状态。我们称每一次这样的探索为一个场景（episode）。
+每个场景就是 Agent 从起始状态到达目标状态的过程。每次 Agent 到达了目标状态，程序就会进入到下一个场景中。
+
+1. 初始化 Q 矩阵，并将初始值设置成 0。
+
+2. 设置好参数 γ 和得分矩阵 R。
+
+3. 循环遍历场景（episode）：
+
+    （1）随机初始化一个状态 s。
+
+    （2）如果未达到目标状态，则循环执行以下几步：
+
+           ① 在当前状态 s 下，随机选择一个行为 a。
+
+           ② 执行行为 a 得到下一个状态 s`。
+
+           ③ 使用 Q(state, action) = R(state, action) + Gamma * Max[Q(next state, all actions)] 公式计算 Q(state, action) 。
+
+           ④ 将当前状态 s 更新为 s`。
+
+ 
+
+设当前状态 s 是 1， γ =0.8和得分矩阵 R，并初始化 Q 矩阵：
+
+
+
+
+
+由于在 1 号房间可以走到 3 号房间和 5 号房间，现在随机选一个，选到了 5 号房间。
+
+现在根据公式来计算，Agent 从 1 号房间走到 5 号房间时得到的经验分数 Q(1, 5) ：
+
+1.当 Agent 从 1 号房间移动到 5 号房间时，得到了奖励分数 100（即：R(1, 5) = 100）。
+
+2.当 Agent 移动到 5 号房间后，它可以执行的动作有 3 个：移动到 1 号房间（0 分）、移动到 4 号房间（0 分）和移动到 5 号房间（0 分）。注意，这里计算的是经验分数，也就是 Q 矩阵，不是 R 矩阵！
+
+所以，Q(1, 5) = 100 + 0.8 * Max[Q(5, 1), Q(5, 4), Q(5, 5)] = 100 + 0.8 * Max{0, 0, 0} = 100 
+
+ 
+
+在次迭代进入下一个episode：
+
+随机选择一个初始状态，这里设 s = 3，由于 3 号房间可以走到 1 号房间、 2 号房间和 4 号房间，现在随机选一个，选到了 1 号房间。
+
+步骤同上得：Q(3, 1) = 0 + 0.8 * Max[Q(1, 3), Q(1, 5)] = 0 + 0.8 * Max{0, 100} = 0 + 0.8 * 100 = 80
+
+即：
+
+
+
+ 
+
+三、程序实现
+ 先引入 numpy:
+
+import numpy as np
+初始化：
+
+复制代码
+# 动作数。
+ACTIONS = 6
+
+# 探索次数。
+episode = 100
+
+# 目标状态，即：移动到 5 号房间。
+target_state = 5
+
+# γ，折损率，取值是 0 到 1 之间。
+gamma = 0.8
+
+# 经验矩阵。
+q = np.zeros((6, 6))
+
+
+def create_r():
+    r = np.array([[-1, -1, -1, -1, 0, -1],
+                  [-1, -1, -1, 0, -1, 100.0],
+                  [-1, -1, -1, 0, -1, -1],
+                  [-1, 0, 0, -1, 0, -1],
+                  [0, -1, -1, 1, -1, 100],
+                  [-1, 0, -1, -1, 0, 100],
+                  ])
+    return r
+复制代码
+ 
+
+执行代码：
+
+特别注意红色字体部分，当程序随机到不可移动的位置的时候，直接给于死亡扣分，因为这不是一个正常的操作，比如 从 4 号房间移动到 1 号房间，但这两个房间根本没有门可以直接到。
+
+至于为什么不使用公式来更新，是因为，如果 Q(4, 5)和Q(1, 5)=100分，
+
+当随机到(4, 1)时，Q(4, 1)的经验值不但没有减少，反而当成了一个可移动的房间计算，得到 79 分，即：Q(4, 1) = 79，
+
+当随机到(2, 1)的次数要比(4, 5)多时，就会出现Q(4, 1)的分数要比Q(4, 5)高的情况，这个时候，MaxQ 选择到的就一直是错误的选择。
+
+复制代码
+if __name__ == '__main__':
+    r = create_r()
+
+    print("状态与动作的得分矩阵:")
+    print(r)
+
+    # 搜索次数。
+    for index in range(episode):
+
+        # Agent 的初始位置的状态。
+        start_room = np.random.randint(0, 5)
+
+        # 当前状态。
+        current_state = start_room
+
+        while current_state != target_state:
+            # 当前状态中的随机选取下一个可执行的动作。
+            current_action = np.random.randint(0, ACTIONS)
+
+            # 执行该动作后的得分。
+            current_action_point = r[current_state][current_action]
+
+            if current_action_point < 0:
+                q[current_state][current_action] = current_action_point
+            else:
+                # 得到下一个状态。
+                next_state = current_action
+
+                # 获得下一个状态中，在自我经验中，也就是 Q 矩阵的最有价值的动作的经验得分。
+                next_state_max_q = q[next_state].max()
+
+                # 当前动作的经验总得分 = 当前动作得分 + γ X 执行该动作后的下一个状态的最大的经验得分
+                # 即：积累经验 = 动作执行后的即时奖励 + 下一状态根据现有学习经验中最有价值的选择 X 折扣率
+                q[current_state][current_action] = current_action_point + gamma * next_state_max_q
+
+                current_state = next_state
+
+    print("经验矩阵:")
+    print(q)
+
+    start_room = np.random.randint(0, 5)
+    current_state = start_room
+
+    step = 0
+
+    while current_state != target_state:
+        next_state = np.argmax(q[current_state])
+
+        print("Agent 由", current_state, "号房间移动到了", next_state, "号房间")
+
+        current_state = next_state
+
+        step += 1
+
+    print("Agent 在", start_room, "号房间开始移动了", step, "步到达了目标房间 5")
+复制代码
+下面是运行结果图：
+
+
+
+ 
+
+完整代码：
+
+复制代码
+import numpy as np
+
+# 动作数。
+ACTIONS = 6
+
+# 探索次数。
+episode = 100
+
+# 目标状态，即：移动到 5 号房间。
+target_state = 5
+
+# γ，折损率，取值是 0 到 1 之间。
+gamma = 0.8
+
+# 经验矩阵。
+q = np.zeros((6, 6))
+
+
+def create_r():
+    r = np.array([[-1, -1, -1, -1, 0, -1],
+                  [-1, -1, -1, 0, -1, 100.0],
+                  [-1, -1, -1, 0, -1, -1],
+                  [-1, 0, 0, -1, 0, -1],
+                  [0, -1, -1, 1, -1, 100],
+                  [-1, 0, -1, -1, 0, 100],
+                  ])
+    return r
+
+
+def get_next_action():
+    # # 获得当前可执行的动作集合。
+    # actions = np.where(r[current_state] >= 0)[0]
+    #
+    # # 获得可执行的动作数。
+    # action_count = actions.shape[0]
+    #
+    # # 随机选取一个可执行的动作。
+    # next_action = np.random.randint(0, action_count)
+    #
+    # # 执行动作，获得下一个状态。
+    # next_state = actions[next_action]
+    next_action = np.random.randint(0, ACTIONS)
+
+    return next_action
+
+
+if __name__ == '__main__':
+    r = create_r()
+
+    print("状态与动作的得分矩阵:")
+    print(r)
+
+    # 搜索次数。
+    for index in range(episode):
+
+        # Agent 的初始位置的状态。
+        start_room = np.random.randint(0, 5)
+
+        # 当前状态。
+        current_state = start_room
+
+        while current_state != target_state:
+            # 当前状态中的随机选取下一个可执行的动作。
+            current_action = get_next_action()
+
+            # 执行该动作后的得分。
+            current_action_point = r[current_state][current_action]
+
+            if current_action_point < 0:
+                q[current_state][current_action] = current_action_point
+            else:
+                # 得到下一个状态。
+                next_state = current_action
+
+                # 获得下一个状态中，在自我经验中，也就是 Q 矩阵的最有价值的动作的经验得分。
+                next_state_max_q = q[next_state].max()
+
+                # 当前动作的经验总得分 = 当前动作得分 + γ X 执行该动作后的下一个状态的最大的经验得分
+                # 即：积累经验 = 动作执行后的即时奖励 + 下一状态根据现有学习经验中最有价值的选择 X 折扣率
+                q[current_state][current_action] = current_action_point + gamma * next_state_max_q
+
+                current_state = next_state
+
+    print("经验矩阵:")
+    print(q)
+
+    start_room = np.random.randint(0, 5)
+    current_state = start_room
+
+    step = 0
+
+    while current_state != target_state:
+        next_state = np.argmax(q[current_state])
+
+        print("Agent 由", current_state, "号房间移动到了", next_state, "号房间")
+
+        current_state = next_state
+
+        step += 1
+
+    print("Agent 在", start_room, "号房间开始移动了", step, "步到达了目标房间 5")
+    
+    考资料：
+
+https://morvanzhou.github.io/
+
+非常感谢莫烦老师的教程
+
+ 
+
+http://mnemstudio.org/path-finding-q-learning-tutorial.htm
+
+http://www.cnblogs.com/dragonir/p/6224313.html
+
+这篇文章也是用非常简单的说明将 Q-Learning 的过程给讲解清楚了
+
+ 
+
+http://www.cnblogs.com/jinxulin/tag/%E5%A2%9E%E5%BC%BA%E5%AD%A6%E4%B9%A0/
+
+还有感谢这位园友，将增强学习的原理讲解的非常清晰
+
+ 
+
+深度增强学习（DRL）漫谈 - 从DQN到AlphaGo
+
+这篇文章详细描写了 DQN 的演变过程，建议先看看 
+
+ 
+
+目录：
+
+Deep Q-Network 学习笔记（一）—— Q-Learning
+
+Deep Q-Network 学习笔记（二）—— Q-Learning与神经网络结合使用
+
+ 
+
+这里将使用 tensorflow 框架重写上一篇的示例。
+
+一、思路
+Q-Learning与神经网络结合使用就是 Deep Q-Network，简称 DQN。在现实中，状态的数量极多，并且需要人工去设计特征，而且一旦特征设计不好，则得不到想要的结果。
+
+神经网络正是能处理解决这个问题，取代原来 Q 表的功能。
+
+当神经网络与Q-Learning结合使用的时候，又会碰到几个问题：
+
+1.loss 要怎么计算？
+增强学习是试错学习(Trail-and-error)，由于没有直接的指导信息，智能体要以不断与环境进行交互，通过试错的方式来获得最佳策略。
+
+Q-Learning正是其中的一种，所以Q值表中表示的是当前已学习到的经验。而根据公式计算出的 Q 值是智能体通过与环境交互及自身的经验总结得到的一个分数（即：目标 Q 值）。
+
+最后使用目标 Q 值(target_q)去更新原来旧的 Q 值(q)。
+
+而目标 Q 值与旧的 Q 值的对应关系，正好是监督学习神经网络中结果值与输出值的对应关系。
+
+所以，loss = (target_q - q)^2
+
+即：整个训练过程其实就是 Q 值(q)向目标 Q 值(target_q)逼近的过程。
+
+2.训练样本哪来？
+在 DQN 中有 Experience Replay 的概念，就是经验回放。
+
+就是先让智能体去探索环境，将经验（记忆）池累积到一定程度，在随机抽取出一批样本进行训练。
+
+为什么要随机抽取？因为智能体去探索环境时采集到的样本是一个时间序列，样本之间具有连续性，如果每次得到样本就更新Q值，受样本分布影响，会对收敛造成影响。
+
+从现在开始，一定要理清楚算法的所有思路，比如什么时候该做什么，怎么随机选择动作，神经网络的参数是否调试完成等等，各种问题调试都没结果的，就因为这个卡在这里大半个星期才搞定。
+
+二、模拟流程
+1.随机初始化一个状态 s，初始化记忆池，设置观察值。
+
+2.循环遍历（是永久遍历还是只遍历一定次数这个自己设置）：
+
+  （1）根据策略选择一个行为（a）。
+
+  （2）执行该行动(a)，得到奖励（r）、执行该行为后的状态 s`和游戏是否结束 done。
+
+  （3）保存 s, a, r, s`, done 到记忆池里。
+
+  （4）判断记忆池里的数据是否足够（即：记忆池里的数据数量是否超过设置的观察值），如果不够，则转到（5）步。
+
+         ① 在记忆池里随机抽取出一部分数据做为训练样本。
+
+         ② 将所有训练样本的 s`做为神经网络的输入值，进行批量处理，得到 s`状态下每个行为的 q 值的表。
+
+         ③ 根据公式计算出 q 值表对应的 target_q 值表。
+
+             公式：Q(s, a) = r + Gamma * Max[Q(s`, all actions)]
+
+         ④ 使用 q 与 target_q 训练神经网络。
+
+  （5）判断游戏是否结束。
+
+         ① 游戏结束，给 s 随机设置一个状态。
+
+         ① 未结束，则当前状态 s 更新为 s`。
+
+三、代码实现
+首先，创建一个类来实现 DQN。
+
+复制代码
+import tensorflow as tf
+import numpy as np
+from collections import deque
+import random
+
+
+class DeepQNetwork:
+    r = np.array([[-1, -1, -1, -1, 0, -1],
+                  [-1, -1, -1, 0, -1, 100.0],
+                  [-1, -1, -1, 0, -1, -1],
+                  [-1, 0, 0, -1, 0, -1],
+                  [0, -1, -1, 1, -1, 100],
+                  [-1, 0, -1, -1, 0, 100],
+                  ])
+
+    # 执行步数。
+    step_index = 0
+
+    # 状态数。
+    state_num = 6
+
+    # 动作数。
+    action_num = 6
+
+    # 训练之前观察多少步。
+    OBSERVE = 1000.
+
+    # 选取的小批量训练样本数。
+    BATCH = 20
+
+    # epsilon 的最小值，当 epsilon 小于该值时，将不在随机选择行为。
+    FINAL_EPSILON = 0.0001
+
+    # epsilon 的初始值，epsilon 逐渐减小。
+    INITIAL_EPSILON = 0.1
+
+    # epsilon 衰减的总步数。
+    EXPLORE = 3000000.
+
+    # 探索模式计数。
+    epsilon = 0
+
+    # 训练步数统计。
+    learn_step_counter = 0
+
+    # 学习率。
+    learning_rate = 0.001
+
+    # γ经验折损率。
+    gamma = 0.9
+
+    # 记忆上限。
+    memory_size = 5000
+
+    # 当前记忆数。
+    memory_counter = 0
+
+    # 保存观察到的执行过的行动的存储器，即：曾经经历过的记忆。
+    replay_memory_store = deque()
+
+    # 生成一个状态矩阵（6 X 6），每一行代表一个状态。
+    state_list = None
+
+    # 生成一个动作矩阵。
+    action_list = None
+
+    # q_eval 网络。
+    q_eval_input = None
+    action_input = None
+    q_target = None
+    q_eval = None
+    predict = None
+    loss = None
+    train_op = None
+    cost_his = None
+    reward_action = None
+
+    # tensorflow 会话。
+    session = None
+
+    def __init__(self, learning_rate=0.001, gamma=0.9, memory_size=5000):
+        self.learning_rate = learning_rate
+        self.gamma = gamma
+        self.memory_size = memory_size
+
+        # 初始化成一个 6 X 6 的状态矩阵。
+        self.state_list = np.identity(self.state_num)
+
+        # 初始化成一个 6 X 6 的动作矩阵。
+        self.action_list = np.identity(self.action_num)
+
+        # 创建神经网络。
+        self.create_network()
+
+        # 初始化 tensorflow 会话。
+        self.session = tf.InteractiveSession()
+
+        # 初始化 tensorflow 参数。
+        self.session.run(tf.initialize_all_variables())
+
+        # 记录所有 loss 变化。
+        self.cost_his = []
+
+    def create_network(self):
+        """
+        创建神经网络。
+        :return:
+        """
+        pass
+
+    def select_action(self, state_index):
+        """
+        根据策略选择动作。
+        :param state_index: 当前状态。
+        :return:
+        """
+        pass
+
+    def save_store(self, current_state_index, current_action_index, current_reward, next_state_index, done):
+        """
+        保存记忆。
+        :param current_state_index: 当前状态 index。
+        :param current_action_index: 动作 index。
+        :param current_reward: 奖励。
+        :param next_state_index: 下一个状态 index。
+        :param done: 是否结束。
+        :return:
+        """
+        pass
+
+    def step(self, state, action):
+        """
+        执行动作。
+        :param state: 当前状态。
+        :param action: 执行的动作。
+        :return:
+        """
+        pass
+
+    def experience_replay(self):
+        """
+        记忆回放。
+        :return:
+        """
+        pass
+
+    def train(self):
+        """
+        训练。
+        :return:
+        """
+        pass
+
+    def pay(self):
+        """
+        运行并测试。
+        :return:
+        """
+        pass
+
+
+if __name__ == "__main__":
+    q_network = DeepQNetwork()
+    q_network.pay()
+复制代码
+ 
+
+1.将状态与动作初始化成以下矩阵，以方便处理。
+
+
+
+            图 3.1
+
+ 
+
+ 四、创建神经网络
+然后，创建一个神经网络，并使用该神经网络来替换掉 Q 值表（上一篇中的 Q 矩阵）
+
+神经网络的输入是 Agent 当前的状态，输出是 Agent 当前状态可以执行的动作的 Q 值表。
+
+由于总共有 6 个状态和 6 种动作，所以，这里将创建一个简单 3 层的神经网络，输入层的参数是 6 个和输出层输出 6 个值，运行并调试好参数，确认能正常运行。
+
+ 测试代码：
+
+复制代码
+import tensorflow as tf
+import numpy as np
+
+input_num = 6
+output_num = 6
+x_data = np.linspace(-1, 1, 300).reshape((-1, input_num))  # 转为列向量
+
+noise = np.random.normal(0, 0.05, x_data.shape)
+y_data = np.square(x_data) + 0.5 + noise
+
+xs = tf.placeholder(tf.float32, [None, input_num])  # 样本数未知，特征数为 6，占位符最后要以字典形式在运行中填入
+ys = tf.placeholder(tf.float32, [None, output_num])
+
+neuro_layer_1 = 3
+w1 = tf.Variable(tf.random_normal([input_num, neuro_layer_1]))
+b1 = tf.Variable(tf.zeros([1, neuro_layer_1]) + 0.1)
+l1 = tf.nn.relu(tf.matmul(xs, w1) + b1)
+
+neuro_layer_2 = output_num
+w2 = tf.Variable(tf.random_normal([neuro_layer_1, neuro_layer_2]))
+b2 = tf.Variable(tf.zeros([1, neuro_layer_2]) + 0.1)
+l2 = tf.matmul(l1, w2) + b2
+
+# reduction_indices=[0] 表示将列数据累加到一起。
+# reduction_indices=[1] 表示将行数据累加到一起。
+loss = tf.reduce_mean(tf.reduce_sum(tf.square((ys - l2)), reduction_indices=[1]))
+
+# 选择梯度下降法
+train = tf.train.GradientDescentOptimizer(0.001).minimize(loss)
+# train = tf.train.AdamOptimizer(1e-1).minimize(loss)
+
+init = tf.initialize_all_variables()
+sess = tf.Session()
+sess.run(init)
+
+for i in range(100000):
+    sess.run(train, feed_dict={xs: x_data, ys: y_data})
+    if i % 1000 == 0:
+        print(sess.run(loss, feed_dict={xs: x_data, ys: y_data}))
+        
+     
