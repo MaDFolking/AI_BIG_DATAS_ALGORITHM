@@ -44,6 +44,7 @@ def main(_):
   run_config = tf.ConfigProto()
   run_config.gpu_options.allow_growth=True
 
+  #创建DCGAN模型
   with tf.Session(config=run_config) as sess:
     if FLAGS.dataset == 'mnist':
       dcgan = DCGAN(
@@ -63,17 +64,17 @@ def main(_):
     else:
       dcgan = DCGAN(
           sess,
-          input_width=FLAGS.input_width,
-          input_height=FLAGS.input_height,
-          output_width=FLAGS.output_width,
-          output_height=FLAGS.output_height,
-          batch_size=FLAGS.batch_size,
-          c_dim=FLAGS.c_dim,
-          dataset_name=FLAGS.dataset,
-          input_fname_pattern=FLAGS.input_fname_pattern,
-          is_crop=FLAGS.is_crop,
-          checkpoint_dir=FLAGS.checkpoint_dir,
-          sample_dir=FLAGS.sample_dir)
+          input_width=FLAGS.input_width,                  #图像输入宽度。
+          input_height=FLAGS.input_height,                #图像输入高度。
+          output_width=FLAGS.output_width,                #图像输出宽度。
+          output_height=FLAGS.output_height,              #图像输出高度。
+          batch_size=FLAGS.batch_size,                    #一次迭代数量,超参数,一次性调大些可以防止欠你和，设置过大容易过拟合。
+          c_dim=FLAGS.c_dim,                              #通道数,灰度为1,彩色为3。
+          dataset_name=FLAGS.dataset,                     #数据集date_set的名字
+          input_fname_pattern=FLAGS.input_fname_pattern,  #输入名称
+          is_crop=FLAGS.is_crop,                          #判断是否进行crop,crop是以图像中心开始截取图像的一部分。
+          checkpoint_dir=FLAGS.checkpoint_dir,            #tensorflow用来保存模型参数的文件夹路径,用来设置每迭代多少次保存一次。
+          sample_dir=FLAGS.sample_dir)                    #生成图像的文件夹路径。
 
     if FLAGS.is_train:
       dcgan.train(FLAGS)
@@ -91,6 +92,8 @@ def main(_):
     # Below is codes for visualization
     OPTION = 1
     visualize(sess, dcgan, FLAGS, OPTION)
+#跑程序命令。
 # python main.py --dataset faces_ --is_train True
+
 if __name__ == '__main__':
   tf.app.run()
