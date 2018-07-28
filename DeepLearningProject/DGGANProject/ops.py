@@ -61,12 +61,13 @@ def conv2d(input_, output_dim,
     conv = tf.reshape(tf.nn.bias_add(conv, biases), conv.get_shape())
 
     return conv
-
+  
+#反卷积操作,原始论文中,h和w给定是5.长宽开始为2.
 def deconv2d(input_, output_shape,
        k_h=5, k_w=5, d_h=2, d_w=2, stddev=0.02,
        name="deconv2d", with_w=False):
   with tf.variable_scope(name):
-    # filter : [height, width, output_channels, in_channels]
+    #第一次反卷积后生成256个特征图。然后是输出和输入，还要有初始化的随机参数。
     w = tf.get_variable('w', [k_h, k_w, output_shape[-1], input_.get_shape()[-1]],
               initializer=tf.random_normal_initializer(stddev=stddev))
     
@@ -78,7 +79,8 @@ def deconv2d(input_, output_shape,
     except AttributeError:
       deconv = tf.nn.deconv2d(input_, w, output_shape=output_shape,
                 strides=[1, d_h, d_w, 1])
-
+      
+    #b的大小跟输出数一样。
     biases = tf.get_variable('biases', [output_shape[-1]], initializer=tf.constant_initializer(0.0))
     deconv = tf.reshape(tf.nn.bias_add(deconv, biases), deconv.get_shape())
 
@@ -90,9 +92,11 @@ def deconv2d(input_, output_shape,
 def lrelu(x, leak=0.2, name="lrelu"):
   return tf.maximum(x, leak*x)
 
+#我们model中的全连接层linear.最后的总维度是8000多，我们的基数是1024，所以是8倍关系。
+#我们的目的是将input转化为output。也就是全连接层到最后的输出层。
 def linear(input_, output_size, scope=None, stddev=0.02, bias_start=0.0, with_w=False):
   shape = input_.get_shape().as_list()
-
+  
   with tf.variable_scope(scope or "Linear"):
     matrix = tf.get_variable("Matrix", [shape[1], output_size], tf.float32,
                  tf.random_normal_initializer(stddev=stddev))
