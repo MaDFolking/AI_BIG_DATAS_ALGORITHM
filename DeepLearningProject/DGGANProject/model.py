@@ -19,44 +19,31 @@ class DCGAN(object):
          y_dim=None, z_dim=100, gf_dim=64, df_dim=64,
          gfc_dim=1024, dfc_dim=1024, c_dim=3, dataset_name='default',
          input_fname_pattern='*.jpg', checkpoint_dir=None, sample_dir=None):
-    """
 
-    Args:
-      sess: TensorFlow session
-      batch_size: The size of batch. Should be specified before training.
-      y_dim: (optional) Dimension of dim for y. [None]
-      z_dim: (optional) Dimension of dim for Z. [100]
-      gf_dim: (optional) Dimension of gen filters in first conv layer. [64]
-      df_dim: (optional) Dimension of discrim filters in first conv layer. [64]
-      gfc_dim: (optional) Dimension of gen units for for fully connected layer. [1024]
-      dfc_dim: (optional) Dimension of discrim units for fully connected layer. [1024]
-      c_dim: (optional) Dimension of image color. For grayscale input, set to 1. [3]
-    """
     self.sess = sess
     self.is_crop = is_crop
     self.is_grayscale = (c_dim == 1)
 
     self.batch_size = batch_size
-    self.sample_num = sample_num
+    self.sample_num = sample_num    #对D网络进行测试噪音的输入，比如迭代多少次后，进行一次64个噪音输入测试,观察它能生成什么。
 
     self.input_height = input_height
     self.input_width = input_width
     self.output_height = output_height
     self.output_width = output_width
 
-    self.y_dim = y_dim
-    self.z_dim = z_dim
+    self.y_dim = y_dim            #label
+    self.z_dim = z_dim            
 
-    self.gf_dim = gf_dim
-    self.df_dim = df_dim
+    self.gf_dim = gf_dim          #G网络中开始的噪音数据的维度向量。我们这里设置为100维度*1的向量
+    self.df_dim = df_dim          #feature的个数的基数，我们这里设置为64，也就是64*1,64*2
 
-    self.gfc_dim = gfc_dim
-    self.dfc_dim = dfc_dim
+    self.gfc_dim = gfc_dim        #G网络全连接层向量，一般是1024的倍数，我们这里是1024维度。
+    self.dfc_dim = dfc_dim        #D网络全连接层向量，一般是1024的倍数，我们这里是1024维度。
 
-    self.c_dim = c_dim
+    self.c_dim = c_dim            #最终生成的是灰度图1，还是彩色图3.这里是3.
 
-    # batch normalization : deals with poor initialization helps gradient flow
-    self.d_bn1 = batch_norm(name='d_bn1')
+    self.d_bn1 = batch_norm(name='d_bn1')   #DCGAN加入的batch正则也就是batch_norm,在conv与relu之间加batch_norm归一化操作(正则化)。
     self.d_bn2 = batch_norm(name='d_bn2')
 
     if not self.y_dim:
@@ -69,20 +56,24 @@ class DCGAN(object):
     if not self.y_dim:
       self.g_bn3 = batch_norm(name='g_bn3')
 
-    self.dataset_name = dataset_name
-    self.input_fname_pattern = input_fname_pattern
-    self.checkpoint_dir = checkpoint_dir
-    self.build_model()
-
+    self.dataset_name = dataset_name    #训练图像图片的名字
+    self.input_fname_pattern = input_fname_pattern  #取图片.jpg图片的
+    self.checkpoint_dir = checkpoint_dir  
+    self.build_model()  
+  
+  #G网络和D网络的参数初始化。
   def build_model(self):
     if self.y_dim:
       self.y= tf.placeholder(tf.float32, [self.batch_size, self.y_dim], name='y')
-
+    
+    #crop就是图片以中心为原点开始缩小截取，如果进行了crop,就是将图片变为64*64*3的。
     if self.is_crop:
       image_dims = [self.output_height, self.output_width, self.c_dim]
     else:
       image_dims = [self.input_height, self.input_height, self.c_dim]
-
+    
+    #输入数据，即真实图片和G网络生成图片的输入，俩者输入到D网络中，使其都认为是真的。
+    #真实图片和生成图片都是:batch_size*weight*height*channel
     self.inputs = tf.placeholder(
       tf.float32, [self.batch_size] + image_dims, name='real_images')
     self.sample_inputs = tf.placeholder(
@@ -90,11 +81,13 @@ class DCGAN(object):
 
     inputs = self.inputs
     sample_inputs = self.sample_inputs
-
+    
+    #生成网络最开始的输入,也就是噪音数据。第一个维度是不确定的batch,z_dim为100.注意是float32
     self.z = tf.placeholder(
       tf.float32, [None, self.z_dim], name='z')
     self.z_sum = histogram_summary("z", self.z)
-
+    
+    #以下是G,D网络的生成。
     if self.y_dim:
       self.G = self.generator(self.z, self.y)
       self.D, self.D_logits = \
@@ -109,20 +102,23 @@ class DCGAN(object):
 
       self.sampler = self.sampler(self.z)
       self.D_, self.D_logits_ = self.discriminator(self.G, reuse=True)
-
+    
+    #真实图片的输入。
     self.d_sum = histogram_summary("d", self.D)
+    #生成网络的输入
     self.d__sum = histogram_summary("d_", self.D_)
     self.G_sum = image_summary("G", self.G)
-
+    
+    #loss的定义，用交叉熵函数，跟逻辑回归一样。也就是sigmod.
     self.d_loss_real = tf.reduce_mean(
       tf.nn.sigmoid_cross_entropy_with_logits(
-        logits=self.D_logits, targets=tf.ones_like(self.D))) 
-    self.d_loss_fake = tf.reduce_mean(
+        logits=self.D_logits, targets=tf.ones_like(self.D)))#真实的图片，希望判别出来是1.不断地优化它。one_like取代1，新版本的tensorflow targets改成labels
+    self.d_loss_fake = tf.reduce_mean(  
       tf.nn.sigmoid_cross_entropy_with_logits(
-        logits=self.D_logits_, targets=tf.zeros_like(self.D_)))
+        logits=self.D_logits_, targets=tf.zeros_like(self.D_))) #G网络生辰的图片，我们希望D网络能判别出，也就是0.不断地优化它。用zeros_like取代。
     self.g_loss = tf.reduce_mean(
       tf.nn.sigmoid_cross_entropy_with_logits(
-        logits=self.D_logits_, targets=tf.ones_like(self.D_)))
+        logits=self.D_logits_, targets=tf.ones_like(self.D_)))#G网络的判别，它希望D网络判别成1，这样可以欺骗过去。
 
     self.d_loss_real_sum = scalar_summary("d_loss_real", self.d_loss_real)
     self.d_loss_fake_sum = scalar_summary("d_loss_fake", self.d_loss_fake)
@@ -137,32 +133,36 @@ class DCGAN(object):
     self.d_vars = [var for var in t_vars if 'd_' in var.name]
     self.g_vars = [var for var in t_vars if 'g_' in var.name]
 
-    self.saver = tf.train.Saver()
-
+    self.saver = tf.train.Saver()  #实例化节点，必须先做。
+    
+  #训练数据集。
   def train(self, config):
     """Train DCGAN"""
     if config.dataset == 'mnist':
       data_X, data_y = self.load_mnist()
     else:
-      data = glob(os.path.join("./data", config.dataset, self.input_fname_pattern))
+      data = glob(os.path.join("./data", config.dataset, self.input_fname_pattern)) #从文件夹中取出文件。
     #np.random.shuffle(data)
-
+    #论文中用AdamOptimizer优化求解，不是梯度下降。Adam的特点是每次迭代都控制学习率在一定范围，在GAN中效果更好。
     d_optim = tf.train.AdamOptimizer(config.learning_rate, beta1=config.beta1) \
               .minimize(self.d_loss, var_list=self.d_vars)
     g_optim = tf.train.AdamOptimizer(config.learning_rate, beta1=config.beta1) \
               .minimize(self.g_loss, var_list=self.g_vars)
+    #注意下面的写法。
     try:
       tf.global_variables_initializer().run()
     except:
       tf.initialize_all_variables().run()
-
+  
     self.g_sum = merge_summary([self.z_sum, self.d__sum,
       self.G_sum, self.d_loss_fake_sum, self.g_loss_sum])
     self.d_sum = merge_summary(
         [self.z_sum, self.d_sum, self.d_loss_real_sum, self.d_loss_sum])
     self.writer = SummaryWriter("./logs", self.sess.graph)
-
+    
+    #平滑的噪音向量。64*100
     sample_z = np.random.uniform(-1, 1, size=(self.sample_num , self.z_dim))
+    
     
     if config.dataset == 'mnist':
       sample_inputs = data_X[0:self.sample_num]
@@ -170,6 +170,7 @@ class DCGAN(object):
     else:
       sample_files = data[0:self.sample_num]
       sample = [
+          #读取图像数据
           get_image(sample_file,
                     input_height=self.input_height,
                     input_width=self.input_width,
@@ -178,18 +179,18 @@ class DCGAN(object):
                     is_crop=self.is_crop,
                     is_grayscale=self.is_grayscale) for sample_file in sample_files]
       if (self.is_grayscale):
-        sample_inputs = np.array(sample).astype(np.float32)[:, :, :, None]
+        sample_inputs = np.array(sample).astype(np.float32)[:, :, :, None] #sample_inputs是处理完的输入。都是-1到1的区间上。
       else:
         sample_inputs = np.array(sample).astype(np.float32)
   
     counter = 1
     start_time = time.time()
-
+    #进行判断，如果之前有训练过网络模型，就进行一次checkpoint.
     if self.load(self.checkpoint_dir):
       print(" [*] Load SUCCESS")
     else:
-      print(" [!] Load failed...")
-
+      print(" [!] Load failed...")  #如果之前没训练过，就从0开始训练。
+    #样本数/batch=epochs,也就是50000个图片，每次训练64，那么我们的迭代次数就是50000/64个epoch
     for epoch in xrange(config.epoch):
       if config.dataset == 'mnist':
         batch_idxs = min(len(data_X), config.train_size) // config.batch_size
@@ -216,13 +217,14 @@ class DCGAN(object):
             batch_images = np.array(batch).astype(np.float32)[:, :, :, None]
           else:
             batch_images = np.array(batch).astype(np.float32)
-
+        #生成网络z，把三个网络都准备好。
         batch_z = np.random.uniform(-1, 1, [config.batch_size, self.z_dim]) \
               .astype(np.float32)
 
         if config.dataset == 'mnist':
           # Update D network
           _, summary_str = self.sess.run([d_optim, self.d_sum],
+            #我们之前用place_holder格式，这里写到feed_dict字典中，然后再去迭代运行。
             feed_dict={ 
               self.inputs: batch_images,
               self.z: batch_z,
@@ -238,7 +240,7 @@ class DCGAN(object):
             })
           self.writer.add_summary(summary_str, counter)
 
-          # Run g_optim twice to make sure that d_loss does not go to zero (different from paper)
+       
           _, summary_str = self.sess.run([g_optim, self.g_sum],
             feed_dict={ self.z: batch_z, self.y:batch_labels })
           self.writer.add_summary(summary_str, counter)
@@ -279,7 +281,7 @@ class DCGAN(object):
         print("Epoch: [%2d] [%4d/%4d] time: %4.4f, d_loss: %.8f, g_loss: %.8f" \
           % (epoch, idx, batch_idxs,
             time.time() - start_time, errD_fake+errD_real, errG))
-
+        #每迭代100次保存一次，如果是GPU可以弄几千次，我们是CPU，100次保存一次吧。
         if np.mod(counter, 100) == 1:
           if config.dataset == 'mnist':
             samples, d_loss, g_loss = self.sess.run(
@@ -310,7 +312,7 @@ class DCGAN(object):
 
         if np.mod(counter, 100) == 2:
           self.save(config.checkpoint_dir, counter)
-
+  #D网络生成
   def discriminator(self, image, y=None, reuse=False):
     with tf.variable_scope("discriminator") as scope:
       if reuse:
@@ -342,8 +344,10 @@ class DCGAN(object):
         
         return tf.nn.sigmoid(h3), h3
 
+  #G网络生成
   def generator(self, z, y=None):
     with tf.variable_scope("generator") as scope:
+      #初始化维度，反卷积数值的设定，不要忘了判断dim.
       if not self.y_dim:
         s_h, s_w = self.output_height, self.output_width
         s_h2, s_w2 = conv_out_size_same(s_h, 2), conv_out_size_same(s_w, 2)
@@ -351,14 +355,16 @@ class DCGAN(object):
         s_h8, s_w8 = conv_out_size_same(s_h4, 2), conv_out_size_same(s_w4, 2)
         s_h16, s_w16 = conv_out_size_same(s_h8, 2), conv_out_size_same(s_w8, 2)
 
-        # project `z` and reshape
+        #全连接层，linear是做全连接层处理，我们上面最后输入的总维度数为8000多，所以取1024基数就是*8.
+        #这一步是我们G网络的第一步
         self.z_, self.h0_w, self.h0_b = linear(
             z, self.gf_dim*8*s_h16*s_w16, 'g_h0_lin', with_w=True)
-
+        #下面就是开始反卷积，这一步100*1*8000多翻卷集成4*4*500多*batch数量，第一个batch数设置为-1，也就是确定了3个维度求第一个维度。
+        #注意:卷积-batchnorm-relu的顺序
         self.h0 = tf.reshape(
             self.z_, [-1, s_h16, s_w16, self.gf_dim * 8])
         h0 = tf.nn.relu(self.g_bn0(self.h0))
-
+        #同理:h0当成下一层的输入。
         self.h1, self.h1_w, self.h1_b = deconv2d(
             h0, [self.batch_size, s_h8, s_w8, self.gf_dim*4], name='g_h1', with_w=True)
         h1 = tf.nn.relu(self.g_bn1(self.h1))
