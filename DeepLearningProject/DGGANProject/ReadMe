@@ -1,1 +1,4 @@
 对抗生成网络项目。
+按照我的格式，你可以按照路径来修改，在data里创建自己想要生成类型的图片。
+然后输入: --image_size 96 --output_size 48 --dataset face --is_crop True --is_train True --epoch 300
+其中dataset 后的face就是我们文件夹名称，可以根据你喜好更改。
