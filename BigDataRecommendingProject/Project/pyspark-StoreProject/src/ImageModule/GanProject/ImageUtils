@@ -1,0 +1,374 @@
+#在网上找的一些图像处理函数，以后可以在这使用。
+'''
+glob库用来list 某一个文件夹下的files;os库用来操作路径和文件夹等;pprint用于美观打印;gtime和strftime有用格式化日期;scipy.misc包含了很多和图像相关的有用的函数。
+24-27行的show_all_variables函数，调用了 slim.model_analyzer.analyze_vars(vars,print_info) 函数来打印model所有variables的信息。
+39-43行的imread函数封装了 scipy.misc.imread 函数,该函数参数 flatten = True 表示将color layer 展平成一个single gray-scale layer。
+48-73行的merge函数用于从一系列小图产生大图,images[0]表示小图的个数,h=images[1]表示小图的高,w = images[2]表示小图的宽，x_h = size[0]表示最终大图height应该扩展的倍数,x_w = size[1]表示最终大图width应该扩展的倍数。该函数最终生成一个高为h*x_h，宽为w*x_w的大图。表示大图的高度方向包含x_h个小图,宽度方向包含x_w个小图。
+75-85行定义了保存图像的imsave函数。注意 np.squeeze 可以去除数组中维度为1的那些维(降维),与之相反的操作是 np.expand_dims(arr,axis) 函数，可以给指定的axis维度增加一维。
+87-104行的center_crop函数的作用是中心化剪切处理,同时对图像进行了resize操作。
+106-126行的transform函数，也是对图像进行center_crop(可选)以及resize操作，只不过它最后将image array的每个元素的取值范围从(0,255)映射到(-1,1),(-1,1)是tanh函数的取值范围。
+132-193行的to_json函数将各个layers结构保存到json文件，我们不用这个函数，就不细说了。
+195-215行的make_gif函数可以将生成的序列图像转换为gif图像，这里使用moviepy库来完成这个工作，关于moviepy的介绍和使用，可以参考我之前的一篇文章。
+217-298行的visualize用于测试阶段生成图像样本，可以是单个jpg格式的图像，也可以是gif图像，还可以是小图拼接成的大图。visualize函数通过option变量的取值(可以取0,1,2,3,4五个值)来控制以五种不同的方式保存结果。
+option=0:这种情况只适用于dataset 不等于mnist的情况，直接将samples merge成一个大图，然后保存即可，其中大图共有batch_size张小图，每行和每列各有ceil(sqrt(batch_size))个;
+option=1:这种情况和option=0类似，只是它考虑到了dataset为mnist的情况，如果是mnist,则会随机生成batch_size个digit labels,然后从generator生成相应的数字，最后拼接成一个大图,这里我自己定义了一个save_random_digits函数用于将每次随机生成的数字保存到txt文件中去，这样后续可以验证生成的数字图像是否是我们希望生成的;
+option=2:这种情况下，不会生成一张大图，而是生成含有batch_size帧的gif图，默认时间是2s,如果生成gif失败，则会生成和option=1一样的大图;
+option=3:不能是mnist数据集，生成和option=2一样的gif。
+option=4:合成一张大图的gif,一共有batch_size个大图,每个大图由z_dim（生成样本数目)个小图组成。
+300-316行的save_random_digits函数是我自定义的函数，用于将随机数字保存到txt文件;
+最后326-346行的resize_imgs函数是我自己添加的，作用就是将指定文件夹下的图像resize成指定的大小，这样我们就可以利用自己的数据集训练model了。
+'''
+
+"""
+Some codes from https://github.com/Newmu/dcgan_code
+"""
+from __future__ import division
+from glob import glob
+from os.path import join,basename,exists
+from os import makedirs
+import math
+import json
+import random
+import pprint
+import scipy.misc
+import numpy as np
+from time import gmtime, strftime
+from six.moves import xrange
+
+import tensorflow as tf
+import tensorflow.contrib.slim as slim
+
+pp = pprint.PrettyPrinter()
+
+get_stddev = lambda x, k_h, k_w: 1/math.sqrt(k_w*k_h*x.get_shape()[-1])
+
+def show_all_variables():
+  model_vars = tf.trainable_variables()
+  # Prints the names and shapes of the variables
+  slim.model_analyzer.analyze_vars(model_vars, print_info=True)
+
+def get_image(image_path, input_height, input_width,
+              resize_height=64, resize_width=64,
+              crop=True, grayscale=False):
+  image = imread(image_path, grayscale)
+  return transform(image, input_height, input_width,
+                   resize_height, resize_width, crop)
+
+def save_images(images, size, image_path):
+  return imsave(inverse_transform(images), size, image_path)
+
+def imread(path, grayscale = False):
+  if (grayscale):
+    return scipy.misc.imread(path, flatten = True).astype(np.float)
+  else:
+    return scipy.misc.imread(path).astype(np.float)
+
+def merge_images(images, size):
+  return inverse_transform(images)
+
+def merge(images, size):
+  # samples 图片的真实高和宽
+  h, w = images.shape[1], images.shape[2]
+  # 图片channel的有效值只能是3或者4
+  if (images.shape[3] in (3,4)):
+    c = images.shape[3]
+    # img是合并之后的大图片,图片宽和高都倍增了
+    img = np.zeros((h * size[0], w * size[1], c))
+    # 遍历每一张图片
+    for idx, image in enumerate(images):
+      i = idx % size[1]
+      j = idx // size[1]
+      # 依次向大图填充小图(按行填充)
+      img[j * h:j * h + h, i * w:i * w + w, :] = image
+    return img
+  elif images.shape[3]==1:
+    # drop channel
+    img = np.zeros((h * size[0], w * size[1]))
+    for idx, image in enumerate(images):
+      i = idx % size[1]
+      j = idx // size[1]
+      img[j * h:j * h + h, i * w:i * w + w] = image[:,:,0]
+    return img
+  else:
+    raise ValueError('in merge(images,size) images parameter '
+                     'must have dimensions: HxW or HxWx3 or HxWx4')
+
+def imsave(images, size, path):
+  '''
+  modified imsave
+  :param images: ndarray,shape:(batch,height,width,channel)
+  :param size: (row images num,col images num)
+  :param path: save path
+  :return:
+  '''
+  # np.squeeze:去除维度为1的维
+  image = np.squeeze(merge(images, size))
+  return scipy.misc.imsave(path, image)
+
+def center_crop(x, crop_h, crop_w,
+                resize_h=64, resize_w=64):
+  '''
+  对图像进行中心化crop处理
+  :param x: image ndarray
+  :param crop_h: input height
+  :param crop_w: input width
+  :param resize_h: resize height
+  :param resize_w: resize width
+  :return: resized image
+  '''
+  if crop_w is None:
+    crop_w = crop_h
+  h, w = x.shape[:2]
+  j = int(round((h - crop_h)/2.))
+  i = int(round((w - crop_w)/2.))
+  return scipy.misc.imresize(
+      x[j:j+crop_h, i:i+crop_w], [resize_h, resize_w])
+
+def transform(image, input_height, input_width, 
+              resize_height=64, resize_width=64, crop=True):
+  '''
+  对图像进行转化处理
+  :param image: ndarray of image
+  :param input_height: image height
+  :param input_width:  image width
+  :param resize_height: height after resize
+  :param resize_width:  width after resize
+  :param crop: if to crop or not
+  :return:
+  '''
+  if crop:
+    cropped_image = center_crop(
+      image, input_height, input_width, 
+      resize_height, resize_width)
+  else:
+    # 直接resize
+    cropped_image = scipy.misc.imresize(image, [resize_height, resize_width])
+  # 将(0,255)映射到(-1,1)
+  return np.array(cropped_image)/127.5 - 1.
+
+def inverse_transform(images):
+  # (-1,1) ---&gt; (0,1)
+  return (images+1.)/2.
+
+def to_json(output_path, *layers):
+  with open(output_path, "w") as layer_f:
+    lines = ""
+    for w, b, bn in layers:
+      layer_idx = w.name.split('/')[0].split('h')[1]
+
+      B = b.eval()
+
+      if "lin/" in w.name:
+        W = w.eval()
+        depth = W.shape[1]
+      else:
+        W = np.rollaxis(w.eval(), 2, 0)
+        depth = W.shape[0]
+
+      biases = {"sy": 1, "sx": 1, "depth": depth, "w": ['%.2f' % elem for elem in list(B)]}
+      if bn != None:
+        gamma = bn.gamma.eval()
+        beta = bn.beta.eval()
+
+        gamma = {"sy": 1, "sx": 1, "depth": depth, "w": ['%.2f' % elem for elem in list(gamma)]}
+        beta = {"sy": 1, "sx": 1, "depth": depth, "w": ['%.2f' % elem for elem in list(beta)]}
+      else:
+        gamma = {"sy": 1, "sx": 1, "depth": 0, "w": []}
+        beta = {"sy": 1, "sx": 1, "depth": 0, "w": []}
+
+      if "lin/" in w.name:
+        fs = []
+        for w in W.T:
+          fs.append({"sy": 1, "sx": 1, "depth": W.shape[0], "w": ['%.2f' % elem for elem in list(w)]})
+
+        lines += """
+          var layer_%s = {
+            "layer_type": "fc", 
+            "sy": 1, "sx": 1, 
+            "out_sx": 1, "out_sy": 1,
+            "stride": 1, "pad": 0,
+            "out_depth": %s, "in_depth": %s,
+            "biases": %s,
+            "gamma": %s,
+            "beta": %s,
+            "filters": %s
+          };""" % (layer_idx.split('_')[0], W.shape[1], W.shape[0], biases, gamma, beta, fs)
+      else:
+        fs = []
+        for w_ in W:
+          fs.append({"sy": 5, "sx": 5, "depth": W.shape[3], "w": ['%.2f' % elem for elem in list(w_.flatten())]})
+
+        lines += """
+          var layer_%s = {
+            "layer_type": "deconv", 
+            "sy": 5, "sx": 5,
+            "out_sx": %s, "out_sy": %s,
+            "stride": 2, "pad": 1,
+            "out_depth": %s, "in_depth": %s,
+            "biases": %s,
+            "gamma": %s,
+            "beta": %s,
+            "filters": %s
+          };""" % (layer_idx, 2**(int(layer_idx)+2), 2**(int(layer_idx)+2),
+               W.shape[0], W.shape[3], biases, gamma, beta, fs)
+    layer_f.write(" ".join(lines.replace("'","").split()))
+
+def make_gif(images, fname, duration=2, true_image=False):
+  # 生成gif图
+  # duration:持续时间
+  # images shape:(batch_size,height,width,channel)
+  import moviepy.editor as mpy
+
+  def make_frame(t):
+    try:
+      # x 代表是t时刻选取的帧图片
+      x = images[int(len(images)/duration*t)]
+    except:
+      x = images[-1]
+
+    if true_image: # 返回不经过处理的ndarray,元素值是(-1,1)之间
+      return x.astype(np.uint8)
+    else:
+      # (-1,1) ---&gt; (0,255)
+      return ((x+1)/2*255).astype(np.uint8)
+
+  clip = mpy.VideoClip(make_frame, duration=duration)
+  clip.write_gif(fname, fps = len(images) / duration)
+
+def visualize(sess, dcgan, config, option):
+  # 用于可视化
+  image_frame_dim = int(math.ceil(config.batch_size**.5)) # 图片尺寸
+  if option == 0:
+    # noise
+    z_sample = np.random.uniform(-0.5, 0.5, size=(config.batch_size, dcgan.z_dim))
+    samples = sess.run(dcgan.sampler, feed_dict={dcgan.z: z_sample})
+    save_images(samples, [image_frame_dim, image_frame_dim], './%s/test_%s.png' % (config.sample_dir,strftime("%Y-%m-%d-%H-%M-%S", gmtime())))
+  elif option == 1: # 将samples生成大图
+    values = np.arange(0, 1, 1./config.batch_size)
+    for idx in xrange(dcgan.z_dim):
+      print(" [*] %d" % idx)
+      z_sample = np.random.uniform(-1, 1, size=(config.batch_size , dcgan.z_dim))
+      for kdx, z in enumerate(z_sample):
+        z[idx] = values[kdx]
+
+      if config.dataset == "mnist":
+        # y是batch_size个0-9之间的随机数
+        y = np.random.choice(10, config.batch_size)
+        save_random_digits(y,image_frame_dim,image_frame_dim,'./%s/test_arange_%s.txt' % (config.sample_dir,idx))
+        y_one_hot = np.zeros((config.batch_size, 10))
+        y_one_hot[np.arange(config.batch_size), y] = 1
+
+        samples = sess.run(dcgan.sampler, feed_dict={dcgan.z: z_sample, dcgan.y: y_one_hot})
+      else:
+        samples = sess.run(dcgan.sampler, feed_dict={dcgan.z: z_sample})
+
+      save_images(samples, [image_frame_dim, image_frame_dim], './%s/test_arange_%s.png' % (config.sample_dir,idx))
+  elif option == 2:
+    values = np.arange(0, 1, 1./config.batch_size)
+    # idx是随机的
+    for idx in [random.randint(0, dcgan.z_dim - 1) for _ in xrange(dcgan.z_dim)]:
+      print(" [*] %d" % idx)
+      # z_dim:test_images_num
+      z = np.random.uniform(-0.2, 0.2, size=(dcgan.z_dim))
+      # np.tile:按照指定的维度将array重复
+      # z_sample shape:(batch_size,z_dim)
+      z_sample = np.tile(z, (config.batch_size, 1))
+      #z_sample = np.zeros([config.batch_size, dcgan.z_dim])
+      for kdx, z in enumerate(z_sample):
+        z[idx] = values[kdx]
+
+      if config.dataset == "mnist":
+        y = np.random.choice(10, config.batch_size)
+        #save_random_digits(y, image_frame_dim, image_frame_dim, './%s/test_%s.txt' % % (config.sample_dir,strftime("%Y-%m-%d-%H-%M-%S", gmtime())))
+        y_one_hot = np.zeros((config.batch_size, 10))
+        y_one_hot[np.arange(config.batch_size), y] = 1
+
+        samples = sess.run(dcgan.sampler, feed_dict={dcgan.z: z_sample, dcgan.y: y_one_hot})
+      else:
+        samples = sess.run(dcgan.sampler, feed_dict={dcgan.z: z_sample})
+
+      try:
+        make_gif(samples, './%s/test_gif_%s.gif' % (config.sample_dir,idx))
+      except:
+        save_images(samples, [image_frame_dim, image_frame_dim], './%s/test_%s.png' % (config.sample_dir,strftime("%Y-%m-%d-%H-%M-%S", gmtime())))
+  elif option == 3: # 不能是mnist,直接生成gif
+    values = np.arange(0, 1, 1./config.batch_size)
+    for idx in xrange(dcgan.z_dim):
+      print(" [*] %d" % idx)
+      z_sample = np.zeros([config.batch_size, dcgan.z_dim])
+      for kdx, z in enumerate(z_sample):
+        z[idx] = values[kdx]
+
+      samples = sess.run(dcgan.sampler, feed_dict={dcgan.z: z_sample})
+      make_gif(samples, './%s/test_gif_%s.gif' % (config.sample_dir,idx))
+  elif option == 4:
+    image_set = []
+    values = np.arange(0, 1, 1./config.batch_size)
+
+    for idx in xrange(dcgan.z_dim):
+      print(" [*] %d" % idx)
+      z_sample = np.zeros([config.batch_size, dcgan.z_dim])
+      for kdx, z in enumerate(z_sample): z[idx] = values[kdx]
+
+      image_set.append(sess.run(dcgan.sampler, feed_dict={dcgan.z: z_sample}))
+      #make_gif(image_set[-1], './%s/test_gif_%s.gif' % (config.sample_dir,idx))
+
+    # 合成一张大图gif(64张大图)
+    new_image_set = [merge(np.array([images[idx] for images in image_set]), [10, 10]) \
+        for idx in range(63, -1, -1)] # 63-0
+    make_gif(new_image_set, './%s/test_gif_merged.gif' % config.sample_dir, duration=8)
+
+def save_random_digits(arr,height,width,save_path):
+  '''
+  将arr中数字保存到文件，按行保存，共有height行,width列
+  :param arr: ndarray
+  :param height: 行数
+  :param width: 列数
+  :param save_path: 保存文件地址
+  :return:
+  '''
+  with open(save_path,"w") as f:
+    for i in range(height):
+      for j in range(width):
+        if j != width-1:
+          f.write("%d," % arr[i*width+j])
+        else:
+          f.write("%d\n" % arr[i*width+j])
+  f.close()
+
+
+
+def image_manifold_size(num_images):
+  manifold_h = int(np.floor(np.sqrt(num_images)))
+  manifold_w = int(np.ceil(np.sqrt(num_images)))
+  assert manifold_h * manifold_w == num_images
+  return manifold_h, manifold_w
+
+def resize_imgs(imgs_path,size,save_dir):
+  '''
+  将imgs_path文件夹的所有图片都resize到size大小，并重新保存到save_dir
+  :param imgs_path: 原始图像文件夹地址
+  :param size: resize之后的图像大小
+  :param save_dir: resize之后的图像保存地址
+  :return:
+  '''
+  if not exists(save_dir):
+    makedirs(save_dir)
+  imgs = glob(imgs_path+"*.jpg")
+  for i,img in enumerate(imgs,1):
+    try:
+      img_arr = scipy.misc.imread(img)
+      new_img = scipy.misc.imresize(img_arr,size)
+      scipy.misc.imsave(join(save_dir,basename(img)),new_img)
+    except Exception as e:
+      print(e)
+    if i % 100 == 0:
+      print("Resize and save %d images!" % i)
+  print("Resize and save all %d images!" % len(imgs))
+
+
+# if __name__ == '__main__':
+#     imgs_path = "data/images/"
+#     save_dir = "data/lsun_new/"
+#     size = (108,108)
+#     resize_imgs(imgs_path,size,save_dir)
