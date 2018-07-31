@@ -1,4 +1,4 @@
-https://blog.csdn.net/c2a2o2/article/details/78735111
+https://yq.aliyun.com/articles/228765
 
 篇文章介绍了一种解决生成对抗网络（GAN）模式崩溃问题的方法。这种方法很直观但是证实有效，特别是当对GAN预先设置一些限制时。
 在本质上，它结合了Kullback-Leibler（KL）和反向KL散度的差异，生成一个目标函数，从而利用这些分支的互补统计特性捕捉多模式下分散预估密度。
