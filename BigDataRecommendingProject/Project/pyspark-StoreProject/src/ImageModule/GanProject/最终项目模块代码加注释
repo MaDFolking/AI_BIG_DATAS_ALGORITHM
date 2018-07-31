@@ -1,0 +1,904 @@
+from __future__ import division
+import os
+from os.path import join,basename,exists
+from os import makedirs
+import random
+import time
+from time import gmtime, strftime
+import math
+import numpy as np
+import scipy.misc
+import argparse
+import pprint
+import tensorflow as tf
+from glob import glob
+import pandas as pd
+from tqdm import tqdm
+import sys, os, multiprocessing, urllib3, csv
+from PIL import Image
+from io import BytesIO
+import json
+
+'''
+数据集下载路径:
+链接：https://pan.baidu.com/s/1Mm2inptEqYXC72L3yJco1A 密码：9le5
+'''
+
+
+'''
+下载图片:
+下面这段代码是借鉴一位大神写的，具体就不描述了，下面是执行步骤。
+图片我已经存在百度云中，请自行下载。
+将json文件放入同目录下。
+右键项目，Show In Exploer
+地址栏输入cmd
+然后跑 python model.py train.json train/   python model.py test.json test/
+这将创建train目录并开始下载图像。
+之后，用 validation.json 和重复此命令 test.json
+'''
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+def ParseData(data_file):
+  ann = {}
+  if 'train' in data_file or 'validation' in data_file:
+      _ann = json.load(open(data_file))['annotations']
+      for a in _ann:
+        ann[a['image_id']] = a['label_id']
+
+  key_url_list = []
+  j = json.load(open(data_file))
+  images = j['images']
+  for item in images:
+    assert len(item['url']) == 1
+    url = item['url'][0]
+    id_ = item['image_id']
+    if id_ in ann:
+        id_ = "{}_{}".format(id_, ann[id_])
+    key_url_list.append((id_, url))
+  return key_url_list
+
+
+def DownloadImage(key_url):
+  out_dir = sys.argv[2]
+  (key, url) = key_url
+  filename = os.path.join(out_dir, '%s.jpg' % key)
+
+  if os.path.exists(filename):
+    print('Image %s already exists. Skipping download.' % filename)
+    return
+
+  try:
+    #print('Trying to get %s.' % url)
+    http = urllib3.PoolManager(100)
+    response = http.request('GET', url)
+    image_data = response.data
+  except:
+    print('Warning: Could not download image %s from %s' % (key, url))
+    return
+
+  try:
+    pil_image = Image.open(BytesIO(image_data))
+  except:
+    print('Warning: Failed to parse image %s %s' % (key,url))
+    return
+
+  try:
+    pil_image_rgb = pil_image.convert('RGB')
+  except:
+    print('Warning: Failed to convert image %s to RGB' % key)
+    return
+
+  try:
+    pil_image_rgb.save(filename, format='JPEG', quality=90)
+  except:
+    print('Warning: Failed to save image %s' % filename)
+    return
+
+def Run():
+  if len(sys.argv) != 3:
+    print('Syntax: %s <train|validation|test.json> <output_dir/>' % sys.argv[0])
+    sys.exit(0)
+  (data_file, out_dir) = sys.argv[1:]
+
+  if not os.path.exists(out_dir):
+    os.mkdir(out_dir)
+
+  key_url_list = ParseData(data_file)
+  pool = multiprocessing.Pool(processes=12)
+
+  with tqdm(total=len(key_url_list)) as t:
+    for _ in pool.imap_unordered(DownloadImage, key_url_list):
+      t.update(1)
+
+
+'''
+功能描述:
+
+我们根据第一步的图片分类，从网上的json文件读取图片文件，加载到本地中
+再用glob读取图片，之后用GAN网络进行生成，同时这个算法也可以修改成识别真伪，以及设计师等工作平时用来生成
+图片的功能。
+'''
+
+'''
+技术描述:
+
+GAN:用一个D网络进行判断图片的真伪，为了让D网络开始就能识别出来，我们需要先进行训练出参数w和b。
+然后在真正运行时将这个w和b作为初始变量传入D中，这是个二分类过程。1代表是真图，0代表假图，我们自己
+设计一损失函数，优化这个损失函数，让其识别能力加强。
+同时再创建一个G网络，用来生成图片，生成的图片经过D网络的检查判断出是真的我们就成功了。
+所以关键点在于俩者损失函数的设定，记住这个规律:俩者损失函数一定是相反的。由于D网络需要上一个D模型的初始化
+和G网络生成的结果作为共同输入，所以它需要俩个损失函数，我们分别用log表示，因为这样更平滑且更容易区分。
+D的损失 = -log(D)-log(1-G)
+G的损失 = -log(G)
+解析: D中第一个log(D),只要D无限接近1，我们的损失就接近0。而第二个公式G如果无限接近1，就无限接近log(0),这样损失会增大。
+      但如果G无限接近1，我们的G损失就会无限接近0，达到最优化。所以这是个矛盾的损失，我们就要这种矛盾损失，使其优化到
+      一个临界点，让G的损失小于D的损失，即无法识别出G网络生成的图片。
+G网络的生成的原理是通过初始化噪音点，下面代码中我会有介绍。
+DCGAN:在GAN的原理修改上，在网络上进行一系列优化与改进，具体如下;
+1.取消pooling层，全部都用卷积层取代。
+过程:
+G网络开始通过一个1*100噪音向量作为初始点，然后通过全连接层生成一个特征图，之后不断的反卷积(类似机器学习的特征离散)扩大成我们需要的图片大小维度（本次是64*64）
+D网络开始是普通大小特征维度图片，我们不断的卷积提取一直到输出为1个位置，这个1个就是判断出是0还是1.所以stride至少为2.
+2.在G网络和D网络生成时使用正则化batchnorm
+(1)通过调节正则化权重解决了初始化差的问题。
+(2)原始GAN中容易梯度离散化，加入正则化使其更好地传播到每一层
+(3)防止G的生成器中所有样本都收敛到同一点。
+3.移除了开始的全连接层，变为卷积层。仿照了resnet网路。
+4.在generator的除了输出层外的所有层使用ReLU激活函数,输出层采用tanh激活函数。(tanh:  (e^(x)-e^(-x)) /(e^x+e^(-x)) )
+  tanh激活函数曲线是以0为中心，x大于0y都大于0，然后随着x越来越大y的增幅越来越小。下面同理。也就是类似log使其更平滑。
+5.在discriminator所有层使用
+LeakyReLU是ReLU的 变体f(x)=max(0,x)+negative_slope×min(0,x),其中，negative_slope是一个小的非零数。数学公式上多了个E对y的偏导，我认为就是加了个类似正则化的东西，使其更稳定平滑。
+6.还需要写个测试类，用于将G网络和真实图片对D网络的测试。
+'''
+
+'''
+PS:为了敢时间，我这次所有函数都写在一个模块中。请见谅，我这次每个阶段都会标注说明。
+'''
+
+'''
+模块一:工具模块。
+除了这次所用的函数外，我还从网上弄了一些函数，方便以后使用。
+具体函数:
+(1)卷积层的提取函数，其实卷积层计算本质就是在PADDING为SAME时，都是filter的size/stride公式。
+(2)图像读取函数
+(3)图像中心读取函数(这是google官网中用到的技术，大概意思就是从中心读取函数)
+(4)保存图像
+(5)图片合并(我们在做的过程中，会涉及到图像合并与分解)
+python常用函数:
+glob库用来list 某一个文件夹下的files;
+os库用来操作路径和文件夹等;
+pprint用于美观打印;gtime和strftime有用格式化日期;
+cipy.misc包含了很多和图像相关的有用的函数
+show_all_variables函数，调用了 slim.model_analyzer.analyze_vars(vars,print_info) 函数来打印model所有variables的信息。
+imread函数封装了 scipy.misc.imread 函数,该函数参数 flatten = True 表示将color layer 展平成一个single gray-scale layer。
+merge函数用于从一系列小图产生大图,images[0]表示小图的个数,h=images[1]表示小图的高,w = images[2]表示小图的宽，x_h = size[0]表示最终大图height应该扩展的倍数,x_w = size[1]表示最终大图width应该扩展的倍数。该函数最终生成一个高为h*x_h，宽为w*x_w的大图。表示大图的高度方向包含x_h个小图,宽度方向包含x_w个小图。
+定义了保存图像的imsave函数。注意 np.squeeze 可以去除数组中维度为1的那些维(降维),与之相反的操作是 np.expand_dims(arr,axis) 函数，可以给指定的axis维度增加一维。
+center_crop函数的作用是中心化剪切处理,同时对图像进行了resize操作。
+transform函数，也是对图像进行center_crop(可选)以及resize操作，只不过它最后将image array的每个元素的取值范围从(0,255)映射到(-1,1),(-1,1)是tanh函数的取值范围。
+'''
+
+'''
+全局变量
+'''
+pathData = "D:\\kaggle比赛\\装潢公司图像分类与对抗生成网络项目模块\\"                            #路径前缀路径
+pathLogs = "D:\\kaggle比赛\\装潢公司图像分类与对抗生成网络项目模块\\logs"                        #保存日志路径
+pathCheckPoint = "D:\\kaggle比赛\\装潢公司图像分类与对抗生成网络项目模块\\checkpointGan\\"       #保存模型路径
+pathImage = "D:\\kaggle比赛\\装潢公司图像分类与对抗生成网络项目模块\\图像分类模型\\train\\"      #加载图片路径
+sampleDir = "D:\\kaggle比赛\\装潢公司图像分类与对抗生成网络项目模块\\GAN-data\\"                 #生成图片路径
+
+
+'''
+卷积层提取
+我们这里之所以分开写，是因为在测试时发生了TypeError错误，
+我猜测是在ceil里转换时先后顺序发生问题，所以我把它们单独拿出来进行转换。
+'''
+def con_size(size,stride):
+    if size is None:
+        raise ValueError("输入的大小不能为空!")
+    size = float(size)
+    stride = float(stride)
+    return math.ceil(size/stride)
+
+
+'''
+读取图像函数
+isCrop:是否为中心截取
+isGray:是否为灰度图
+flatten:表示展开灰度图 (该方法在最新版本已经弃用)
+inputHeight:中心截取中要截断的高度
+inputWidth:中心截取中要截断的宽度
+我们最终是通过中心截取到我们要的64*64的图片大小，但具体还要根据判断
+'''
+def get_image(imagePath,inputHeight,inputWidth,outputHeight,outputWidth,isCrop=True,isGray = True):
+    if imagePath is None or inputHeight is None or inputWidth is None:
+        raise ValueError("路径或者图片大小不能为空")
+    if isGray:
+        image = scipy.misc.imread(imagePath, flatten=True).astype(np.float)
+    else:
+        image = scipy.misc.imread(imagePath).astype(np.float)
+    return transform(image,inputHeight,inputWidth,outputHeight,outputWidth,isCrop)
+
+'''
+转化为中心截取
+如果不转换，就resize成原始输出图像。
+最后一行公式是图片的计算公式，参考google写法。
+'''
+def transform(image,inputHeight,inputWidth,outputHeight = 64,outputWidth = 64,isCrop = True):
+    if image is None or inputHeight is None or inputWidth is None:
+        raise ValueError("路径或者图片大小不能为空")
+    if isCrop:
+        cropImage = center_crop(image,inputHeight,inputWidth,outputHeight,outputWidth)
+    else:
+        cropImage = scipy.misc.imresize(image,[outputHeight,outputHeight])
+    return np.array(cropImage)/127.5-1.
+
+'''
+中心截取图,中心截取的原则一定是方阵矩阵，所以我们会让长宽一样。
+shape[:2]获取所有的前2维数据，如果是[:3]就是3维度。这里确保获取所有height,width数据
+imresize:第一个输入维度，第二个输出维度
+centerHeight：中心图的高度。
+centerWidth:中心图的宽度。
+'''
+def center_crop(image,cropHeight,cropWidth,outputHeight = 64,resizeHeight = 64):
+    if image is None or cropHeight is None:
+        raise ValueError("图片不能为空")
+    if cropWidth is None:
+        cropWidth = cropHeight
+    height,width = image.shape[:2]
+    centerHeight = int(round((height-cropHeight)/2.))
+    centerWidth = int(round((width-cropWidth)/2.))
+    return scipy.misc.imresize(image[centerHeight:centerHeight+cropHeight,centerWidth:centerWidth+cropWidth],[outputHeight,resizeHeight])
+
+'''
+保存图片
+'''
+def save_images(images,size,imagePath):
+    if images is None or size is None:
+        raise ValueError("图片和数量不能为空!")
+    return imageSave(images,size,imagePath)
+
+'''
+图片转换,中心截取后要除以2。
+'''
+def inverse_transform(images):
+    if images is None:
+        raise ValueError("图片不能为空!")
+    return (images+1.)/2.
+
+'''
+图片保存,最后要将计算时因为余数而产生的分离的图片进行合并
+'''
+def imageSave(images,size,path):
+    if images is None or size is None or path is None:
+        raise ValueError("图片大小路径都不能为空!")
+    return scipy.misc.imsave(path,merge(images,size))
+
+
+'''
+因为在中心截取和计算过程中，因为filter的stride原因会导致一些图片产生余数分裂，为了让结果更准确，需要
+进行图片合并，下面就是这类写法。
+彩色图，这个是图片各个维度乘以相应大小系数
+'''
+def merge(images,size):
+    if images is None or size is None:
+        raise ValueError("图片和数量不能为空")
+    height,width = images.shape[1],images.shape[2]
+    img = np.zeros((height*size[0],width*size[1],3))
+    for idx,image in enumerate(images):
+        w = idx % size[1]
+        h = idx // size[1]
+        img[h*height:h*height+height,w*width:w*width+width,:] = image
+    return img
+
+
+'''
+将中心截取的图片进行合并
+'''
+def merge_images(images,size):
+    if images is None or size is None:
+        raise ValueError("图片和大小不能为空!")
+    return inverse_transform(images)
+
+
+
+
+'''
+模块二，设计卷积,反卷积，全连接，正则，连接这些常用操作，为我们的模型做准备。
+'''
+
+'''
+正则
+variable_scope:共享变量机制。
+是创建变量层操作的上下文管理器。均被同一图像共享。如果name_or_scope是None,照原样使用。这里我们让所有层都共享batch_norm这个名字，所以使用这个。
+具体看:https://www.tensorflow.org/api_docs/python/tf/variable_scope
+batch_norm：
+(1)decay:移动平均线的衰退，一般接近1.0，通常设置0.9-1.0之间。如果模型已经训练的相当好，但验证或者测试时效果差，就用较低的
+decay，并 zero_debias_moving_mean = True提高稳定性。我们这里设置默认0.9，(其实就是类似梯度下降的正则下降趋势)
+(2)epsilon:类似激活函数避免为0，这个数会添加到方差里起到防止变为0，如果太大会导致结果不好，太小起不到作用，这里设置1e-5
+(3)zero_debias_moving_mean：一种偏值项: moving_mean / biased'和'moving_mean / local_step',设置True提高稳定
+(4)updates_collections：集合以收集更新操作以进行计算。需要使用train_op执行updates_ops。如果为None，则会添加控件依赖项以确保在适当的位置计算更新。
+(5)scale：如果为True，则乘以gamma.如果为False，gamma则不使用。当下一层是线性的（例如nn.relu）时，这可以被禁用，因为缩放可以由下一层完成。本质还是类似调损失的。
+__call__可以把类当函数直接调用
+'''
+class batch_norm(object):
+    def __init__(self,epsilon =1e-5,decay = 0.9,zero_debias_moving_mean = True,scope="batch_norm"):
+        self.epsilon = epsilon
+        self.decay = decay
+        self.zero_debias_moving_mean = zero_debias_moving_mean
+        self.scope = scope
+
+    def __call__(self,x,train=True):
+        return tf.contrib.layers.batch_norm(x, decay=self.decay, updates_collections=None, scale=True,epsilon=self.epsilon,zero_debias_moving_mean = self.zero_debias_moving_mean, is_training=train, scope=self.scope)
+
+'''
+卷积层连接操作
+ones:创建一个都为1的向量，用于与y相乘得到同比例矩阵
+'''
+def con_cond_concat(X,y):
+    if X is None or y is None:
+        raise ValueError("用于连接的矩阵不能为空!")
+    Xshapes = X.get_shape()
+    yshapes = y.get_shape()
+    return tf.concat([X,y*tf.ones([Xshapes[0],Xshapes[1],Xshapes[2],yshapes[3]])],axis=3)
+
+'''
+卷积层
+官方给出卷积核是5*5，我们这里默认按照要求来。
+stddev标准差我们设置小一些，为了让噪点更小。
+get_variable:获取当前变量并产生一个新的变量。 initializer:初始化tensor
+truncated_normal_initializer：生成截断的正态分布数据。也就是初始化为一个正态分布数据，让w初始化变得更平滑。
+tf.constant_initializer:初始化程序生成常量值，通常用于b的截距项,我们初始化为0.0
+'''
+def con2d(inputDim,outputDim,filterHeight = 5,filterWidth =5 ,strideHeight = 2,strideWidth = 2,stddev = 0.01,name="con2d"):
+    if inputDim is None:
+        raise ValueError("输入数据不能为空!")
+    with tf.variable_scope(name):
+        w = tf.get_variable('w',[filterHeight,filterWidth,inputDim.get_shape()[-1],outputDim],initializer=tf.truncated_normal_initializer(stddev=stddev))
+        con = tf.nn.conv2d(inputDim,w,strides=[1,strideHeight,strideWidth,1],padding = 'SAME')
+        biases = tf.get_variable('biases',[outputDim],initializer=tf.constant_initializer(0.0))
+        con = tf.reshape(tf.nn.bias_add(con,biases),con.get_shape())
+        return con
+
+'''
+反卷积
+withW:用来判断是否需要返回反卷积的参数w和b
+我们将其颠倒即可
+开始stddev设置为0.01效果不好，我将反卷积的stddev变大，卷积的stddev变小
+'''
+def differentCon2d(inputDim,outputDim,filterHeight = 5,filterWidth =5 ,strideHeight = 2,strideWidth = 2,stddev = 0.01,name="differentCon2d",withW = False):
+    if inputDim is None:
+        raise ValueError("输入数据不能为空!")
+    with tf.variable_scope(name):
+        w = tf.get_variable('w', [filterHeight, filterWidth, outputDim[-1],inputDim.get_shape()[-1]],initializer=tf.truncated_normal_initializer(stddev=stddev))
+        differentCon2ds = tf.nn.conv2d_transpose(inputDim, w,output_shape=outputDim , strides=[1, strideHeight, strideWidth, 1])
+        biases = tf.get_variable('biases', [outputDim[-1]], initializer=tf.constant_initializer(0.0))
+        differentCon2ds = tf.reshape(tf.nn.bias_add(differentCon2ds, biases), differentCon2ds.get_shape())
+        if withW:
+            return differentCon2ds,w,biases
+        else:
+            return differentCon2ds
+
+'''
+maximum:相当于三目。这里我们做个类似tan的平滑的激活函数
+'''
+def leakReLu(x,leak = 0.2,name = "leakReLu"):
+    if x is None:
+        raise ValueError("输入的矩阵不能为空!")
+    return tf.maximum(x,x*leak)
+
+'''
+全连接层
+matrix:矩阵
+matmul:矩阵相乘。全连接层本质就是矩阵相乘，withW是看是否加偏执项。
+将原特征图reshape成二维矩阵，为了与下层对接，第二个维度是output。为了保持矩阵相乘法则，第一个维度是输入全连接层第二个维度。
+这样inputDim是第一个全连接层x*y 正好可以乘以y*out这样实行矩阵相乘原理。
+而withW看是否加偏执项。相当于加b，只是因为矩阵相乘用矩阵作为基本单位，所以多个matrix
+'''
+def linear(inputDim, outputSize, scope=None, stddev=0.01, biasStart=0.0, withW=False):
+    if inputDim is None:
+        raise  ValueError("输入矩阵不能为空!")
+    inputTotal = inputDim.get_shape().as_list()
+    with tf.variable_scope(scope or "Linear"):
+        matrix = tf.get_variable("Matrix", shape=[inputTotal[1], outputSize], dtype=tf.float32,initializer=tf.random_normal_initializer(stddev=stddev))
+        bias = tf.get_variable("bias", shape=[outputSize], initializer=tf.constant_initializer(biasStart))
+        if withW:
+            return tf.matmul(inputDim, matrix) + bias,matrix,bias
+        else:
+            return tf.matmul(inputDim, matrix) + bias
+
+'''
+模块三:构建GAN网络
+'''
+class DCGAN(object):
+    def __init__(self,sess,inputHeight = 64,inputWidth = 64,isCrop = True,batchSize = 64,sampleNum = 64,
+                 outputHeight = 64,outputWidth = 64,yDim = None,zDim = 100,gfDim = 64,dfDim = 64,gfcDim = 1024,
+                 dfcDim = 1024,cDim = 3,dataSetName = 'default',inputPattern = "*.jpg",checkpointDir = None,sampleDir = None):
+        self.sess = sess                                # tensor的session域的初始化。
+        self.isCrop = isCrop                            # 是否进行中心截取图片。
+        self.isGray = (cDim==1)                         # 是否为灰度图。
+        self.batchSize = batchSize                      # 一次迭代多少张图片。
+        self.sampleNum = sampleNum                      # D网络对G网络测试噪音的输入值，也跟batch类似，这里默认一次测试64个,属于采样函数。
+        self.inputHeight = inputHeight                  # 图像输入高度。
+        self.inputWidth = inputWidth                    # 图像输入宽度。
+        self.outputHeight = outputHeight                # 图像输出高度。
+        self.outputWidth = outputWidth                  # 图像输出宽度。
+        self.yDim = yDim                                # 我们的维度数。
+        self.zDim = zDim                                # G网络生成的噪音向量的维度。
+        self.gfDim = gfDim                              # G网络卷积层的filter的个数,64为基数。
+        self.dfDim = dfDim                              # D网络卷积层的filter的个数,64为基数。
+        self.gfcDim = gfcDim                            # G网络全连接层,1024为基数。
+        self.dfcDim = dfcDim                            # D网络全连接层,1024为基数。
+        self.cDim = cDim                                # 通道数，1为灰度，3为彩色。
+        self.dNorm1 = batch_norm(scope='dNorm1')        # D网络第一层的batchNorm正则化，加入到卷积与激活之间。
+        self.dNorm2 = batch_norm(scope='dNorm2')        # D网络第二层的batchNorm正则化，加入到卷积与激活之间。
+        if not self.yDim:
+            self.dNorm3 = batch_norm(scope='dNorm3')    # D网络第三层的batchNorm正则化，加入到卷积与激活之间,前提是没有图像输入时。
+        self.gNorm1 = batch_norm(scope='gNorm1')        # G网络第一层的batchNorm正则化，加入到卷积与激活之间。
+        self.gNorm2 = batch_norm(scope='gNorm2')        # G网络第二层的batchNorm正则化，加入到卷积与激活之间。
+        self.gNorm3 = batch_norm(scope='gNorm3')        # G网络第三层的batchNorm正则化，加入到卷积与激活之间。
+        if not self.yDim:
+            self.gNorm4 = batch_norm(scope='gNorm4')    # G网络第四层的batchNorm正则化，加入到卷积与激活之间,前提是没有图像输入时。
+        self.dataSetName = dataSetName                  # 训练图片文件夹名称，本身可以当做个list,这样更灵活。
+        self.inputPattern = inputPattern                # 以什么为结尾的图片,我们这里设置成jpg。
+        self.checkpointDir = checkpointDir              # 指定存放生成结果的路径文件夹。
+        self.build_model()                              # 创建模型。
+
+    '''
+    构建模型网络,初始化G网络和D网络参数
+    '''
+    def build_model(self):
+        if self.yDim:
+            self.yNum = tf.placeholder(tf.float32,[self.batchSize,self.yDim])
+        else:
+            self.yNum = None
+        '''
+        我们的构建是如果已经是输出状态的图片，最后要加上中间截取再拼接，使其更真实化
+        '''
+        if self.isCrop:
+            imageDims = [self.outputHeight, self.outputWidth, self.cDim]
+        else:
+            imageDims = [self.inputHeight, self.inputHeight, self.cDim]
+
+
+        print(self.sampleNum)
+        self.inputReal = tf.placeholder(tf.float32, [self.batchSize] + imageDims, name="inputReal")              # D网络真实图片输入
+        print(self.inputReal.shape," ",self.inputReal)
+
+        inputReal = self.inputReal
+        print("inputReal: ", inputReal.shape, " ", inputReal)
+        print("inputReal: ", self.inputReal.shape, " ", self.inputReal)
+
+        self.zNum = tf.placeholder(tf.float32, [None, self.zDim], name='z')                                     # 开辟噪音空间
+        self.zSum = tf.summary.histogram("z", self.zNum)                                                        # 输出带有直方图的协议缓冲区。直方图在图像处理中速度比较快，所以这里使用直方图让噪音生成图像
+
+        if self.yDim:
+            self.G = self.generator(self.zNum,self.yNum)                                                        # 初始化G网络,我们不用求G网络的损失，因为tensorflow有ones_like和zeros_like取代log(x)和log(1-x)，所以只需要使用下面的D网络损失即可
+            self.D, self.lossD = self.discriminator(inputReal, self.yNum,reuse=False)                           # 初始化D网络和其损失函数,这是第一个D网络，也就是真实图片输入到D网络生成w和b参数
+            print(self.D," ",self.lossD)
+            print("inputReal: ",inputReal.shape, " ", inputReal)
+            print("inputReal: ",self.inputReal.shape, " ", self.inputReal)
+            self.sampler = self.sampler(self.zNum, self.yNum)                                                   # 初始化测试网络
+            self.D_, self.lossD_ = self.discriminator(self.G, self.yNum, reuse=True)                            # 初始化D网络，经过真实图片和G网络的输出结果，我们的最终D网络。
+            print(self.D_, " ", self.lossD_)
+        else:
+            self.G = self.generator(self.zNum)
+            self.D, self.lossD = self.discriminator(inputReal, reuse=False)                                 #如果没有图片输入,则需要创建图片,而创建图片G网络是通过噪音z.D网络通过真实图片。
+            print(self.D, " ", self.lossD)
+            print("inputReal: ", inputReal.shape, " ", inputReal)
+            print("inputReal: ", self.inputReal.shape, " ", self.inputReal)
+            self.sampler = self.sampler(self.zNum)
+            self.D_, self.lossD_ = self.discriminator(self.G, reuse=True)
+            print(self.D_, " ", self.lossD_)
+        '''
+        图片转化为直方图格式,这是个带有图像的缓冲区，必须是四维：batch,weight，height，channel
+        下面这三个是我再tran时要merge成图片的先决条件
+        '''
+        self.dSum = tf.summary.histogram("d", self.D)                                                       #D网络真实图像
+        self.DSum = tf.summary.histogram('D', self.D_)                                                      #D网络最终图像
+        self.GSum = tf.summary.image('G', self.G)                                                           #G网络最终图像
+
+        '''
+        定义loss损失值
+        我们的损失值就像上面图像一样，最终要生成一种标量:scalar,经过这个scalar后会转化为string类型.注意:必须在这转换，否则后期merge会出错。
+        D网络loss损失=log(D)+log(1-G)  ones_like取代。前者为真实图片损失，后者为G生成图片损失，为了与下面G的损失相违背，用1减。最优化这个损失，同时使其低于G的损失即可。
+        G网络loss损失=log(G) zeros_like方式取代ones_like即可
+        '''
+        self.d_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.lossD,labels=tf.ones_like(self.D)))
+        self.d_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.lossD_,labels = tf.zeros_like(self.D_)))
+        self.g_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.lossD_,labels = tf.ones_like(self.D_)))
+        self.d_loss = self.d_loss_real+self.d_loss_fake
+
+        self.d_loss_real_sum = tf.summary.scalar('d_loss_real',self.d_loss_real)
+        self.d_loss_fake_sum = tf.summary.scalar('d_loss_fake',self.d_loss_fake)
+
+        self.g_loss_sum = tf.summary.scalar('g_loss',self.g_loss)
+        self.d_loss_sum = tf.summary.scalar('d_loss',self.d_loss)
+
+        print("d_loss_real: {},d_loss_fake: {}".format(self.d_loss_real,self.d_loss_fake))
+        print("g_loss: {},d_loss: {}".format(self.g_loss, self.d_loss))
+        print("g_loss_sum: {},d_loss_sum: {}".format(self.g_loss_sum, self.d_loss_sum))
+
+        '''
+        tf.trainable_variables() 可以获取model的全部可训练参数,
+        由于我们在定义生成器和鉴别器变量的时候使用了不同的name,
+        因此我们可以通过variable的name来获取得到self.d_vars(鉴别器相关变量),self.g_vars(生成器相关变量)。
+        self.saver = tf.train.Saver() 用于保存训练好的模型参数到checkpoint
+        '''
+        tVars = tf.trainable_variables()
+
+        self.d_vars = [var for var in tVars if 'd_' in var.name]
+        self.g_vars = [var for var in tVars if 'g_' in var.name]
+        self.saver = tf.train.Saver()
+
+    '''
+    G网络生成
+    tanh是类似机器学习用log1p使得结果更平滑，从曲线上看是越往俩边变化越小，也就是越接近正态。
+    设置四层G的卷积层，每次stride都是2倍扩大。
+    我们为了防止中间生成图片时出错，我们设置self.yDim,如果开始图片没有维度，我们需要正常的去生成维度，再根据噪音点反卷积，也就是进入else部分。
+    我们生成的步骤是:四层卷积(跟D网络正常生成图像一样)，都是2倍，再全连接，已知我们在设计网络时得到最终数是8000多，所以1024基数是8倍，这里先乘以8
+    再反卷积，注意反卷积对应的是我们的依次的维度，最后回到最开始的维度，这轮目的就是构造了一个生成网络的图像，最后tanh使其平滑返回。
+    如果开始就有特征维度，也就是正常的图像，设置俩层，每层都除以二，这才是真正的G网络生成，通常上面那个结束后下一次迭代就会进入到这步。
+    '''
+
+    def generator(self, z, y=None):
+        with tf.variable_scope("generator") as scope:
+            if not self.yDim:
+                gHeight, gWidth = self.outputHeight, self.outputWidth
+
+                gHeight1, gWidth1 = con_size(gHeight, 2), con_size(gWidth, 2)
+                gHeight2, gWidth2 = con_size(gHeight1, 2), con_size(gWidth1, 2)
+                gHeight3, gWidth3 = con_size(gHeight2, 2), con_size(gWidth2, 2)
+                gHeight4, gWidth4 = con_size(gHeight3, 2), con_size(gWidth3, 2)
+
+                self.z_, self.h0_w, self.h0_b = linear(z, self.gfDim * 8 * gHeight4 * gWidth4, 'g_h0_lin', withW=True)
+
+                self.h0 = tf.reshape(self.z_, [-1, gHeight4, gWidth4, self.gfDim * 8])
+                h0 = tf.nn.relu(self.gNorm1(self.h0))
+
+                self.h1, self.h1_w, self.h1_b = differentCon2d(h0, [self.batchSize, gHeight3, gWidth3, self.gfDim * 4], name='g_h1', withW=True)
+                h1 = tf.nn.relu(self.gNorm2(self.h1))
+
+                h2, self.h2_w, self.h2_b = differentCon2d(h1, [self.batchSize, gHeight2, gWidth2, self.gfDim * 2], name='g_h2', withW=True)
+                h2 = tf.nn.relu(self.gNorm3(h2))
+
+                h3, self.h3_w, self.h3_b = differentCon2d(h2, [self.batchSize, gHeight1, gWidth1, self.gfDim * 1], name='g_h3', withW=True)
+                h3 = tf.nn.relu(self.gNorm4(h3))
+
+                h4, self.h4_w, self.h4_b = differentCon2d(h3, [self.batchSize, gHeight, gWidth, self.cDim], name='g_h4', withW=True)
+
+                return tf.nn.tanh(h4)
+            else:
+                gHeight, gWidth = self.outputHeight, self.outputWidth
+                gHeight1, gHeight2 = int(gHeight / 2), int(gHeight / 4)
+                gWidth1, gWidth2 = int(gWidth / 2), int(gWidth / 4)
+
+                yb = tf.reshape(y, [self.batchSize, 1, 1, self.yDim])
+                z = tf.concat([z, y], 1)
+
+                h0 = tf.nn.relu(self.gNorm1(linear(z, self.gfcDim, 'g_h0_lin')))
+                h0 = tf.concat([h0, y], 1)
+
+                h1 = tf.nn.relu(self.gNorm2(linear(h0, self.gfDim * 2 * gHeight2 * gWidth2, 'g_h1_lin')))
+                h1 = tf.reshape(h1, [self.batchSize, gHeight2, gWidth2, self.gfDim * 2])
+
+                h1 = con_cond_concat(h1, yb)
+
+                h2 = tf.nn.relu(self.gNorm3(differentCon2d(h1,[self.batchSize, gHeight1, gWidth1, self.gfDim * 2], name='g_h2')))
+                h2 = con_cond_concat(h2, yb)
+
+                return tf.nn.sigmoid(differentCon2d(h2, [self.batchSize, gHeight, gWidth, self.cDim], name='g_h3'))
+
+    '''
+    测试网络,也就是生成G网络的图片，所以基本跟G网络相同。
+    如果没有图像生成，则反卷积生成图像。
+    如果有图像，则开始测试。
+    测试阶段跟G网络基本相同，因为原理就是跑G网络，所以里面名称跟G网络相同。
+    '''
+    def sampler(self, z, y=None):  # 采样测试
+        with tf.variable_scope("generator") as scope:
+            scope.reuse_variables()
+
+            if not self.yDim:
+                sHeight, sWidth = self.outputHeight, self.outputWidth
+                sHeight1, sWidth1 = con_size(sHeight, 2), con_size(sWidth, 2)
+                sHeight2, sWidth2 = con_size(sHeight1, 2), con_size(sWidth1, 2)
+                sHeight3, sWidth3 = con_size(sHeight2, 2), con_size(sWidth2, 2)
+                sHeight4, sWidth4 = con_size(sHeight3, 2), con_size(sWidth3, 2)
+
+                h0 = tf.reshape(linear(z, self.gfDim * 8 * sHeight4 * sWidth4, 'g_h0_lin'),[-1, sHeight4, sWidth4, self.gfDim * 8])
+                h0 = tf.nn.relu(self.gNorm1(h0, train=False))
+
+                h1 = differentCon2d(h0, [self.batchSize, sHeight3, sWidth3, self.gfDim * 4], name='g_h1')
+                h1 = tf.nn.relu(self.gNorm2(h1, train=False))
+
+                h2 = differentCon2d(h1, [self.batchSize, sHeight2, sWidth2, self.gfDim * 2], name='g_h2')
+                h2 = tf.nn.relu(self.gNorm3(h2, train=False))
+
+                h3 = differentCon2d(h2, [self.batchSize, sHeight1, sWidth1, self.gfDim * 1], name='g_h3')
+                h3 = tf.nn.relu(self.gNorm4(h3, train=False))
+
+                h4 = differentCon2d(h3, [self.batchSize, sHeight, sWidth, self.cDim], name='g_h4')
+
+                return tf.nn.tanh(h4)
+            else:
+                sHeight, sWidth = self.outputHeight, self.outputWidth
+                sHeight1, sHeight2 = int(sHeight / 2), int(sHeight / 4)
+                sWidth1, sWidth2 = int(sWidth / 2), int(sWidth / 4)
+
+                yb = tf.reshape(y, [self.batchSize, 1, 1, self.yDim])
+                z = tf.concat([z, y], 1)
+
+                h0 = tf.nn.relu(self.gNorm1(linear(z, self.gfcDim, 'g_h0_lin'), train=False))
+                h0 = tf.concat([h0, y], 1)
+
+                h1 = tf.nn.relu(self.gNorm2(linear(h0, self.gfDim * 2 * sHeight2 * sWidth2, 'g_h1_lin'), train=False))
+                h1 = tf.reshape(h1, [self.batchSize, sHeight2, sWidth2, self.gfDim * 2])
+                h1 = con_cond_concat(h1, yb)
+
+                h2 = tf.nn.relu(self.gNorm3(differentCon2d(h1, [self.batchSize, sHeight1, sWidth1, self.gfDim * 2], name='g_h2'), train=False))
+                h2 = con_cond_concat(h2, yb)
+
+                return tf.nn.sigmoid(differentCon2d(h2, [self.batchSize, sHeight, sWidth, self.cDim], name='g_h3'))
+
+    '''
+    D网络生成，分俩部分，有真实图像输入和G网络生成图像输入
+    这里用到一个技术:变量共享机制:
+    variable_scope 实现共享变量 。
+    简单说，我们这里通过名字来共享，然后这个D网络可以用到G网络部分数据。
+    所以在G网络中也设置了reuse_variables，所以当他为True时，就会调用G网络的变量生成的图像，当做输入图像进行输入。
+    这个机制请看:https://www.cnblogs.com/Charles-Wan/p/6200446.html
+    reuse设置为True时就会执行共享变量机制。
+    name_scope 只能管住操作 Ops (类似卷积操作) 的名字，而管不住变量 Variables 的名字,具体可看官网，name_scope是文件初始化管理器。
+    leakReLu 用于我们的这次激活函数，如果没有图像，就自己正向传播生成即可。
+    维度每次都翻倍,这样卷积核为128,256,512的增长。
+    如果有图像，就需要使用G网络和真实图像同时进行卷积处理。
+    discriminator实现的是共享变量，这样传递G生成的图和真实图产生不同的损失值，记住要改变reuse即可。如果不设置，调用俩次 discriminator赋值给不同变量时会报错。
+    #合并图表信息:自动合并所有summary
+    merged = tf.summary.merge_all()
+    '''
+    def discriminator(self,image,y=None,reuse = False):
+        with tf.variable_scope("discriminator") as scope:
+            if reuse:
+                scope.reuse_variables()
+            if not self.yDim:
+                h0 = leakReLu(con2d(image, self.dfDim, name='d_h0_conv'))
+                h1 = leakReLu(self.dNorm1(con2d(h0, self.dfDim * 2, name='d_h1_conv')))
+                h2 = leakReLu(self.dNorm2(con2d(h1, self.dfDim * 4, name='d_h2_conv')))
+                h3 = leakReLu(self.dNorm3(con2d(h2, self.dfDim * 8, name='d_h3_conv')))
+                h4 = linear(tf.reshape(h3, [self.batchSize, -1]), 1, 'd_h4_lin')
+
+                return tf.nn.sigmoid(h4), h4
+            else:
+                yb = tf.reshape(y, [self.batchSize, 1, 1, self.yDim])
+                x = con_cond_concat(image, yb)
+
+                h0 = leakReLu(con2d(x, self.cDim + self.yDim, name='d_h0_conv'))
+                h0 = con_cond_concat(h0, yb)
+
+                h1 = leakReLu(self.dNorm1(con2d(h0, self.dfDim + self.dfDim, name='d_h1_conv')))
+                h1 = tf.reshape(h1, [self.batchSize, -1])
+                h1 = tf.concat([h1, y], 1)
+
+                h2 = leakReLu(self.dNorm2(linear(h1, self.dfcDim, 'd_h2_lin')))
+                h2 = tf.concat([h2, y], 1)
+
+                h3 = linear(h2, 1, 'd_h4_lin')
+
+                return tf.nn.sigmoid(h3), h3
+
+    '''
+    加载模型
+    '''
+    def load(self, checkpoint_dir):
+        if checkpoint_dir is None:
+            raise ValueError("请检查路径是否存在!")
+        print("加载模型中...")
+        checkpoint_dir = os.path.join(checkpoint_dir, self.model_dir)
+
+        ckpt = tf.train.get_checkpoint_state(checkpoint_dir)
+        if ckpt and ckpt.model_checkpoint_path:
+            ckpt_name = os.path.basename(ckpt.model_checkpoint_path)
+            self.saver.restore(self.sess, os.path.join(checkpoint_dir, ckpt_name))
+            print("读取成功{}!".format(ckpt_name))
+            return True
+        else:
+            print("没有模型!")
+            return False
+
+    @property
+    def model_dir(self):
+        return "{}_{}_{}_{}".format(self.dataSetName, self.batchSize,self.outputHeight, self.outputWidth)
+
+    '''
+    保存
+    '''
+    def save(self, checkpoint_dir, step):
+        if checkpoint_dir is None:
+            raise ValueError("保存路径不能为空!")
+        model_name = "DC-GAN.model"
+        checkpoint_dir = os.path.join(checkpoint_dir, self.model_dir)
+
+        if not os.path.exists(checkpoint_dir):
+            os.makedirs(checkpoint_dir)
+
+        self.saver.save(self.sess, os.path.join(checkpoint_dir, model_name), global_step=step)
+
+
+    '''
+    训练
+    config.dataset指定这里的哪个文件夹，我们其实目前就一个，后续可以更新。dataset我们设置为我们现在要读取的文件，如果你以后还想要加可以设置为新的。
+    glob可以以简单的正则表达式筛选的方式返回某个文件夹下符合要求的文件名列表。,dataSet: "图像分类模型\\train\\"
+    论文中用AdamOptimizer优化求解，不是梯度下降。Adam的特点是每次迭代都控制学习率在一定范围，在GAN中效果更好。var_list为损失函数的梯度
+    beta1：浮点值或常量浮点张量。第一时刻的指数衰减率估计。用于整个动量累加器。这意味着稀疏行为等同于密集行为
+    （与忽略动量的一些动量实现相反，除非实际使用了变量切片）,侧面进行防治过拟合。
+    initialize_all_variables不再被使用，这里用来异常处理,表名我正常是用global_variables_initializer,如果你的版本不对，我就用initialize_all_variables
+    merge: 此操作创建一个 Summary 协议缓冲区，其中包含输入摘要中所有值的并集
+    epochs = 样本数/batch 也就是迭代次数
+    因为是cpu我们每100次迭代保存一次，如果是GPU可以选择更多迭代次数
+    PS:可以更新D,G网络和损失函数，但对于结果没啥英系那个，就先不写了。
+    异常: Cast float to string is not supported
+	 [[Node: Cast = Cast[DstT=DT_STRING, SrcT=DT_FLOAT, _device="/job:localhost/replica:0/task:0/device:CPU:0"](Mean_1)]]
+	解决:label=tf.cast(label,tf.int32)
+	tf.summary.merge 里面的input必须都是string类型，返回的也是string类型。
+	eval和run区别:
+	sess.run()在同一步获取多个tensor中的值，
+	每次使用 eval 和 run时，都会执行整个计算图，为了获取计算的结果，将它分配给tf.Variable，然后获取。
+    '''
+    def train(self,config):
+        if config is None:
+            raise ValueError("args不能为空!")
+        data = glob(os.path.join(pathData, config.dataSet, self.inputPattern))
+        d_optim = tf.train.AdamOptimizer(config.learningRate, beta1=0.5).minimize(self.d_loss, var_list=self.d_vars)
+        g_optim = tf.train.AdamOptimizer(config.learningRate, beta1=0.5).minimize(self.g_loss, var_list=self.g_vars)
+        try:
+            tf.global_variables_initializer().run()
+        except:
+            tf.initialize_all_variables().run()
+
+        print("d_loss_real: {},d_loss_fake: {}".format(self.d_loss_real, self.d_loss_fake))
+        print("d_loss_fake_sum: {},g_loss_sum: {}".format(self.d_loss_fake_sum, self.g_loss_sum))
+        self.g_sum = tf.summary.merge([self.zSum, self.DSum, self.GSum, self.d_loss_fake_sum,self.g_loss_sum]) #前期做完直方图和向量化，开始数据合并到G网络，这里跟我初想略有不同
+        self.d_sum = tf.summary.merge([self.zSum, self.DSum, self.d_loss_sum])                                  #前期做完直方图和向量化，数据合并到D网络
+                                                                                                                #保存写到logs日志中。 self.writer =tf.train.SummarySaverHook(pathLogs,self.sess.graph)
+        sampleZ = np.random.uniform(-1, 1, size=(self.sampleNum, self.zDim))                                    #噪音初始化，注意size。
+        sample_files = data[0:self.sampleNum]                                                                   #读取G网络图像数据，我们一次输出sampleNum个图像点。
+        sample = [
+                  get_image(sample_file,
+                            inputHeight=self.inputHeight,
+                            inputWidth=self.inputWidth,
+                            outputHeight=self.outputHeight,
+                            outputWidth=self.outputWidth,
+                            isCrop=self.isCrop,
+                            isGray=self.isGray)
+                            for sample_file in sample_files
+                  ]
+        print(type(sample))
+        if self.isGray:
+            inputSample = np.array(sample)[:,:,:,None]
+        else:
+            inputSample = np.array(sample)
+        counter = 1
+        startTime = time.time()
+        if self.load(self.checkpointDir):                                                                   #加载生成模型的路径，如果里面不为空，就说明训练过了，为空，说明没有训练。
+            print('已经训练过了,加载成功!')
+        else:
+            print("没有训练，现在从0开始!")
+        for epoch in range(config.epoch):                                                                   #正式训练时，是读取我们的batch数，也就是真实图片数
+            data = glob(os.path.join(pathData,config.dataSet,self.inputPattern))                            #训练时别忘了还是加载图片
+            batchIdxs = min(len(data),config.trainSize)
+            for idx in range(batchIdxs):
+                batchFiles = data[idx*config.batchSize:(idx+1)*config.batchSize]
+                batch = [
+                         get_image(batch_file,
+                                   inputHeight=self.inputHeight,
+                                   inputWidth=self.inputWidth,
+                                   outputHeight=self.outputHeight,
+                                   outputWidth=self.outputWidth,
+                                   isCrop=self.isCrop,
+                                   isGray=self.isGray)
+                                   for batch_file in batchFiles
+                         ]
+                if self.isGray:
+                    batchImages = np.array(batch).astype(np.float32)[:, :, :, None]
+                else:
+                    batchImages = np.array(batch).astype(np.float32)
+                batchZ = np.random.uniform(-1, 1, [config.batchSize, self.zDim]).astype(np.float32)           # 初始化噪音数据，图像大小跟正常图一样
+
+                _, summaryStr = self.sess.run([d_optim, self.dSum], feed_dict={                               # 更新D网络
+                    self.inputReal: batchImages,
+                    self.zNum: batchZ
+                })
+
+
+                _, summaryStr = self.sess.run([g_optim, self.g_sum],feed_dict = {self.zNum:batchZ})           # 更新G网络
+                _, summaryStr = self.sess.run([g_optim, self.g_sum],feed_dict = {self.zNum:batchZ})           # 更新G网络2次确保损失不为0
+
+
+                errorNoisyD = self.d_loss_fake.eval({self.zNum:batchZ})                                        # 更新损失函数
+                errorRealD = self.d_loss_real.eval({self.inputReal:batchImages})
+                errorG = self.g_loss.eval({self.zNum:batchZ})
+                print("Epoch: [%2d] [%4d/%4d] time: %4.4f, d_loss: %.8f, g_loss: %.8f" \
+                % (epoch, idx, batchIdxs,time.time() - startTime, errorNoisyD + errorRealD, errorG))
+
+                counter+=1
+                if np.mod(counter,100) == 1:
+                    try:
+                        samples,dLoss,gLoss = self.sess.run(
+                            [self.sampler,self.d_loss,self.g_loss],
+                            feed_dict = {
+                                self.zNum:sampleZ,
+                                self.inputReal:inputSample
+                            }
+                        )
+                        print(counter)
+                        save_images(samples, [8, 8],'{}train_{:02d}_{:04d}.jpg'.format(config.sampleDir, epoch, idx))
+                        print("第{}次迭代:  d_loss: {:.8f}, g_loss: {:.8f} ".format(counter,dLoss, gLoss))
+                    except Exception as exp:
+                        print('图片生成发生错误，错误异常位: {}'.format(exp))
+
+                if np.mod(counter, 100) == 2:
+                    try:
+                        self.save(config.checkpointDir, counter)
+                    except Exception as exp:
+                        print("图片保存失败,错误异常为:",exp)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epoch", type = int ,default = 25)
+    parser.add_argument("--learningRate",type = float,default=0.001)
+    parser.add_argument("--beta1", type = float,default = 0.5)
+    parser.add_argument("--trainSize", type = object,default = np.inf)
+    parser.add_argument("--batchSize", type = int,default = 64)
+    parser.add_argument("--inputHeight",type = float, default = 64)
+    parser.add_argument("--inputWidth",type = float,default = 64)
+    parser.add_argument("--outputHeight",type = float, default = 64)
+    parser.add_argument("--outputWidth", type = float, default = 64)
+    parser.add_argument("--cDim", type = float,default = 3)
+    parser.add_argument("--dataSet",type = str, default = "图像分类模型\\train\\")
+    parser.add_argument("--inputPattern", type = str,default = '*.jpg')
+    parser.add_argument("--checkpointDir",type = str,default = pathCheckPoint)
+    parser.add_argument("--sampleDir",type = str, default = sampleDir)
+    parser.add_argument("--isTrain", type = bool,default = True)
+    parser.add_argument("--isCrop", type = bool,default = False)
+    parser.add_argument("--visualize", type = bool,default = False)
+
+    return parser.parse_args()
+
+'''
+   #如果你电脑是GPU，tf.Session(config=run_config)跑
+    #run_config = tf.ConfigProto()
+    #run_config.gpu_options.allow_growth = True
+'''
+def main(args):
+    imageDownloads = os.listdir(pathImage)
+
+    if imageDownloads is None:
+        Run()
+
+    with tf.Session() as sess:
+        model = DCGAN(
+            sess,
+            inputWidth = args.inputWidth,
+            inputHeight = args.inputHeight,
+            outputWidth = args.outputWidth,
+            outputHeight = args.outputHeight,
+            batchSize = args.batchSize,
+            cDim = args.cDim,
+            dataSetName = args.dataSet,
+            inputPattern = args.inputPattern,
+            isCrop=args.isCrop,
+            checkpointDir = args.checkpointDir,
+            sampleDir = args.sampleDir
+        )
+
+        if args.isTrain:
+            model.train(args)
+        else:
+            model.load(args.checkpointDir)
+            raise Exception("训练模型必须是第一步!!!")
+
+
+if __name__ =='__main__':
+    main(parse_args())
