@@ -1,0 +1,659 @@
+from __future__ import division
+import os
+from os.path import join,basename,exists
+from os import makedirs
+import random
+import time
+from time import gmtime, strftime
+import math
+import numpy as np
+import scipy.misc
+import argparse
+import pprint
+import tensorflow as tf
+from glob import glob
+import pandas as pd
+from tqdm import tqdm
+import sys, os, multiprocessing, urllib3, csv
+from PIL import Image
+from io import BytesIO
+import json
+
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+def ParseData(data_file):
+  ann = {}
+  if 'train' in data_file or 'validation' in data_file:
+      _ann = json.load(open(data_file))['annotations']
+      for a in _ann:
+        ann[a['image_id']] = a['label_id']
+
+  key_url_list = []
+  j = json.load(open(data_file))
+  images = j['images']
+  for item in images:
+    assert len(item['url']) == 1
+    url = item['url'][0]
+    id_ = item['image_id']
+    if id_ in ann:
+        id_ = "{}_{}".format(id_, ann[id_])
+    key_url_list.append((id_, url))
+  return key_url_list
+
+
+def DownloadImage(key_url):
+  out_dir = sys.argv[2]
+  (key, url) = key_url
+  filename = os.path.join(out_dir, '%s.jpg' % key)
+
+  if os.path.exists(filename):
+    print('Image %s already exists. Skipping download.' % filename)
+    return
+
+  try:
+    #print('Trying to get %s.' % url)
+    http = urllib3.PoolManager(100)
+    response = http.request('GET', url)
+    image_data = response.data
+  except:
+    print('Warning: Could not download image %s from %s' % (key, url))
+    return
+
+  try:
+    pil_image = Image.open(BytesIO(image_data))
+  except:
+    print('Warning: Failed to parse image %s %s' % (key,url))
+    return
+
+  try:
+    pil_image_rgb = pil_image.convert('RGB')
+  except:
+    print('Warning: Failed to convert image %s to RGB' % key)
+    return
+
+  try:
+    pil_image_rgb.save(filename, format='JPEG', quality=90)
+  except:
+    print('Warning: Failed to save image %s' % filename)
+    return
+
+	
+def Run():
+  if len(sys.argv) != 3:
+    print('Syntax: %s <train|validation|test.json> <output_dir/>' % sys.argv[0])
+    sys.exit(0)
+  (data_file, out_dir) = sys.argv[1:]
+
+  if not os.path.exists(out_dir):
+    os.mkdir(out_dir)
+
+  key_url_list = ParseData(data_file)
+  pool = multiprocessing.Pool(processes=12)
+
+  with tqdm(total=len(key_url_list)) as t:
+    for _ in pool.imap_unordered(DownloadImage, key_url_list):
+      t.update(1)
+
+
+pathData = "D:\\kaggle比赛\\装潢公司图像分类与对抗生成网络项目模块\\"                            #路径前缀路径
+pathLogs = "D:\\kaggle比赛\\装潢公司图像分类与对抗生成网络项目模块\\logs"                        #保存日志路径
+pathCheckPoint = "D:\\kaggle比赛\\装潢公司图像分类与对抗生成网络项目模块\\checkpointGan\\"       #保存模型路径
+pathImage = "D:\\kaggle比赛\\装潢公司图像分类与对抗生成网络项目模块\\图像分类模型\\train\\"      #加载图片路径
+sampleDir = "D:\\kaggle比赛\\装潢公司图像分类与对抗生成网络项目模块\\GAN-data\\"                 #生成图片路径
+
+
+def con_size(size,stride):
+    if size is None:
+        raise ValueError("输入的大小不能为空!")
+    size = float(size)
+    stride = float(stride)
+    return math.ceil(size/stride)
+
+
+def get_image(imagePath,inputHeight,inputWidth,outputHeight,outputWidth,isCrop=True,isGray = True):
+    if imagePath is None or inputHeight is None or inputWidth is None:
+        raise ValueError("路径或者图片大小不能为空")
+    if isGray:
+        image = scipy.misc.imread(imagePath, flatten=True).astype(np.float)
+    else:
+        image = scipy.misc.imread(imagePath).astype(np.float)
+    return transform(image,inputHeight,inputWidth,outputHeight,outputWidth,isCrop)
+
+
+def transform(image,inputHeight,inputWidth,outputHeight = 64,outputWidth = 64,isCrop = True):
+    if image is None or inputHeight is None or inputWidth is None:
+        raise ValueError("路径或者图片大小不能为空")
+    if isCrop:
+        cropImage = center_crop(image,inputHeight,inputWidth,outputHeight,outputWidth)
+    else:
+        cropImage = scipy.misc.imresize(image,[outputHeight,outputHeight])
+    return np.array(cropImage)/127.5-1.
+
+
+def center_crop(image,cropHeight,cropWidth,outputHeight = 64,resizeHeight = 64):
+    if image is None or cropHeight is None:
+        raise ValueError("图片不能为空")
+    if cropWidth is None:
+        cropWidth = cropHeight
+    height,width = image.shape[:2]
+    centerHeight = int(round((height-cropHeight)/2.))
+    centerWidth = int(round((width-cropWidth)/2.))
+    return scipy.misc.imresize(image[centerHeight:centerHeight+cropHeight,centerWidth:centerWidth+cropWidth],[outputHeight,resizeHeight])
+
+
+def save_images(images,size,imagePath):
+    if images is None or size is None:
+        raise ValueError("图片和数量不能为空!")
+    return imageSave(images,size,imagePath)
+
+
+def inverse_transform(images):
+    if images is None:
+        raise ValueError("图片不能为空!")
+    return (images+1.)/2.
+
+
+def imageSave(images,size,path):
+    if images is None or size is None or path is None:
+        raise ValueError("图片大小路径都不能为空!")
+    return scipy.misc.imsave(path,merge(images,size))
+
+
+def merge(images,size):
+    if images is None or size is None:
+        raise ValueError("图片和数量不能为空")
+    height,width = images.shape[1],images.shape[2]
+    img = np.zeros((height*size[0],width*size[1],3))
+    for idx,image in enumerate(images):
+        w = idx % size[1]
+        h = idx // size[1]
+        img[h*height:h*height+height,w*width:w*width+width,:] = image
+    return img
+
+	
+def merge_images(images,size):
+    if images is None or size is None:
+        raise ValueError("图片和大小不能为空!")
+    return inverse_transform(images)
+
+class batch_norm(object):
+    def __init__(self,epsilon =1e-5,decay = 0.9,zero_debias_moving_mean = True,scope="batch_norm"):
+        self.epsilon = epsilon
+        self.decay = decay
+        self.zero_debias_moving_mean = zero_debias_moving_mean
+        self.scope = scope
+
+    def __call__(self,x,train=True):
+        return tf.contrib.layers.batch_norm(x, decay=self.decay, updates_collections=None, scale=True,epsilon=self.epsilon,zero_debias_moving_mean = self.zero_debias_moving_mean, is_training=train, scope=self.scope)
+
+
+def con_cond_concat(X,y):
+    if X is None or y is None:
+        raise ValueError("用于连接的矩阵不能为空!")
+    Xshapes = X.get_shape()
+    yshapes = y.get_shape()
+    return tf.concat([X,y*tf.ones([Xshapes[0],Xshapes[1],Xshapes[2],yshapes[3]])],axis=3)
+
+
+def con2d(inputDim,outputDim,filterHeight = 5,filterWidth =5 ,strideHeight = 2,strideWidth = 2,stddev = 0.01,name="con2d"):
+    if inputDim is None:
+        raise ValueError("输入数据不能为空!")
+    with tf.variable_scope(name):
+        w = tf.get_variable('w',[filterHeight,filterWidth,inputDim.get_shape()[-1],outputDim],initializer=tf.truncated_normal_initializer(stddev=stddev))
+        con = tf.nn.conv2d(inputDim,w,strides=[1,strideHeight,strideWidth,1],padding = 'SAME')
+        biases = tf.get_variable('biases',[outputDim],initializer=tf.constant_initializer(0.0))
+        con = tf.reshape(tf.nn.bias_add(con,biases),con.get_shape())
+        return con
+
+
+def differentCon2d(inputDim,outputDim,filterHeight = 5,filterWidth =5 ,strideHeight = 2,strideWidth = 2,stddev = 0.01,name="differentCon2d",withW = False):
+    if inputDim is None:
+        raise ValueError("输入数据不能为空!")
+    with tf.variable_scope(name):
+        w = tf.get_variable('w', [filterHeight, filterWidth, outputDim[-1],inputDim.get_shape()[-1]],initializer=tf.truncated_normal_initializer(stddev=stddev))
+        differentCon2ds = tf.nn.conv2d_transpose(inputDim, w,output_shape=outputDim , strides=[1, strideHeight, strideWidth, 1])
+        biases = tf.get_variable('biases', [outputDim[-1]], initializer=tf.constant_initializer(0.0))
+        differentCon2ds = tf.reshape(tf.nn.bias_add(differentCon2ds, biases), differentCon2ds.get_shape())
+        if withW:
+            return differentCon2ds,w,biases
+        else:
+            return differentCon2ds
+
+			
+def leakReLu(x,leak = 0.2,name = "leakReLu"):
+    if x is None:
+        raise ValueError("输入的矩阵不能为空!")
+    return tf.maximum(x,x*leak)
+
+
+def linear(inputDim, outputSize, scope=None, stddev=0.01, biasStart=0.0, withW=False):
+    if inputDim is None:
+        raise  ValueError("输入矩阵不能为空!")
+    inputTotal = inputDim.get_shape().as_list()
+    with tf.variable_scope(scope or "Linear"):
+        matrix = tf.get_variable("Matrix", shape=[inputTotal[1], outputSize], dtype=tf.float32,initializer=tf.random_normal_initializer(stddev=stddev))
+        bias = tf.get_variable("bias", shape=[outputSize], initializer=tf.constant_initializer(biasStart))
+        if withW:
+            return tf.matmul(inputDim, matrix) + bias,matrix,bias
+        else:
+            return tf.matmul(inputDim, matrix) + bias
+
+
+class DCGAN(object):
+    def __init__(self,sess,inputHeight = 64,inputWidth = 64,isCrop = True,batchSize = 64,sampleNum = 64,
+                 outputHeight = 64,outputWidth = 64,yDim = None,zDim = 100,gfDim = 64,dfDim = 64,gfcDim = 1024,
+                 dfcDim = 1024,cDim = 3,dataSetName = 'default',inputPattern = "*.jpg",checkpointDir = None,sampleDir = None):
+        self.sess = sess                                # tensor的session域的初始化。
+        self.isCrop = isCrop                            # 是否进行中心截取图片。
+        self.isGray = (cDim==1)                         # 是否为灰度图。
+        self.batchSize = batchSize                      # 一次迭代多少张图片。
+        self.sampleNum = sampleNum                      # D网络对G网络测试噪音的输入值，也跟batch类似，这里默认一次测试64个,属于采样函数。
+        self.inputHeight = inputHeight                  # 图像输入高度。
+        self.inputWidth = inputWidth                    # 图像输入宽度。
+        self.outputHeight = outputHeight                # 图像输出高度。
+        self.outputWidth = outputWidth                  # 图像输出宽度。
+        self.yDim = yDim                                # 我们的维度数。
+        self.zDim = zDim                                # G网络生成的噪音向量的维度。
+        self.gfDim = gfDim                              # G网络卷积层的filter的个数,64为基数。
+        self.dfDim = dfDim                              # D网络卷积层的filter的个数,64为基数。
+        self.gfcDim = gfcDim                            # G网络全连接层,1024为基数。
+        self.dfcDim = dfcDim                            # D网络全连接层,1024为基数。
+        self.cDim = cDim                                # 通道数，1为灰度，3为彩色。
+        self.dNorm1 = batch_norm(scope='dNorm1')        # D网络第一层的batchNorm正则化，加入到卷积与激活之间。
+        self.dNorm2 = batch_norm(scope='dNorm2')        # D网络第二层的batchNorm正则化，加入到卷积与激活之间。
+        if not self.yDim:
+            self.dNorm3 = batch_norm(scope='dNorm3')    # D网络第三层的batchNorm正则化，加入到卷积与激活之间,前提是没有图像输入时。
+        self.gNorm1 = batch_norm(scope='gNorm1')        # G网络第一层的batchNorm正则化，加入到卷积与激活之间。
+        self.gNorm2 = batch_norm(scope='gNorm2')        # G网络第二层的batchNorm正则化，加入到卷积与激活之间。
+        self.gNorm3 = batch_norm(scope='gNorm3')        # G网络第三层的batchNorm正则化，加入到卷积与激活之间。
+        if not self.yDim:
+            self.gNorm4 = batch_norm(scope='gNorm4')    # G网络第四层的batchNorm正则化，加入到卷积与激活之间,前提是没有图像输入时。
+        self.dataSetName = dataSetName                  # 训练图片文件夹名称，本身可以当做个list,这样更灵活。
+        self.inputPattern = inputPattern                # 以什么为结尾的图片,我们这里设置成jpg。
+        self.checkpointDir = checkpointDir              # 指定存放生成结果的路径文件夹。
+        self.build_model()                              # 创建模型。
+
+  
+    def build_model(self):
+        if self.yDim:
+            self.yNum = tf.placeholder(tf.float32,[self.batchSize,self.yDim])
+        else:
+            self.yNum = None
+  
+        if self.isCrop:
+            imageDims = [self.outputHeight, self.outputWidth, self.cDim]
+        else:
+            imageDims = [self.inputHeight, self.inputHeight, self.cDim]
+
+
+        print(self.sampleNum)
+        self.inputReal = tf.placeholder(tf.float32, [self.batchSize] + imageDims, name="inputReal")              # D网络真实图片输入
+        print(self.inputReal.shape," ",self.inputReal)
+
+        inputReal = self.inputReal
+        print("inputReal: ", inputReal.shape, " ", inputReal)
+        print("inputReal: ", self.inputReal.shape, " ", self.inputReal)
+
+        self.zNum = tf.placeholder(tf.float32, [None, self.zDim], name='z')                                
+        self.zSum = tf.summary.histogram("z", self.zNum)                                                   
+
+        if self.yDim:
+            self.G = self.generator(self.zNum,self.yNum)                                                   
+            self.D, self.lossD = self.discriminator(inputReal, self.yNum,reuse=False)                      
+            print(self.D," ",self.lossD)
+            print("inputReal: ",inputReal.shape, " ", inputReal)
+            print("inputReal: ",self.inputReal.shape, " ", self.inputReal)
+            self.sampler = self.sampler(self.zNum, self.yNum)                                              
+            self.D_, self.lossD_ = self.discriminator(self.G, self.yNum, reuse=True)                       
+            print(self.D_, " ", self.lossD_)
+        else:
+            self.G = self.generator(self.zNum)
+            self.D, self.lossD = self.discriminator(inputReal, reuse=False)                                
+            print(self.D, " ", self.lossD)
+            print("inputReal: ", inputReal.shape, " ", inputReal)
+            print("inputReal: ", self.inputReal.shape, " ", self.inputReal)
+            self.sampler = self.sampler(self.zNum)
+            self.D_, self.lossD_ = self.discriminator(self.G, reuse=True)
+            print(self.D_, " ", self.lossD_)
+   
+        self.dSum = tf.summary.histogram("d", self.D)                                                     
+        self.DSum = tf.summary.histogram('D', self.D_)                                                    
+        self.GSum = tf.summary.image('G', self.G)                                                         
+
+
+        self.d_loss_real = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.lossD,labels=tf.ones_like(self.D)))
+        self.d_loss_fake = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.lossD_,labels = tf.zeros_like(self.D_)))
+        self.g_loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=self.lossD_,labels = tf.ones_like(self.D_)))
+        self.d_loss = self.d_loss_real+self.d_loss_fake
+
+        self.d_loss_real_sum = tf.summary.scalar('d_loss_real',self.d_loss_real)
+        self.d_loss_fake_sum = tf.summary.scalar('d_loss_fake',self.d_loss_fake)
+
+        self.g_loss_sum = tf.summary.scalar('g_loss',self.g_loss)
+        self.d_loss_sum = tf.summary.scalar('d_loss',self.d_loss)
+
+        print("d_loss_real: {},d_loss_fake: {}".format(self.d_loss_real,self.d_loss_fake))
+        print("g_loss: {},d_loss: {}".format(self.g_loss, self.d_loss))
+        print("g_loss_sum: {},d_loss_sum: {}".format(self.g_loss_sum, self.d_loss_sum))
+
+        tVars = tf.trainable_variables()
+
+        self.d_vars = [var for var in tVars if 'd_' in var.name]
+        self.g_vars = [var for var in tVars if 'g_' in var.name]
+        self.saver = tf.train.Saver()
+
+
+    def generator(self, z, y=None):
+        with tf.variable_scope("generator") as scope:
+            if not self.yDim:
+                gHeight, gWidth = self.outputHeight, self.outputWidth
+
+                gHeight1, gWidth1 = con_size(gHeight, 2), con_size(gWidth, 2)
+                gHeight2, gWidth2 = con_size(gHeight1, 2), con_size(gWidth1, 2)
+                gHeight3, gWidth3 = con_size(gHeight2, 2), con_size(gWidth2, 2)
+                gHeight4, gWidth4 = con_size(gHeight3, 2), con_size(gWidth3, 2)
+
+                self.z_, self.h0_w, self.h0_b = linear(z, self.gfDim * 8 * gHeight4 * gWidth4, 'g_h0_lin', withW=True)
+
+                self.h0 = tf.reshape(self.z_, [-1, gHeight4, gWidth4, self.gfDim * 8])
+                h0 = tf.nn.relu(self.gNorm1(self.h0))
+
+                self.h1, self.h1_w, self.h1_b = differentCon2d(h0, [self.batchSize, gHeight3, gWidth3, self.gfDim * 4], name='g_h1', withW=True)
+                h1 = tf.nn.relu(self.gNorm2(self.h1))
+
+                h2, self.h2_w, self.h2_b = differentCon2d(h1, [self.batchSize, gHeight2, gWidth2, self.gfDim * 2], name='g_h2', withW=True)
+                h2 = tf.nn.relu(self.gNorm3(h2))
+
+                h3, self.h3_w, self.h3_b = differentCon2d(h2, [self.batchSize, gHeight1, gWidth1, self.gfDim * 1], name='g_h3', withW=True)
+                h3 = tf.nn.relu(self.gNorm4(h3))
+
+                h4, self.h4_w, self.h4_b = differentCon2d(h3, [self.batchSize, gHeight, gWidth, self.cDim], name='g_h4', withW=True)
+
+                return tf.nn.tanh(h4)
+            else:
+                gHeight, gWidth = self.outputHeight, self.outputWidth
+                gHeight1, gHeight2 = int(gHeight / 2), int(gHeight / 4)
+                gWidth1, gWidth2 = int(gWidth / 2), int(gWidth / 4)
+
+                yb = tf.reshape(y, [self.batchSize, 1, 1, self.yDim])
+                z = tf.concat([z, y], 1)
+
+                h0 = tf.nn.relu(self.gNorm1(linear(z, self.gfcDim, 'g_h0_lin')))
+                h0 = tf.concat([h0, y], 1)
+
+                h1 = tf.nn.relu(self.gNorm2(linear(h0, self.gfDim * 2 * gHeight2 * gWidth2, 'g_h1_lin')))
+                h1 = tf.reshape(h1, [self.batchSize, gHeight2, gWidth2, self.gfDim * 2])
+
+                h1 = con_cond_concat(h1, yb)
+
+                h2 = tf.nn.relu(self.gNorm3(differentCon2d(h1,[self.batchSize, gHeight1, gWidth1, self.gfDim * 2], name='g_h2')))
+                h2 = con_cond_concat(h2, yb)
+
+                return tf.nn.sigmoid(differentCon2d(h2, [self.batchSize, gHeight, gWidth, self.cDim], name='g_h3'))
+
+
+    def sampler(self, z, y=None):  
+        with tf.variable_scope("generator") as scope:
+            scope.reuse_variables()
+
+            if not self.yDim:
+                sHeight, sWidth = self.outputHeight, self.outputWidth
+                sHeight1, sWidth1 = con_size(sHeight, 2), con_size(sWidth, 2)
+                sHeight2, sWidth2 = con_size(sHeight1, 2), con_size(sWidth1, 2)
+                sHeight3, sWidth3 = con_size(sHeight2, 2), con_size(sWidth2, 2)
+                sHeight4, sWidth4 = con_size(sHeight3, 2), con_size(sWidth3, 2)
+
+                h0 = tf.reshape(linear(z, self.gfDim * 8 * sHeight4 * sWidth4, 'g_h0_lin'),[-1, sHeight4, sWidth4, self.gfDim * 8])
+                h0 = tf.nn.relu(self.gNorm1(h0, train=False))
+
+                h1 = differentCon2d(h0, [self.batchSize, sHeight3, sWidth3, self.gfDim * 4], name='g_h1')
+                h1 = tf.nn.relu(self.gNorm2(h1, train=False))
+
+                h2 = differentCon2d(h1, [self.batchSize, sHeight2, sWidth2, self.gfDim * 2], name='g_h2')
+                h2 = tf.nn.relu(self.gNorm3(h2, train=False))
+
+                h3 = differentCon2d(h2, [self.batchSize, sHeight1, sWidth1, self.gfDim * 1], name='g_h3')
+                h3 = tf.nn.relu(self.gNorm4(h3, train=False))
+
+                h4 = differentCon2d(h3, [self.batchSize, sHeight, sWidth, self.cDim], name='g_h4')
+
+                return tf.nn.tanh(h4)
+            else:
+                sHeight, sWidth = self.outputHeight, self.outputWidth
+                sHeight1, sHeight2 = int(sHeight / 2), int(sHeight / 4)
+                sWidth1, sWidth2 = int(sWidth / 2), int(sWidth / 4)
+
+                yb = tf.reshape(y, [self.batchSize, 1, 1, self.yDim])
+                z = tf.concat([z, y], 1)
+
+                h0 = tf.nn.relu(self.gNorm1(linear(z, self.gfcDim, 'g_h0_lin'), train=False))
+                h0 = tf.concat([h0, y], 1)
+
+                h1 = tf.nn.relu(self.gNorm2(linear(h0, self.gfDim * 2 * sHeight2 * sWidth2, 'g_h1_lin'), train=False))
+                h1 = tf.reshape(h1, [self.batchSize, sHeight2, sWidth2, self.gfDim * 2])
+                h1 = con_cond_concat(h1, yb)
+
+                h2 = tf.nn.relu(self.gNorm3(differentCon2d(h1, [self.batchSize, sHeight1, sWidth1, self.gfDim * 2], name='g_h2'), train=False))
+                h2 = con_cond_concat(h2, yb)
+
+                return tf.nn.sigmoid(differentCon2d(h2, [self.batchSize, sHeight, sWidth, self.cDim], name='g_h3'))
+
+
+    def discriminator(self,image,y=None,reuse = False):
+        with tf.variable_scope("discriminator") as scope:
+            if reuse:
+                scope.reuse_variables()
+            if not self.yDim:
+                h0 = leakReLu(con2d(image, self.dfDim, name='d_h0_conv'))
+                h1 = leakReLu(self.dNorm1(con2d(h0, self.dfDim * 2, name='d_h1_conv')))
+                h2 = leakReLu(self.dNorm2(con2d(h1, self.dfDim * 4, name='d_h2_conv')))
+                h3 = leakReLu(self.dNorm3(con2d(h2, self.dfDim * 8, name='d_h3_conv')))
+                h4 = linear(tf.reshape(h3, [self.batchSize, -1]), 1, 'd_h4_lin')
+
+                return tf.nn.sigmoid(h4), h4
+            else:
+                yb = tf.reshape(y, [self.batchSize, 1, 1, self.yDim])
+                x = con_cond_concat(image, yb)
+
+                h0 = leakReLu(con2d(x, self.cDim + self.yDim, name='d_h0_conv'))
+                h0 = con_cond_concat(h0, yb)
+
+                h1 = leakReLu(self.dNorm1(con2d(h0, self.dfDim + self.dfDim, name='d_h1_conv')))
+                h1 = tf.reshape(h1, [self.batchSize, -1])
+                h1 = tf.concat([h1, y], 1)
+
+                h2 = leakReLu(self.dNorm2(linear(h1, self.dfcDim, 'd_h2_lin')))
+                h2 = tf.concat([h2, y], 1)
+
+                h3 = linear(h2, 1, 'd_h4_lin')
+
+                return tf.nn.sigmoid(h3), h3
+
+ 
+    def load(self, checkpoint_dir):
+        if checkpoint_dir is None:
+            raise ValueError("请检查路径是否存在!")
+        print("加载模型中...")
+        checkpoint_dir = os.path.join(checkpoint_dir, self.model_dir)
+
+        ckpt = tf.train.get_checkpoint_state(checkpoint_dir)
+        if ckpt and ckpt.model_checkpoint_path:
+            ckpt_name = os.path.basename(ckpt.model_checkpoint_path)
+            self.saver.restore(self.sess, os.path.join(checkpoint_dir, ckpt_name))
+            print("读取成功{}!".format(ckpt_name))
+            return True
+        else:
+            print("没有模型!")
+            return False
+
+    @property
+    def model_dir(self):
+        return "{}_{}_{}_{}".format(self.dataSetName, self.batchSize,self.outputHeight, self.outputWidth)
+
+		
+    def save(self, checkpoint_dir, step):
+        if checkpoint_dir is None:
+            raise ValueError("保存路径不能为空!")
+        model_name = "DC-GAN.model"
+        checkpoint_dir = os.path.join(checkpoint_dir, self.model_dir)
+
+        if not os.path.exists(checkpoint_dir):
+            os.makedirs(checkpoint_dir)
+
+        self.saver.save(self.sess, os.path.join(checkpoint_dir, model_name), global_step=step)
+
+
+    def train(self,config):
+        if config is None:
+            raise ValueError("args不能为空!")
+        data = glob(os.path.join(pathData, config.dataSet, self.inputPattern))
+        d_optim = tf.train.AdamOptimizer(config.learningRate, beta1=0.5).minimize(self.d_loss, var_list=self.d_vars)
+        g_optim = tf.train.AdamOptimizer(config.learningRate, beta1=0.5).minimize(self.g_loss, var_list=self.g_vars)
+        try:
+            tf.global_variables_initializer().run()
+        except:
+            tf.initialize_all_variables().run()
+
+        print("d_loss_real: {},d_loss_fake: {}".format(self.d_loss_real, self.d_loss_fake))
+        print("d_loss_fake_sum: {},g_loss_sum: {}".format(self.d_loss_fake_sum, self.g_loss_sum))
+        self.g_sum = tf.summary.merge([self.zSum, self.DSum, self.GSum, self.d_loss_fake_sum,self.g_loss_sum]) 
+        self.d_sum = tf.summary.merge([self.zSum, self.DSum, self.d_loss_sum])                                 
+                                                                                                               
+        sampleZ = np.random.uniform(-1, 1, size=(self.sampleNum, self.zDim))                                   
+        sample_files = data[0:self.sampleNum]                                                                  
+        sample = [
+                  get_image(sample_file,
+                            inputHeight=self.inputHeight,
+                            inputWidth=self.inputWidth,
+                            outputHeight=self.outputHeight,
+                            outputWidth=self.outputWidth,
+                            isCrop=self.isCrop,
+                            isGray=self.isGray)
+                            for sample_file in sample_files
+                  ]
+        print(type(sample))
+        if self.isGray:
+            inputSample = np.array(sample)[:,:,:,None]
+        else:
+            inputSample = np.array(sample)
+        counter = 1
+        startTime = time.time()
+        if self.load(self.checkpointDir):                                                                  
+            print('已经训练过了,加载成功!')
+        else:
+            print("没有训练，现在从0开始!")
+        for epoch in range(config.epoch):                                                                  
+            data = glob(os.path.join(pathData,config.dataSet,self.inputPattern))                           
+            batchIdxs = min(len(data),config.trainSize)
+            for idx in range(batchIdxs):
+                batchFiles = data[idx*config.batchSize:(idx+1)*config.batchSize]
+                batch = [
+                         get_image(batch_file,
+                                   inputHeight=self.inputHeight,
+                                   inputWidth=self.inputWidth,
+                                   outputHeight=self.outputHeight,
+                                   outputWidth=self.outputWidth,
+                                   isCrop=self.isCrop,
+                                   isGray=self.isGray)
+                                   for batch_file in batchFiles
+                         ]
+                if self.isGray:
+                    batchImages = np.array(batch).astype(np.float32)[:, :, :, None]
+                else:
+                    batchImages = np.array(batch).astype(np.float32)
+                batchZ = np.random.uniform(-1, 1, [config.batchSize, self.zDim]).astype(np.float32)           
+
+                _, summaryStr = self.sess.run([d_optim, self.dSum], feed_dict={                               
+                    self.inputReal: batchImages,
+                    self.zNum: batchZ
+                })
+
+
+                _, summaryStr = self.sess.run([g_optim, self.g_sum],feed_dict = {self.zNum:batchZ})           
+                _, summaryStr = self.sess.run([g_optim, self.g_sum],feed_dict = {self.zNum:batchZ})           
+
+
+                errorNoisyD = self.d_loss_fake.eval({self.zNum:batchZ})                                       
+                errorRealD = self.d_loss_real.eval({self.inputReal:batchImages})
+                errorG = self.g_loss.eval({self.zNum:batchZ})
+                print("Epoch: [%2d] [%4d/%4d] time: %4.4f, d_loss: %.8f, g_loss: %.8f" \
+                % (epoch, idx, batchIdxs,time.time() - startTime, errorNoisyD + errorRealD, errorG))
+
+                counter+=1
+                if np.mod(counter,100) == 1:
+                    try:
+                        samples,dLoss,gLoss = self.sess.run(
+                            [self.sampler,self.d_loss,self.g_loss],
+                            feed_dict = {
+                                self.zNum:sampleZ,
+                                self.inputReal:inputSample
+                            }
+                        )
+                        print(counter)
+                        save_images(samples, [8, 8],'{}train_{:02d}_{:04d}.jpg'.format(config.sampleDir, epoch, idx))
+                        print("第{}次迭代:  d_loss: {:.8f}, g_loss: {:.8f} ".format(counter,dLoss, gLoss))
+                    except Exception as exp:
+                        print('图片生成发生错误，错误异常位: {}'.format(exp))
+
+                if np.mod(counter, 100) == 2:
+                    try:
+                        self.save(config.checkpointDir, counter)
+                    except Exception as exp:
+                        print("图片保存失败,错误异常为:",exp)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epoch", type = int ,default = 25)
+    parser.add_argument("--learningRate",type = float,default=0.001)
+    parser.add_argument("--beta1", type = float,default = 0.5)
+    parser.add_argument("--trainSize", type = object,default = np.inf)
+    parser.add_argument("--batchSize", type = int,default = 64)
+    parser.add_argument("--inputHeight",type = float, default = 64)
+    parser.add_argument("--inputWidth",type = float,default = 64)
+    parser.add_argument("--outputHeight",type = float, default = 64)
+    parser.add_argument("--outputWidth", type = float, default = 64)
+    parser.add_argument("--cDim", type = float,default = 3)
+    parser.add_argument("--dataSet",type = str, default = "图像分类模型\\train\\")
+    parser.add_argument("--inputPattern", type = str,default = '*.jpg')
+    parser.add_argument("--checkpointDir",type = str,default = pathCheckPoint)
+    parser.add_argument("--sampleDir",type = str, default = sampleDir)
+    parser.add_argument("--isTrain", type = bool,default = True)
+    parser.add_argument("--isCrop", type = bool,default = False)
+    parser.add_argument("--visualize", type = bool,default = False)
+
+    return parser.parse_args()
+
+
+def main(args):
+    imageDownloads = os.listdir(pathImage)
+
+    if imageDownloads is None:
+        Run()
+
+    with tf.Session() as sess:
+        model = DCGAN(
+            sess,
+            inputWidth = args.inputWidth,
+            inputHeight = args.inputHeight,
+            outputWidth = args.outputWidth,
+            outputHeight = args.outputHeight,
+            batchSize = args.batchSize,
+            cDim = args.cDim,
+            dataSetName = args.dataSet,
+            inputPattern = args.inputPattern,
+            isCrop=args.isCrop,
+            checkpointDir = args.checkpointDir,
+            sampleDir = args.sampleDir
+        )
+
+        if args.isTrain:
+            model.train(args)
+        else:
+            model.load(args.checkpointDir)
+            raise Exception("训练模型必须是第一步!!!")
+
+
+if __name__ =='__main__':
+    main(parse_args())
