@@ -1,0 +1,192 @@
+http://lib.csdn.net/article/aiframework/66348?knId=1756
+https://blog.csdn.net/lreaderl/article/details/78022724
+
+一.简介
+主要用途:处理序列数据。 记住是序列数据。
+比如我们要预测句子中下个单词是什么?是基于上一个句子得到的结果，也就是基于之前的单词。传统DNN只能对上一层的结果去推出下一个，而不是之前所有。
+在序列数据中，我们需要对很早以前的句子结合起来做下一步的推测。这样传统DNN就做不到了。
+所以RNN这种循环神经网络才诞生了。这个原理就是当前输出跟前面的所有输出有关，也就是形成了信息记忆并用于当前输出的计算。所以隐藏层之间是有连接的。
+隐藏层的输入不仅包括输入层的输出，还包括上一时刻隐藏层的输出。
+
+二.原理
+就是所有输入样本，都走个网路结果，然后从最开始到最后，所有隐层都会用到前面所有的输出结果。然后一个方向是进行最终输出，一个方向是横向传入到下一层。
+这样就是个超强的记忆功能。
+公式如下:
+ot = Vf(Uxt+Wf(UXt-1+Wf(Uxt-2.....)))
+基于这个原理，就明白RNN可以接收多个输入值。
+
+三.训练算法: BPTT
+1.前向计算每个神经元的输出值。
+2.反向计算每个神经元的误差项值，它是误差函数E对神经元j的加权输入的偏导数。
+将第I层t时刻的误差沿着俩个方向传播:
+(1)一个方向->传递到上一层网络，这部分只和权重矩阵U有关。相当于把全连接网络转90度。 -》就是我们正常的传播
+(2)一个方向->沿着时间线传递到初始时刻，这部分和权重矩阵W有关。 就是不停的找上个输入的层，也就是输入数据越多，传播的就越多，每个W都不同。
+3.最后再用随机梯度下降算法更新权重。
+
+四.语音模型举例
+1.将词表达为向量形式
+(1)建立一个包含所有词的词典,每个词在词典里有唯一的编号
+(2)任意一个词都可用一个N维的one-hot向量表示。
+这样得到一个高维，稀疏矩阵。然后用PCA/RandomSpari等方法降维。
+
+2.为了输出最可能的词，所以需要计算词典中每个词是当前词的下一个词的概率，再选择概率最大的那一个。
+所以，我们的输出向量是N维向量->向量中每个元素对应词典相应词是下一个词的概率。 也就是["下个词是'我'的概率"，"下个词是'昨天'的概率"...]
+
+3.用softmax作为输出层。
+也就是输入的单词矩阵经过RNN传播后的，每个输入词最后进入softmax 层得到最后概率值，取最大的那个作为输出结果。
+所有指数次之和分之当前指数次之和。
+
+4.训练
+把语料换成语言模型的训练集，对输入x和标签y进行向量化，y也是one-hot
+对概率进行建模，一般用交叉熵:
+L(y,o) = -1/N∑ynlogOn 
+假设概率是:0.03,0.09,0.24,0.64. 我们输出第一个，也就是[1,0,0,0]
+所以L = -1/N∑ynlogOn = -y1.logo1 = -(1*log0.03+0*log0.09+0*log0.24+0*log0.64) = 3.51
+L就是我们的优化目标。然后再用梯度下降去做运算。不断地梯度下降优化L即可。
+PS:交叉熵刻画的是实际输出（概率）与期望输出（概率）的距离，也就是交叉熵的值越小，两个概率分布就越接近。
+假设概率分布p为期望输出，概率分布q为实际输出，H(p,q)为交叉熵，则：
+H(p,q) = -∑p(x)logq(x)
+具体看: https://blog.csdn.net/chaipp0607/article/details/73392175
+ross_entropy = -tf.reduce_mean(y_ * tf.log(tf.clip_by_value(y, 1e-10, 1.0))) 
+1
+其中y_表示期望的输出，y表示实际的输出（概率值），*为矩阵元素间相乘，而不是矩阵乘。 
+上述代码实现了第一种形式的交叉熵计算，需要说明的是，计算的过程其实和上面提到的公式有些区别，按照上面的步骤，
+平均交叉熵应该是先计算batch中每一个样本的交叉熵后取平均计算得到的，而利用tf.reduce_mean函数其实计算的是整个矩阵的平均值，这
+样做的结果会有差异，但是并不改变实际意义。 
+除了tf.reduce_mean函数，tf.clip_by_value函数是为了限制输出的大小，为了避免log0为负无穷的情况，将输出的值限定在(1e-10, 1.0)之间，
+其实1.0的限制是没有意义的，因为概率怎么会超过1呢。
+
+由于在神经网络中，交叉熵常常与Sorfmax函数组合使用，所以TensorFlow对其进行了封装，即：
+
+cross_entropy = tf.nn.sorfmax_cross_entropy_with_logits(y_ ,y) 
+1
+与第一个代码的区别在于，这里的y用神经网络最后一层的原始输出就好了。
+
+五.双向循环网络
+简单说，就是当前的输出不光与前面序列有关，还跟后面序列有关。例如:预测一个语句中缺失的词语那么就需要根据上下文预测。
+实现是由俩个RNN上下叠加组成，输出由这两个RNN隐藏层状态决定。
+
+六.深层循环神经网络
+每一步的输入，有多层网络，这样有更强的表达学习能力，但是复杂性也提高了，需要更多训练数据。
+
+七.GRU
+RNN的改良。
+1.序列中不同位置的单词对当前隐藏层的状态影响不同，越前面的影响越小。即都加个距离权，距离越远权值越小，也就是取类似距离倒数。
+2.产生误差error时，误差可能由一个或几个单词引发，所以应当仅仅对对应的单词weight更新。
+GRU首先根据当前输入单词向量word vector已经前一个隐藏层状态hidden state计算出update gate 和 reset gate.再根据resnet gate，当前word vector以及
+前一个hidden state计算新的记忆单元内容。当reset gate为1时，new memory content忽略之前所有memory content,最终memory是之前的hidden state与
+new memory content结合。
+具体看: https://blog.csdn.net/wangyangzhizhou/article/details/77332582
+
+八.LSTM
+主要是神经元与RNN不同，每个神经元是一个记忆细胞，细胞里有个输入门 "input gate",一个遗忘门"forget gate",一个输出门 "output gate". 俗称三重门。
+LSTM 的“记忆细胞” 
+这里写图片描述
+展开来的记忆细胞，上面的黑线是记忆流，下面的黑线是数据流
+
+当前时刻的数据流（包括其他细胞的输入和来自数据的输入） 
+一条暗线
+
+这个细胞本身的记忆流 
+两条线互相呼应，互相纠缠，典型的工作流如下： 
+在“输入门”中，根据当前的数据流来控制接受细胞记忆的影响；接着，在 “遗忘门”里，更新这个细胞的记忆和数据流；然后在“输出门”里产生输出更新后的记忆和数据流。 
+LSTM 模型的关键之一就在于这个“遗忘门”， 它能够控制训练时候梯度在这里的收敛性（从而避免了 RNN 中的梯度 vanishing/exploding 问题），同时也能够保持长期的记忆性。 
+目前 LSTM 模型在实践中取得了非常好的效果， 只需要训练一个两三层的LSTM, 它就可以 
+模仿保罗·格雷厄姆进行写作 
+生成维基百科的 markdown 页面 
+帮你写代码
+
+LSTMs与GRUs的区别
+这里写图片描述
+??从上图可以看出，它们之间非常相像，不同在于： 
+new memory的计算方法都是根据之前的state及input进行计算，但是GRUs中有一个reset gate控制之前state的进入量，而在LSTMs里没有这个gate； 
+产生新的state的方式不同，LSTMs有两个不同的gate，分别是forget gate (f gate)和input gate(i gate)，而GRUs只有一个update gate(z gate)； 
+LSTMs对新产生的state又一个output gate(o gate)可以调节大小，而GRUs直接输出无任何调节。
+
+LSTM与GRU: https://blog.csdn.net/lreaderl/article/details/78022724
+
+九.RNN代码
+import tensorflow as tf
+from tensorflow.examples.tutorials.mnist import input_data
+tf.set_random_seed(1)
+
+mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
+
+# hyperparameters
+lr = 0.001
+training_iters = 100000
+batch_size = 128
+
+n_inputs = 28  # shape 28*28
+n_steps = 28  # time steps
+n_hidden_unis = 128  # neurons in hidden layer
+n_classes = 10  # classes 0-9
+
+# tf Graph input
+x = tf.placeholder(tf.float32, [None, n_steps, n_inputs])
+y = tf.placeholder(tf.float32, [None, n_classes])
+
+# Define weights
+weights = {
+    # (28,128)
+    'in': tf.Variable(tf.random_normal([n_inputs, n_hidden_unis])),
+    # (128,10)
+    'out': tf.Variable(tf.random_normal([n_hidden_unis, n_classes]))
+}
+biases = {
+    # (128,)
+    'in': tf.Variable(tf.constant(0.1, shape=[n_hidden_unis, ])),
+    # (10,)
+    'out': tf.Variable(tf.constant(0.1, shape=[n_classes, ]))
+}
+
+
+def RNN(X, weights, biases):
+
+    # hidden layer for input to cell
+    # X(128 batch, 28 steps, 28 inputs) => (128*28, 28)
+    X = tf.reshape(X, [-1, n_inputs])
+    # ==>(128 batch * 28 steps, 28 hidden)
+    X_in = tf.matmul(X, weights['in'])+biases['in']
+    # ==>(128 batch , 28 steps, 28 hidden)
+    X_in = tf.reshape(X_in,[-1, n_steps, n_hidden_unis])
+
+
+    # cell
+    lstm_cell = tf.contrib.rnn.BasicLSTMCell(n_hidden_unis, forget_bias=1.0, state_is_tuple=True)
+    # lstm cell is divided into two parts(c_state, m_state)
+    _init_state = lstm_cell.zero_state(batch_size, dtype=tf.float32)
+    outputs, states = tf.nn.dynamic_rnn(lstm_cell, X_in, initial_state=_init_state, time_major=False)
+
+
+    # hidden layer for output as the final results
+    results = tf.matmul(states[1], weights['out']) + biases['out']  # states[1]->m_state states[1]=output[-1]
+    # outputs = tf.unstack(tf.transpose(outputs,[1,0,2]))
+    # results = tf.matmul(outputs[-1], weights['out']) + biases['out']
+    return results
+
+
+pred = RNN(x, weights, biases)
+cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=pred, labels=y))
+train_op = tf.train.AdamOptimizer(lr).minimize(cost)
+
+correct_pred = tf.equal(tf.argmax(pred, 1), tf.argmax(y, 1))
+accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
+
+init = tf.global_variables_initializer()
+with tf.Session() as sess:
+    sess.run(init)
+    step = 0
+    while step * batch_size < training_iters:
+        batch_xs, batch_ys = mnist.train.next_batch(batch_size)
+        batch_xs = batch_xs.reshape([batch_size, n_steps, n_inputs])
+        sess.run([train_op], feed_dict={
+            x: batch_xs,
+            y: batch_ys
+        })
+        if step % 20 ==0:
+            print (sess.run(accuracy, feed_dict={
+            x: batch_xs,
+            y: batch_ys
+        }))
+        step += 1
