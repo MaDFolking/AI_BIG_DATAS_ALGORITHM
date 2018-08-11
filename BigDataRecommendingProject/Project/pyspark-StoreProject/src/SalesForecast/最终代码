@@ -1,0 +1,670 @@
+import pickle
+import warnings
+import numpy as np
+import pandas as pd
+import xgboost as xgb
+from scipy.stats import skew, kurtosis
+from sklearn.model_selection import KFold
+from sklearn.base import TransformerMixin
+from sklearn.pipeline import make_pipeline
+from sklearn.base import clone, is_classifier
+from sklearn.preprocessing import  LabelEncoder
+from sklearn.linear_model import RandomizedLasso
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection._split import check_cv
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.externals.joblib import Parallel, delayed
+
+
+'''
+这是最终整理后的代码，我只在关键地方注释，如果想看注释，请看草稿代码，如果想看调参，请看调参代码和集成学习调参方法。
+我们尽量生成类的格式，并重写fit,transform方法，这样方便使用管道，方便后面维护。fit中数据模型构建，也就是初始化self参数并做一些处理，transofrm处理X数据集。
+我们的基准线是rmpse,但我这里用了xgb自带的rmse,如果你想用直接在公共函数里改成rmpse_xgb即可。
+因为调参我们只调了XGB,后面模型融合效果不如单XGB好，所以这里不融合模型了，我会在CTR预估，推荐价格这俩个大项目模块中
+分别使用更好的模型融合。我们的用法具体看:https://blog.csdn.net/wateryouyo/article/details/53909636
+'''
+
+'''
+util包下的类,函数,变量
+'''
+warnings.filterwarnings("ignore")
+path = "D:\\kaggle比赛\\装潢公司货物与销量预测项目模块\\data\\"
+list_time = ['year', 'month', 'day']
+list_prom = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+xgb_params = {
+    'objective': 'reg:linear',
+    'booster': 'gbtree',
+    'eta': 0.05,
+    'max_depth': 13,
+    'min_child_weight': np.power(10, 0.5477),
+    'gamma': 1.45,
+    'alpha': np.power(10, -0.2887),
+    'lambda': np.power(10, 1.7570),
+    'subsample': 0.7143,
+    'colsample_bytree': 0.6453,
+    'n_jobs': -1,
+    'nthread': 4
+}
+
+xgb_fit_params = {
+    'early_stopping_rounds': 15,
+    'eval_metric': 'rmse',
+    'verbose': False
+}
+
+
+'''
+base line
+'''
+def ToWeight(y):
+    if y is None:
+        raise ValueError("输入值不能为空!")
+    w = np.zeros(y.shape, dtype=float)
+    ind = y != 0
+    w[ind] = 1./(y[ind]**2)
+    return w
+
+def rmspe(y_predict, y):
+    if y is None or y_predict is None:
+        raise ValueError("输入值不能为空!")
+    w = ToWeight(y)
+    rmspe = np.sqrt(np.mean(w * (y - y_predict) ** 2))
+    return rmspe
+
+def rmspe_xg(y_predict, y):
+    if y is None or y_predict is None:
+        raise ValueError("输入值不能为空!")
+    y = y.get_label()
+    w = ToWeight(y)
+    rmspe = np.sqrt(np.mean(w * (y - y_predict) ** 2))
+    return "rmspe", rmspe
+
+'''
+特征构造所用函数，前俩个特征和第三个特征的的离散情况，如果越大表示越不稳定，越小越稳定。
+'''
+def diff2(x):
+    if x is None:
+        raise ValueError("输入值不能为空!")
+    return np.diff(x,n=2)
+
+
+'''
+特征构造函数
+'''
+def get_stat_funs():
+    stat_funs = []
+
+    stats = [len,np.min,np.max,np.mean]
+    stats_kwargs = [{} for i in range(4)]
+    stats_total = stats + [np.std, skew, kurtosis] + 19 * [np.percentile]
+    stats_kwargs_total = [{} for i in range(7)] + [{'q': i} for i in np.linspace(0.05, 0.95, 19)]
+
+    for stat, stat_kwargs in zip(stats, stats_kwargs):
+        stat_funs.append(_StatFunAdaptor(stat, **stat_kwargs))
+        stat_funs.append(_StatFunAdaptor(stat, np.log1p,np.unique,np.diff, **stat_kwargs))
+        stat_funs.append(_StatFunAdaptor(stat, np.log1p,np.unique,diff2, **stat_kwargs))
+        stat_funs.append(_StatFunAdaptor(stat, np.log1p,np.unique, **stat_kwargs))
+
+    for stat, stat_kwargs in zip(stats_total, stats_kwargs_total):
+        stat_funs.append(_StatFunAdaptor(stat, **stat_kwargs))
+        stat_funs.append(_StatFunAdaptor(stat, np.unique, **stat_kwargs))
+        stat_funs.append(_StatFunAdaptor(stat, np.unique, np.diff, **stat_kwargs))
+        stat_funs.append(_StatFunAdaptor(stat, np.unique, diff2, **stat_kwargs))
+
+    return stat_funs
+
+'''
+特征构造类
+'''
+class _StatFunAdaptor:
+    def __init__(self, stat_fun, *funs, **stat_fun_kwargs):
+        if stat_fun is None:
+            raise ValueError("输入值不能为空!")
+        self.stat_fun = stat_fun
+        self.funs = funs
+        self.stat_fun_kwargs = stat_fun_kwargs
+
+    def __call__(self, x):
+        x = x[x != 0]
+        for fun in self.funs:
+            x = fun(x)
+        if x.size == 0:
+            return -99999
+        return self.stat_fun(x, **self.stat_fun_kwargs)
+
+'''
+类型拆分
+'''
+def split_type(X):
+    print("拆分数据集类型开始...")
+    if X is None:
+        raise ValueError("输入数据集不能为空!")
+    numeric_features = X.columns[X.dtypes != object ]
+    numeric_non_features = X.columns[X.dtypes == object]
+    print("拆分数据集类型结束....")
+    return numeric_features,numeric_non_features
+
+'''
+处理nan值
+'''
+def parse_nan(X):
+    print("处理nan值开始...")
+    if X is None:
+        raise ValueError("输入数据集不能为空!")
+
+    X.CompetitionDistance.fillna(X.CompetitionDistance.mean(),inplace = True)
+    X.Open.fillna(1,inplace = True)
+    X.fillna(0,inplace = True)
+
+    if X.isnull().sum().sort_values(ascending=False)[0] != 0:
+        raise ValueError("nan值处理失败!")
+    print("处理nan值结束...")
+    return X
+
+'''
+特征提取-随机森林函数
+'''
+def get_rfc():
+    return RandomForestClassifier(
+        n_estimators=100,
+        max_features=0.5,
+        max_depth=None,
+        max_leaf_nodes=270,
+        min_impurity_decrease=0.0001,
+        random_state=123,
+        n_jobs=-1
+    )
+
+'''
+加载数据
+'''
+def load_data():
+    print("加载数据集开始...")
+    train = pd.read_csv(path+'train_v2.csv')
+    test = pd.read_csv(path+'test_v2.csv')
+    company = pd.read_csv(path+'store.csv')
+
+    if train is None or test is None or company is None:
+        raise ValueError("你读取文件失败或者你读取的是一个空文件，请检查你的代码或者路径!")
+
+    train = train[train['Sales']>0]
+    train_customers = train['Customers']
+    train = pd.merge(train,company,on='Store',how='left')
+    test = pd.merge(test,company,on='Store',how='left')
+    print(test.shape)
+
+    if train.shape[1]<=company.shape[1] or test.shape[1] <= company.shape[1]:
+        raise ImportError("文件合并失败,请检查你的代码!")
+
+    train_y = np.log1p(train['Sales'])
+    train.drop('Sales', axis = 1, inplace = True)
+    train.drop('StateHoliday', axis = 1,inplace = True)
+    test.drop('StateHoliday',axis = 1,inplace=True)
+    print("加载数据集结束... \n\n{}\n".format("*"*200))
+    return train, train_y, test, train_customers
+
+'''
+离散时间序列
+'''
+class ParseTime(BaseEstimator, TransformerMixin):
+    def __init__(self,isNotTime = False ):
+        print("离散时间序列初始化结束...")
+        if isNotTime:
+            raise ImportError("非时间序列数据集无法离散时间序列!")
+        self.isNotTime = isNotTime
+        print("离散时间序列初始化结束... \n\n{}\n".format("*"*200))
+
+    def fit(self,X,y = None):
+        print("离散时间序列开始...")
+        if X is None:
+            raise ValueError("输入数据不能为空!")
+        self.list_total = list_time+list_prom
+        self.data_num = pd.DataFrame(columns=self.list_total)
+        self.data_num['year'] = X.Date.apply(lambda x: x.split('-')[0]).astype(float)
+        self.data_num['month'] = X.Date.apply(lambda x: x.split('-')[1]).astype(float)
+        self.data_num['day'] = X.Date.apply(lambda x: x.split('-')[2]).astype(float)
+
+        for j in list_prom:
+            self.data_num[j] = X.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if j in x else 0)
+
+        self.total_time = pd.concat((X,self.data_num),axis=1)
+        return self
+
+    def transform(self,X,y = None):
+        X = self.total_time
+        print(X.columns)
+        if 'Date' in X.columns:
+            print(X.columns," ",X.shape)
+            X.drop('Date',axis = 1,inplace = True)
+        if 'PromoInterval' in X.columns:
+            print(X.columns," ",X.shape)
+            X.drop('PromoInterval', axis = 1,inplace = True)
+        print("离散时间序列结束... \n\n{}\n".format("*" * 200))
+        return X
+
+'''
+数据处理
+'''
+class DataParse(BaseEstimator, TransformerMixin):
+    def __init__(self,isNum = True):
+        print("数据处理初始化开始...")
+        if isNum == False:
+            raise ImportError("该数据集不进行数据处理")
+        self.isNum = isNum
+        print("数据处理初始化结束...\n\n{}\n".format("*"*200))
+
+    def fit(self,X,y = None):
+        print("数据处理开始...")
+        if X is None:
+            raise ValueError("输入数据不能为空!")
+        self.numeric_features, self.numeric_non_features = split_type(X)
+        numeric_mean = X.loc[:, self.numeric_features].mean()
+        numeric_std = X.loc[:, self.numeric_features].std()
+        X.loc[:, self.numeric_features] = (X.loc[:, self.numeric_features] - numeric_mean) / numeric_std
+
+        flag = False
+        flags = []
+        for i in self.numeric_non_features:
+            if i in X:
+                flags.append(True)
+            else:
+                flags.append(False)
+        print(self.numeric_non_features)
+
+        if flag not in flags:
+            le = LabelEncoder()
+            for i in self.numeric_non_features:
+                le.fit(X[i])
+                X[i] = le.transform(X[i])
+
+            print("One-Hot编码开始...")
+            for j in self.numeric_non_features:
+                all_df_scale = pd.get_dummies(X[j], prefix=X[j])
+                X.drop(j, axis=1, inplace=True)
+                X = pd.concat((X, all_df_scale), axis=1)
+            print("One-Hot编码结束...")
+        else:
+            return X
+        return self
+
+    def transform(self,X,y = None):
+        X = parse_nan(X)
+        print("数据处理结束... \n{}\n".format("*" * 200))
+        return X
+
+'''
+特征选择
+'''
+class SelectionFeature(BaseEstimator, TransformerMixin):
+    def __init__(self,isSelect = False):
+        print("特征选择初始化开始...")
+        if isSelect:
+            raise ImportError("该数据集不用进行特征选择...")
+        self.isSelect = isSelect
+        print("特征选择初始化结束... \n{}\n".format("*" * 200))
+
+    def fit(self,X,y = None):
+        print("特征选择开始...")
+        if X is None:
+            raise ValueError('输入数据不能为空!')
+        X = pd.DataFrame(X)
+        self.all_columns = X.columns
+        self.len_columns = X.shape[1]
+        self.columns_remove = [self.all_columns[j] for i in range(self.len_columns - 1) for j in range(i+1,self.len_columns)
+                          if np.array_equal(X[self.all_columns[i]],X[self.all_columns[j]])]
+        if self.columns_remove is None:
+            print("特征选择处理失败!")
+        X = pd.DataFrame(X)
+        X.drop(self.columns_remove, axis=1, inplace=True)
+        print("特征选择结束... \n{}\n".format("*" * 200))
+        return self
+
+    def transform(self,X,y = None):
+        return X
+
+
+
+'''
+特征拼接
+'''
+class SplitFeature(BaseEstimator, TransformerMixin):
+    def __init__(self,isSplit = False):
+        print("特征拼接初始化开始...")
+        if isSplit:
+            raise ImportError("该数据集不用特征拼接")
+        self.isSplit = isSplit
+        print("特征拼接初始化结束...\n\n{}\n".format("*"*200))
+
+    def fit(self,X,y = None):
+        print("特征拼接开始...")
+        if X is None:
+            raise ValueError("输入值不能为空!")
+        print(X.columns)
+        X['customer_of_holiday'] = np.add(X.Customers.values, X.SchoolHoliday.values)
+        X['customer_of_promo'] = np.add(X.Customers.values, X.Promo2.values)
+        X['customer_of_day'] = np.add(X.Customers.values, X.day.values)
+        X['type_of_dayofweek'] = np.add(X.Customers.values, X.DayOfWeek.values)
+        X['distance_of_holiday'] = np.add(X.CompetitionDistance.values, X.SchoolHoliday.values)
+        X['distance_of_promo'] = np.add(X.CompetitionDistance.values, X.Promo2.values)
+        X['distance_of_day'] = np.add(X.CompetitionDistance.values, X.day.values)
+        X['distance_of_dayofweek'] = np.add(X.CompetitionDistance.values, X.DayOfWeek.values)
+        print("特征拼接结束...\n\n{}\n".format("*" * 200))
+        return self
+
+    def transform(self,X,y = None):
+        return X
+
+'''
+特征提取
+'''
+def feature_extraction_RandomLasso(X_train,X_test,y_train):
+    if X_train is None or X_test is None or y_train is None:
+        raise ValueError("输入值不能为空!")
+    print("特征提取开始...")
+    randomLasso = RandomizedLasso()
+    print(X_train.shape," ",y_train.shape)
+    randomLasso.fit(X_train, y_train)
+    features = randomLasso.scores_
+    score = X_train.columns
+    print(features)
+    print(sorted(zip(map(lambda x:round(x,4),features),score),reverse = True))
+    featureList = sorted(zip(map(lambda x:round(x,4),features),score),reverse = True)
+    featureList = [i[1] for i in featureList][:18]
+    X_train = X_train[featureList]
+    X_test = X_test[featureList]
+
+    unique2 = X_test.columns[X_test.nunique() == 1]
+    if len(unique2) > 0:
+        X_test.drop(unique2, axis=1, inplace=True)
+    X_train = X_train[X_test.columns]
+    if X_train.shape[1]==X_test.shape[1]:
+        print("对了")
+    elif X_train.shape[1]>X_test.shape[1]:
+        X_train = X_train[X_test.columns]
+    else:
+        X_test = X_test[X_train.columns]
+
+
+    print("最终结果为:",X_train.shape," ",X_test.shape)
+    X_train.to_csv('train111.csv', index=False)
+    X_test.to_csv('test111.csv', index=False)
+    print("特征提取结束...\n\n{}\n".format("*"*20))
+    return X_train,X_test
+
+
+'''
+特征分类(聚类操作，针对高维度，其实这个项目里用处不大，只是尝试一下。)
+'''
+class ClassifierTransformer(BaseEstimator, TransformerMixin):
+    def __init__(self, estimator=None, n_classes=2, cv=3):
+        print("特征分类初始化开始...")
+        self.estimator = estimator
+        self.n_classes = n_classes
+        self.cv = cv
+        print("特征分类初始化结束...\n\n{}\n".format("*"*200))
+
+    def _get_labels(self, y):
+        if y is None:
+            raise ValueError("输入值不能为空!")
+        y_labels = np.zeros(len(y))
+        y_us = np.sort(np.unique(y))
+        step = int(len(y_us) / self.n_classes)
+
+        for i_class in range(self.n_classes):
+            if i_class + 1 == self.n_classes:
+                y_labels[y >= y_us[i_class * step]] = i_class
+            else:
+                y_labels[
+                    np.logical_and(
+                        y >= y_us[i_class * step],
+                        y < y_us[(i_class + 1) * step]
+                    )
+                ] = i_class
+        return y_labels
+
+    def fit(self, X, y):
+        print("特征分类开始...")
+        if X is None or y is None:
+            raise ValueError("输入值不能为空!")
+
+        X = X.values
+        y_labels = self._get_labels(y)
+        cv = check_cv(self.cv, y_labels, classifier=is_classifier(self.estimator))
+        self.estimators_ = []
+
+        for train, _ in cv.split(X, y_labels):
+            self.estimators_.append(
+                clone(self.estimator).fit(X[train], y_labels[train])
+            )
+        return self
+
+    def transform(self, X, y=None):
+        X = X.values
+        cv = check_cv(self.cv, y, classifier=is_classifier(self.estimator))
+
+        X_prob = np.zeros((X.shape[0], self.n_classes))
+        X_pred = np.zeros(X.shape[0])
+
+        for estimator, (_, test) in zip(self.estimators_, cv.split(X)):
+            X_prob[test] = estimator.predict_proba(X[test])
+            X_pred[test] = estimator.predict(X[test])
+
+        print("特征分类结束...\n\n{}\n".format("*" * 200))
+        return np.hstack([X_prob, np.array([X_pred]).T])
+
+'''
+特征构造
+'''
+class MiningFeature(BaseEstimator, TransformerMixin):
+    def __init__(self, isMin = True,stat_funs=None, verbose=0, n_jobs=-1, pre_dispatch='2*n_jobs'):
+        print("特征构造初始化开始...")
+        if isMin == False:
+            raise ImportError("该数据集不用特征构造!")
+        self.stat_funs = stat_funs
+        self.verbose = verbose
+        self.n_jobs = n_jobs
+        self.pre_dispatch = pre_dispatch
+        print("特征构造初始化结束...\n\n{}\n".format("*"*200))
+
+    def _get_stats(self, row):
+        stats = []
+        for fun in self.stat_funs:
+            stats.append(fun(row))
+        return stats
+
+    def fit(self, X,y=None):
+        return self
+
+    def transform(self, X, y=None):
+        print("特征构造开始...")
+        if X is None:
+            raise ValueError('输入数据不能为空!')
+        X = X.values
+        parallel = Parallel(
+            n_jobs=self.n_jobs,
+            pre_dispatch=self.pre_dispatch,
+            verbose=self.verbose
+        )
+        stats_list = parallel(delayed(self._get_stats)(X[i, :]) for i in range(len(X)))
+        print("特征构造结束...\n\n{}\n".format("*" * 200))
+        return np.array(stats_list)
+
+
+'''
+模型构造
+'''
+class XGBRegressorCV(BaseEstimator, RegressorMixin):
+    def __init__(self, xgb_params=None, xgb_fit_params=None):
+        print("XGB模型初始化开始...")
+        self.xgb_params = xgb_params
+        self.xgb_fit_params = xgb_fit_params
+        print("XGB模型初始化结束...\n\n{}\n".format("*"*200))
+
+    @property
+    def feature_importances_(self):
+        feature_importances = []
+        for estimator in self.estimators_:
+            feature_importances.append(
+                estimator.feature_importances_
+            )
+        return np.mean(feature_importances, axis=0)
+
+    @property
+    def evals_result_(self):
+        evals_result = []
+        for estimator in self.estimators_:
+            evals_result.append(
+                estimator.evals_result_
+            )
+        return np.array(evals_result)
+
+    @property
+    def best_scores_(self):
+        best_scores = []
+        for estimator in self.estimators_:
+            best_scores.append(
+                estimator.best_score
+            )
+        return np.array(best_scores)
+
+    @property
+    def cv_scores_(self):
+        return self.best_scores_
+
+    @property
+    def cv_score_(self):
+        return np.mean(self.best_scores_)
+
+    @property
+    def best_iterations_(self):
+        best_iterations = []
+        for estimator in self.estimators_:
+            best_iterations.append(
+                estimator.best_iteration
+            )
+        return np.array(best_iterations)
+
+    @property
+    def best_iteration_(self):
+        return np.round(np.mean(self.best_iterations_))
+
+    def fit(self, X, y, **xgb_fit_params):
+        print("XGB模型构建开始...")
+        if X is None or y is None:
+            raise ValueError("输入值不能为空!")
+        X = pd.DataFrame(X)
+        y = pd.DataFrame(y)
+        if X.shape[0]!=y.shape[0]:
+            raise ValueError("必须维度相同!")
+        kf= KFold(n_splits = 3, shuffle = True)
+        self.estimators_ = []
+
+        for train, valid in kf.split(X, y):
+            self.estimators_.append(
+                xgb.XGBRegressor(**self.xgb_params).fit(
+                    X.iloc[train], y.iloc[train],
+                    eval_set=[(X.iloc[valid], y.iloc[valid])],
+                    **self.xgb_fit_params
+                )
+            )
+        print("XGB模型构建结束...\n\n{}\n".format("*"*200))
+
+        return self
+
+    def predict(self, X):
+        if X is None:
+            raise ValueError("输入数据不能为空!")
+        X = pd.DataFrame(X)
+        print("XGB模型预测开始...")
+        y_pred = []
+        print("测试数据集:", X.columns, " ", X.shape)
+        for estimator in self.estimators_:
+            y_pred.append(estimator.predict(X))
+        print("XGB模型预测结束...\n\n{}\n".format("*" * 200))
+        return np.mean(y_pred, axis=0)
+
+
+def main():
+    print("程序运行开始...")
+    X_train, y_train_log, test, train_customers = load_data()
+
+    pipe_test = make_pipeline(
+             (ParseTime()),
+             (DataParse()),
+             (SelectionFeature()),
+             (SplitFeature())
+    )
+    test_pipe = pipe_test.fit_transform(test)
+
+    pipe_train = make_pipeline(
+        (ParseTime()),
+        (DataParse()),
+        (SelectionFeature()),
+        (SplitFeature())
+    )
+    train_pipe = pipe_train.fit_transform(X_train)
+
+    train_pipe,test_pipe = feature_extraction_RandomLasso(train_pipe,test_pipe,y_train_log)
+
+    pipe = Pipeline(
+        [
+            ('fn',FeatureUnion(
+                [
+                    ('ct-2', ClassifierTransformer(get_rfc(), n_classes=2, cv=5)),
+                    ('ct-3', ClassifierTransformer(get_rfc(), n_classes=3, cv=5)),
+                    ('ct-4', ClassifierTransformer(get_rfc(), n_classes=4, cv=5)),
+                    ('ct-5', ClassifierTransformer(get_rfc(), n_classes=5, cv=5)),
+                    ('mf', MiningFeature(stat_funs=get_stat_funs(), verbose=4))
+                ]
+            )
+            ),
+            ('xgb',XGBRegressorCV(
+                xgb_params = xgb_params,
+                xgb_fit_params = xgb_fit_params
+            ))
+        ]
+    )
+
+    pipe.fit(train_pipe, y_train_log)
+    print(pipe.named_steps['xgb'].get_params)
+    print(pipe.named_steps['xgb'].cv_scores_)
+    print(pipe.named_steps['xgb'].cv_score_)
+
+    print("模型开始保存...")
+    try:
+        with open('XgbModel1.pickle','wb') as writer:
+            pickle.dump(pipe,writer)
+    except IOError:
+        print("模型保存失败...")
+    print("模型保存结束...\n\n{}\n".format("*"*200))
+
+    print("模型开始读取...")
+    with open('XgbModel1.pickle', 'rb') as reader:
+        pipe_xgb = pickle.load(reader)
+
+    print("模型读取结束...\n\n{}\n".format("*" * 200))
+
+    print("预测结果开始...")
+    predict = pipe_xgb.predict(test_pipe)
+    print("预测结果结束...")
+
+    print("开始保存结果文件...")
+    try:
+        index = test.index + 1
+        test["Id"] = 0
+        test["Id"] = index
+        test["Sales"] = predict
+        test[["Id", "Sales"]].to_csv("submission_end_xgb.csv", index=False)
+    except Exception as exp:
+        print("结果文件保存失败,错误原因为:{}\n\n{}\n程序运行结束...".format(exp,"*"*200))
+        exit()
+    print("结果文件保存成功!\n\n{}\n".format("*"*200))
+
+    print("程序运行结束...")
+
+
+
+if __name__ == '__main__':
+    main()
