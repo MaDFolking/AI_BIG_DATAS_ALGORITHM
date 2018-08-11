@@ -1,0 +1,1280 @@
+import pickle
+import numpy as np
+import pandas as pd
+import xgboost as xgb
+import lightgbm as lgb
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, cross_val_score, train_test_split,ShuffleSplit
+from sklearn.feature_selection import RFE
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from sklearn.model_selection._split import check_cv
+from sklearn.decomposition import TruncatedSVD
+from sklearn.feature_selection import VarianceThreshold
+from scipy.stats import skew, kurtosis
+from scipy import sparse
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.pipeline import Pipeline, FeatureUnion
+from sklearn.random_projection import SparseRandomProjection
+from sklearn.linear_model import LinearRegression
+import matplotlib
+import itertools
+import operator
+import warnings
+warnings.filterwarnings("ignore")
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.base import TransformerMixin
+from matplotlib import pylab as plt
+
+
+'''
+在model_draft.py 草稿模型中我们通过可视化和偏值/方差值已经了解了数据业务，下面是我们正式项目的开发流程:
+1.读取数据，平滑目标值,注意，这里测试集和训练集存在很多不同的feature，所以这里我不建议合并数据，我之前这吃了大亏。
+2.分析出是回归问题，所以标准化所有数值型数据,因为最后都是销量，所以先不用归一化操作。
+3.离散化连续数值时间和促销变量
+4.处理nan值，看是否有需要二值化特征,这时候再(处理非数值型数据我们最后再处理，因为太慢了。)
+5.特征选择
+6.拆分数据，开始做特征提取，根据情况选择降维。
+7.最后利用数学柯尔莫哥洛夫-斯米尔诺夫测试测试训练数据和测试数据。以便删掉特征性差的特征。
+8.构造模型，因为是回归问题，我们用gbdt xgb lgb rf 进行处理。
+9.网格搜索得出最佳参数
+10.交叉验证得出最佳样本数，提高学习能力
+11.模型融合，调节权重，得到最终结果。我们假设第一层用gbdt +  rf 第二层用gbdt+rf+xgb+lgb,具体还要根据结果再调整
+12.设计pip通道，处理main函数，生成最终模型。
+ps:该模块业务具体看该页其他地方有详细说明。另外开局删除 Customers 是因为这个元素绝对成正比，成一个绝对正比，所以我认为可以删掉。
+ps: pd.drop_duplicates:是去除重复行。
+ps: 我们除了四大集成树:rf gbdt xgb lgb 还要使用很多回归算法，因为我们是回归销量，要知道哪些特征影响我们的结果来做实验。最后进行融合。
+ps: apply是对每列进行计算。
+    如果是train['data'].apply(lambda x:115-int(x)) 就是对每一行，因为第一个train['data']就代表一列了。
+ps: 我们将文本值转化为数值后，这个列就可以删除了。
+ps: 对文本数据缺失值处理: train['Date'] = train['Date'].apply(lambda x: 1 if pd.isnull(x) else 0 )
+ps: 可以train['date'].describe() 对一列进行描述。
+    然后对该列可以缺失值填充: train['date'].fillna(0,inplace = True)
+    可以这样写: train['date'].fillna(train['date'].median(),inplace = True) median:中位数
+ps: LabelEncoder:
+    for col in train_object:
+        train[col] = le.fit_transform(train[col])
+    但我们常常出错，所以我一般用 get_dummies 取代。
+    一般先LabelEncoder把类别值转化数值型，再用 get_dummies 进一步拆分分类。
+    pd.get_dummies(data,columns=[你要分类的列])
+ps: 这次弱分类器，我们讲常用的回归类模型都一一尝试，理论上，像SGD,lasso这种处理高维度的不适合我们这次数据集，但由于是第一个项目案例，我都比较下加深印象，最后选取好的与四大树形
+    集成学习进行blending融合。
+ps: 不是所有项目都适合融合，比如那些rdige,krdige等小算法，不适合做超多维度的数据集，这时候用他们融合再跟xgb,lgb结合反而不好，此时不如xgb,lgb融合，或者带个catboost。用randomgForset打辅助。
+ps: 网格搜索的异常错误: Check the list of available parameters with `estimator.get_params().keys()`.
+    这里是参数出问题，而底层代码中还有，那就说明我们版本问题，所以要不就不用，要不就更新版本。
+ps: 网格搜索的异常错误: ValueError: continuous format is not supported
+    你网格搜索的参数与你创建的模型初始化参数不匹配，尽量让其匹配，初始值为网格搜索里的数，最好是第一个数。
+ps: RandomizedLasso和RFE有时间可以好好看看。
+ps: TypeError: unhashable type: 'slice' 异常，这个类型不能被哈希。一般是可变类型。
+ps: 特征选择处用VarianceThreshold方法不错，删除特征之间方差大的。
+'''
+
+'''
+后期想提升准确率，还可以利用自己设定偏差，峰度来调节，但这个项目中维度并不是太多，我会再后面项目高维度中做相关操作。
+'''
+
+def load_data():
+    train = pd.read_csv('D:\\kaggle比赛\\装潢公司货物与销量预测项目模块\\data\\train_v2.csv')
+    test = pd.read_csv('D:\\kaggle比赛\\装潢公司货物与销量预测项目模块\\data\\test_v2.csv')
+    company = pd.read_csv('D:\\kaggle比赛\\装潢公司货物与销量预测项目模块\\data\\store.csv')
+    train = train[train['Sales']>0]
+    train_customers = train['Customers']
+    #train.drop('Customers',axis = 1,inplace = True)
+    train = pd.merge(train,company,on='Store',how='left')
+    test = pd.merge(test,company,on='Store',how='left')
+    train_y = train['Sales']
+    train.drop('Sales', axis=1, inplace=True)
+    print(train.shape," ",test.shape," ",train_y.shape)
+    print(train.dtypes)  #查看数据类型,object我们通常叫类别值。
+    return train, train_y, test,train_customers
+
+def parse_time_scale(X_train,X_test):
+    date_num_train = pd.DataFrame(columns=['year', 'month', 'day','jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'])
+
+    date_num_train['year'] = X_train.Date.apply(lambda x: x.split('-')[0]).astype(float)
+    date_num_train['month'] = X_train.Date.apply(lambda x: x.split('-')[1]).astype(float)
+    date_num_train['day'] = X_train.Date.apply(lambda x: x.split('-')[2]).astype(float)
+
+    date_num_train['jan'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jan" in x else 0)
+    date_num_train['feb'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Feb" in x else 0)
+    date_num_train['mar'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Mar" in x else 0)
+    date_num_train['apr'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Apr" in x else 0)
+    date_num_train['may'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "May" in x else 0)
+    date_num_train['jun'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jun" in x else 0)
+    date_num_train['jul'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jul" in x else 0)
+    date_num_train['aug'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Aug" in x else 0)
+    date_num_train['sep'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Sep" in x else 0)
+    date_num_train['oct'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Oct" in x else 0)
+    date_num_train['nov'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Nov" in x else 0)
+    date_num_train['dec'] = X_train.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Dec" in x else 0)
+    X_train = pd.concat((X_train, date_num_train), axis=1)
+
+    date_num_test = pd.DataFrame(columns=['year', 'month', 'day', 'jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov'])
+
+    date_num_test['year'] = X_test.Date.apply(lambda x: x.split('-')[0]).astype(float)
+    date_num_test['month'] = X_test.Date.apply(lambda x: x.split('-')[1]).astype(float)
+    date_num_test['day'] = X_test.Date.apply(lambda x: x.split('-')[2]).astype(float)
+
+    date_num_test['jan'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jan" in x else 0)
+    date_num_test['feb'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Feb" in x else 0)
+    date_num_test['feb'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Mar" in x else 0)
+    date_num_test['apr'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Apr" in x else 0)
+    date_num_test['may'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "May" in x else 0)
+    date_num_test['jun'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jun" in x else 0)
+    date_num_test['jul'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Jul" in x else 0)
+    date_num_test['aug'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Aug" in x else 0)
+    date_num_test['sep'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Sep" in x else 0)
+    date_num_test['oct'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Oct" in x else 0)
+    date_num_test['nov'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Nov" in x else 0)
+    date_num_test['dec'] = X_test.PromoInterval.apply(lambda x: 0 if isinstance(x, float) else 1 if "Dec" in x else 0)
+    X_test = pd.concat((X_test, date_num_test), axis=1)
+    print("离散后的维度为:",X_test.shape," ",X_train.shape)
+
+    return X_train,X_test
+
+def merge_data(X_train,X_test):
+    all_df = pd.concat((X_train,X_test),axis=0)
+    #别忘了删除上面的日期和促销。因为我们已经拆分完了。
+    all_df.drop('Date',axis=1,inplace=True)
+    all_df.drop('PromoInterval',axis=1,inplace=True)
+    print(all_df.shape)
+    print(all_df.head())
+    print(all_df.isnull().sum().sort_values(ascending=False))
+    return all_df
+
+#非数值型大部分都是分类方法，用get_dummies来离散化
+def Standard_data(all_df):
+
+    #标准化数值型
+    numeric_feature = all_df.columns[all_df.dtypes != object]
+    numeric_mean = all_df.loc[:, numeric_feature].mean()
+    numeric_std = all_df.loc[:, numeric_feature].std()
+    all_df.loc[:, numeric_feature] = (all_df.loc[:, numeric_feature] - numeric_mean) / numeric_std
+
+    #标准化非数值
+    numeric_non_feature = ['Assortment','StoreType']
+    print(all_df[numeric_non_feature])
+    le = LabelEncoder()
+    for i in numeric_non_feature:
+        le.fit(all_df[i])
+        all_df[i] = le.transform(all_df[i])
+
+    #拆分标准化后的非数值型
+    print(all_df.shape)
+    numeric_non_feature = all_df.columns[all_df.dtypes==object]
+    #注意:进行get_dummies离散化类别特征时，容易出现重复特征，需要处理掉。
+    for i in numeric_non_feature:
+        all_df_scale = pd.get_dummies(all_df[i],prefix=all_df[i])
+        all_df.drop(i,axis=1,inplace=True)
+        all_df = pd.concat((all_df,all_df_scale),axis=1)
+
+    print(all_df.shape)
+    print(all_df.columns)
+    return all_df
+
+#删除Nan值
+def parse_nan(all_df):
+    print(all_df.shape)
+    print(all_df.isnull().sum().sort_values(ascending=False))
+    all_df.CompetitionDistance.fillna(all_df.CompetitionDistance.mean(), inplace=True)
+    all_df.Open.fillna(1, inplace=True)
+    all_df.fillna(0,inplace = True)
+    print(all_df.isnull().sum().sort_values(ascending=False).head())
+    print(all_df.isnull().sum().sort_values(ascending=False).head())
+    if all_df.isnull().sum().sort_values(ascending=False)[0] != 0:
+        raise ValueError("nan值处理失败!")
+    print(all_df.head())
+    return all_df
+
+#特征选择: VarianceThreshold删除所有低方差的列。
+def feature_selection(all_df):
+    selector = VarianceThreshold(0.01)
+    selector.fit_transform(all_df)
+    print(all_df.shape)
+
+    # 删除俩列相同的数据
+    all_columns = all_df.columns
+    colsToRemove = []
+    for i in range(len(all_columns) - 1):
+        m = all_df[all_columns[i]].values
+        for j in range(i + 1, len(all_columns)):
+            if np.array_equal(m, all_df[all_columns[j]].values):
+                colsToRemove.append(all_columns[j])
+
+    all_df.drop(colsToRemove, axis=1, inplace=True)
+    print(all_df.shape)
+    return all_df
+
+'''
+根据业务情况处理大的噪点(可选)
+即: 去除偏差特别大的点
+这里要用到归一化处理
+'''
+from sklearn.preprocessing import scale, MinMaxScaler
+def feature_noisy(all_df):
+    print("去燥处理开始...")
+    # 平方方差缩放所有列,将偏差大的去掉。
+    columnsCount = len(all_df.columns)
+    for col in all_df.columns:
+        # 每个特征维度的列向量。
+        data = all_df[col].values
+        # 标准偏差:S = Sqr(∑(xn-x拨)^2 /(n-1))
+        # 一种量度数据分布的分散程度之标准，用以衡量数据值偏离算术平均值的程度。
+        # 标准偏差越小，这些值偏离平均值就越少，反之亦然。
+        # 标准偏差的大小可通过标准偏差与平均值的倍率关系来衡量。
+        data_mean, data_std = np.mean(data), np.std(data)
+        # 扩大标准差
+        cut_off = data_std * 3
+        # 取范围值，平均值-标准偏差*3为下届，上界是平均值+标准偏差*3
+        lower, upper = data_mean - cut_off, data_mean + cut_off
+        # 将每个特征维度上偏差大的去掉，重新放在一个列表中
+        outList = [i for i in data if i > lower and i < upper]
+        if (len(outList) > 0):
+            non_zero_idx = data != 0
+            # loc是返回的是相应轴的数目，可以添加条件来去掉不想要的。将偏差小的重新赋值到列表中
+            #可以用log进行平滑化，后期会考虑去掉log,毕竟我已经做完了标准化np.log(data[non_zero_idx])
+            all_df.loc[non_zero_idx, col] = data[non_zero_idx]
+    print(all_df.shape)
+    print("去燥处理结束...")
+    return all_df
+
+#拆分数据集
+def split_data(all_df,train_x,test):
+    assert len(all_df) > 0 and len(train_x) > 0 and len(test) > 0
+    print("拆分数据集开始...")
+    print(train_x.shape[0])
+    train_x_df = all_df[:train_x.shape[0]]
+    test_x_df = all_df[train_x.shape[0]:]
+    print(train_x_df.shape," ",test_x_df.shape)
+    if train_x_df.shape[0]==all_df.shape[0] or test_x_df.shape[0]==all_df.shape[0]:
+        raise NotImplementedError("拆分数据集失败...")
+
+    print("拆分数据集结束...")
+    return train_x_df,test_x_df
+
+
+'''
+降维(可选)
+'''
+def SparseRandomProjection_parse(all_df):
+    assert len(all_df)>0
+    print("降维处理开始...")
+    sp = SparseRandomProjection(n_components=all_df.shape[0]//10)
+    sp.fit(all_df)
+    all_df_num = sp.transform(all_df)
+    print(all_df_num.head())
+    print(all_df.shape)
+    print("降维处理结束...")
+    return all_df_num
+
+
+#下面对四个常用的特征选择方法依次调参做实验，调参主要是针对选取多少个参数效果更好，当然不一定越准越好，最后我会选取个适合的特征数。
+#这次我尝试最新的
+from sklearn.metrics import mean_squared_error
+def rmse(y_true,predict):
+    if y_true is None or predict is None:
+        raise ValueError("输入的预测值或真实值不能为空!")
+    return mean_squared_error(y_true,predict) ** 0.5
+
+# 最后用柯尔莫哥洛夫-斯米尔诺夫测试测试训练数据和测试数据--针对都是数值型数据,但本次项目中由于测试集和训练集本身数据有多个不同，这样容易删除掉重要
+# 特征比如客户数。所以不能使用。
+# 具体意思是有俩个:我们做统计数据时，开始不知道是什么分布，假设一种分布，然后去用这个方法验证。
+# 还有机器学习中我们做完数据处理后，想看下训练数据和测试数据哪些特征有差异性，设置最大值和最小值，如果超过最大值，说明这个特征离散太严重，容易让结果
+# 导致欠你和，如果低于最小值，说明这个特征跟测试太接近，容易过拟合特征，所以综合是处理特征使用。
+# 具体看：https://blog.csdn.net/weixin_40870350/article/details/79070256
+def ks_sample(X_train,X_test):
+    from scipy.stats import ks_2samp
+    KS_VALUE = 0.01
+    KS_P= 0.3
+    different_feature = []
+    for i in X_train.columns:
+        ks_p,ks_value = ks_2samp(X_train[i].values,X_test[i].values)
+        if ks_value<=KS_VALUE and ks_p >KS_P:
+            different_feature.append(i)
+
+    for j in different_feature:
+        if j in X_train.columns:
+            X_train.drop(j,axis = 1,inplace=True)
+            X_test.drop(j,axis = 1,inplace=True)
+
+    print(X_train.shape," ",X_test.shape)
+    print(X_train.head()," ",X_test.shape)
+    print(X_train.dtypes," ",X_test.dtypes)
+    return X_train,X_test
+
+'''
+step6: 特征提取
+有四种比较好的方法: XGB+交叉验证提取，随机森林+交叉验证提取,递归特征消除选择法提取特征(可选)，稳定性选择法提取特征(可选)
+
+XGB+交叉验证得出来的特征，只能用XGB LGB CAT来做，这是它的缺点，所以如果考虑以后大量模型融合，不建议用这个方法。
+
+因为这次项目是个超高维度特征，所以我用XGB方法，然后每次特征都与那位大神提供的特征的结果集进行比较，进行一种高精度提取，最后选取rmse值比较小的特征即可。
+这种方式做超高维度效果不错，后期也可以跟PCA结合。
+但后面我做了大量的特征选择和拼接，其实已经很精确了，就不需要拼接PCA降维的特征了。
+别忘了提取特征后保存到csv文件，方便我们后面使用。
+KFold:
+get_n_splits:返回交叉验证器中的拆分迭代次数,使用方法:
+def rmse_cv(model):
+    kf = KFold(NUM_FOLDS,shuffle = True,random_state=42).get_n_splits(train.values)
+    rmse= np.sqrt(-cross_val_score(model, train.values, Y_train, scoring="neg_mean_squared_error", cv = kf))
+    return(rmse)
+split:生成索引以将数据拆分为训练和测试集。
+X_train['feature'] = data_train['compiled_feature'].values
+X_train['log_feature'] = np.log1p(data_train['compiled_feature'].values)
+test['feature'] = data_test['compiled_feature']
+test['log_feature'] = np.log1p(data_test['compiled_feature'])
+print(X_train.shape, " ", test.shape)
+(4459, 4993)
+'''
+'''
+# 将X_train等于0的聚集在一起。axis = 0是每列求和放在该位置上。axis = 1是每行求和放在该位置上。
+如果不设置则是所有求和:
+>>> np.sum([0.5, 1.5])
+2.0
+>>> np.sum([0.5, 0.7, 0.2, 1.5], dtype=np.int32)
+1
+>>> np.sum([[0, 1], [0, 5]])
+6
+>>> np.sum([[0, 1], [0, 5]], axis=0)
+array([0, 6])
+>>> np.sum([[0, 1], [0, 5]], axis=1)
+array([1, 5])
+这俩个用于重要特征，是特征性比较特殊的。
+'''
+'''
+这是是用我们平滑的特征 log_feature 和每个特征去和目标值做拟合模型，这样求出到底哪些特征是真正的好，
+如果没有log_feature就用所有i取拟合，当然这个步骤十分浪费时间，但不得不说他很精确。
+eval_set用于验证X，y的数组，必须按照列表里面是元组格式，里面当做测试集，所以是target
+model = XGBClassifier()
+model.fit(X_train, y_train)
+变为：
+model = XGBClassifier()
+eval_set = [(X_test, y_test)]
+model.fit(X_train, y_train, early_stopping_rounds=10, eval_metric="logloss", eval_set=eval_set, verbose=True)
+就可以起到监控作用。具体看:https://blog.csdn.net/qunnie_yi/article/details/80129857
+注意:XGB提取特征时，非数值，nan值。否则会有: AttributeError: 'Booster' object has no attribute 'handle' 错误。
+另外还需要里面加入俩个参数，第一个是我们的强特征，这个强特征可以用其他三个特征提取方法提取，或者将它平滑化也就是Log化。
+比如下面代码，我们已知距离是我们强特征。
+X_train[['CompetitionDistance',_f]].iloc[trn_], y_train.iloc[trn_],
+eval_set=[(X_train[['CompetitionDistance',_f]].iloc[val_], y_train.iloc[val_])],
+'''
+from xgboost import XGBRegressor
+def feature_extraction(X_train,y_train,test):
+    if X_train is None or y_train is None:
+        raise ValueError('输入值不能为空!')
+    print("特征提取开始...")
+    xgb_model = XGBRegressor(n_estimators=1000, n_jobs=-1, nthread=-1)
+    folds = KFold(4, True, 134259)
+    kf = [(trn_, val_) for trn_, val_ in folds.split(X_train)]
+    scores = []
+    '''
+    day	SchoolHoliday	Promo2	Promo	DayOfWeek	CompetitionOpenSinceMonth	CompetitionDistance	Assortment
+    Promo2SinceWeek	Promo2SinceYear	StoreType	Store	aug	dec	CompetitionOpenSinceYear
+    '''
+    X_train_tmp = X_train
+    #X_train = np.array(X_train)
+    features_s = X_train_tmp.columns.values
+    print(features_s)
+    '''
+    我们选取一个强特征，跟下面循环每个特征拼接然后做拟合。
+    '''
+    X_train = X_train[features_s]
+    test = test[features_s]
+    print(X_train.dtypes)
+    print(X_train.shape)
+    print(test.dtypes)
+    print(X_train.shape)
+    print(X_train.isnull().sum().sort_values(ascending=False).head())
+    print(test.isnull().sum().sort_values(ascending=False).head())
+
+
+    X_train_tmp.drop('CompetitionDistance',axis=1,inplace = True)
+    feature_new = X_train_tmp.columns.values
+    print(feature_new)
+    '''
+    ['Store','DayOfWeek','Customers','Open','Promo','SchoolHoliday','StoreType','Assortment'
+    ,'CompetitionOpenSinceMonth','CompetitionOpenSinceYear','Promo2','Promo2SinceWeek','Promo2SinceYear','year'
+    ,'month','day','feb']
+    '''
+
+    for _f in feature_new:
+        score = 0
+        for trn_, val_ in kf:
+            print(_f)
+            print(len(trn_))  #训练集每次随机4份 总共5份
+            print(len(val_))  #测试集每次随机1份 总共5份
+            print( X_train[['CompetitionDistance',_f]].iloc[trn_].shape)
+            print(y_train.iloc[trn_].shape)
+            xgb_model.fit(
+                X_train[['CompetitionDistance',_f]].iloc[trn_], y_train.iloc[trn_],
+                eval_set=[(X_train[['CompetitionDistance',_f]].iloc[val_], y_train.iloc[val_])],
+                eval_metric='rmse',
+                early_stopping_rounds=50,
+                verbose=False
+            )
+            '''
+            ntree_limit:在预测中限制树的数量；默认为0（使用所有树）。
+            best_ntree_limit:大概意思就是获取正确树的值。
+            因为n_splits为迭代次数，所以最后score取总和除以它就是平均数
+            '''
+            print(folds.n_splits)  #我们总共有5份，n_splits就是5，也就是迭代次数 而splits就是这5份中训练集和测试的坐标值。
+            score += rmse(y_train.iloc[val_], xgb_model.predict(X_train[['CompetitionDistance',_f]].iloc[val_],ntree_limit=xgb_model.best_ntree_limit)) / folds.n_splits
+        scores.append((_f,score))
+    '''
+    保存特征前，别忘了设置列名columns=['featureImportance', 'rmse']
+    '''
+    featureImportance = pd.DataFrame(scores, columns=['featureImportance', 'rmse']).set_index('featureImportance')
+    featureImportance.sort_values(by='rmse', ascending=True, inplace=True)
+
+    featureImportance.to_csv('featureImportance.csv', index=True)
+    #featureImportance = pd.read_csv('D:\\kaggle比赛\\桑德斯预测比赛\\data\\featureImportance.csv', index_col=False)
+    #我们选取损失值小于0.7975的特征
+    features_best = featureImportance.loc[featureImportance['rmse'] <= 0.7925].index
+    rmses = featureImportance.loc[featureImportance['rmse'] <= 0.7925, 'rmse'].values
+    print(features_best)
+    print(X_train.shape," ",y_train.shape)
+    print("特征提取结束...")
+    print("*"*50)
+    return X_train,y_train,test
+
+
+
+#随机森林+交叉验证
+def feature_extraction_rf(X_train,X_test,y_train):
+    rd_model = RandomForestRegressor(n_estimators=150,max_depth=3)
+    scores = []
+    names = X_train.columns
+    for i in range(X_train.shape[1]):
+        score = cross_val_score(rd_model, X_train, y_train, scoring="r2",
+                                cv=ShuffleSplit(len(X_train), 3, .3))
+        scores.append((round(np.mean(score), 3), names[i]))
+    featureList = sorted(zip(map(lambda x:x,scores),names),reverse=True)
+    featureList = [i[1] for i in featureList][:7]
+    X_train = X_train[featureList]
+    X_test = X_test[featureList]
+    return X_train,X_test
+
+#递归特征消除 Recursive feature elimination (RFE)
+def feature_extraction_ref(X_train,X_test,y_train):
+    lr = LinearRegression()
+    ref = RFE(lr, n_features_to_select=15)
+    ref.fit(X_train,y_train)
+    features = ref.ranking_
+    print(features)
+    score = X_train.columns
+    features_list = []
+    for i in range(len(features)):
+        if (features[i]==1):
+            features_list.append(score[i])
+
+    X_train = X_train[features_list]
+    X_test = X_test[features_list]
+    print(X_train.shape," ",X_test.shape)
+    return X_train,X_test
+
+#稳定性选择 Stability selection 经过我们层层验证。比稳定性选择整体效果好,同时也优于随机森林+交叉验证。所以最后选这个作为特征提取。而有14个特征性为1的，所以取14
+def feature_extraction_RandomLasso(X_train,X_test,y_train):
+    from sklearn.linear_model import RandomizedLasso
+    randomLasso = RandomizedLasso()
+    print(X_train.shape," ",y_train.shape)
+    randomLasso.fit(X_train, y_train)
+    features = randomLasso.scores_
+    score = X_train.columns
+    print(features)
+    print(sorted(zip(map(lambda x:round(x,4),features),score),reverse = True))
+    featureList = sorted(zip(map(lambda x:round(x,4),features),score),reverse = True)
+    featureList = [i[1] for i in featureList][:18]
+    X_train = X_train[featureList]
+    X_test = X_test[featureList]
+    print(X_train.shape," ",X_test.shape)
+    # 删除唯一性数据，这种数据没意义，特征性为0
+
+    unique2 = X_test.columns[X_test.nunique() == 1]
+    if len(unique2) > 0:
+        X_test.drop(unique2, axis=1, inplace=True)
+    X_train = X_train[X_test.columns]
+    if X_train.shape[1]==X_test.shape[1]:
+        print("对了")
+    elif X_train.shape[1]>X_test.shape[1]:
+        X_train = X_train[X_test.columns]
+    else:
+        X_test = X_test[X_train.columns]
+
+
+    print("最终结果为:",X_train.shape," ",X_test.shape)
+    X_train.to_csv('train111.csv', index=False)
+    X_test.to_csv('test111.csv', index=False)
+    return X_train,X_test
+
+
+'''
+特征挖掘
+'''
+def feature_splicing(X_train,test):
+    if X_train is None or test is None:
+        raise ValueError('数据不能为空!')
+    print('特征构造开始...')
+    report = pd.read_csv('featureImportance.csv', index_col=False)
+    good_features = report.loc[report['rmse'] <= 2990]['featureImportance'].values
+
+    '''
+    下面是特征拼接。
+    因为我们是知道业务的，并没有隐藏业务，所以可以根据常识去拼接。
+    业务拼接如下：
+
+    消费者数量+节假日。
+    消费者数量+促销日期
+
+    然后是强强特征拼接:
+    消费者+day
+    '''
+    X_train['customer_of_holiday'] = np.add(X_train.Customers.values,X_train.SchoolHoliday.values)
+    X_train['customer_of_promo'] = np.add(X_train.Customers.values,X_train.Promo2.values)
+    X_train['customer_of_day'] = np.add(X_train.Customers.values, X_train.day.values)
+    X_train['type_of_dayofweek'] = np.add(X_train.Customers.values, X_train.DayOfWeek.values)
+
+    test['distance_of_holiday'] = np.add(test.CompetitionDistance.values, test.SchoolHoliday.values)
+    test['distance_of_promo'] = np.add(test.CompetitionDistance.values, test.Promo2.values)
+    test['distance_of_day'] = np.add(test.CompetitionDistance.values, test.day.values)
+    test['distance_of_dayofweek'] = np.add(test.CompetitionDistance.values, test.DayOfWeek.values)
+
+    '''
+    因为std,kur,skew都是0-1范围，所以不用log,而其他数都需要平滑化。
+    这里我不加中位数，是因为中位数有太多的0了。
+    '''
+
+    X_train['log_of_mean'] = np.log1p(X_train[good_features].mean(axis = 1))
+    X_train['log_of_sum'] = np.log1p(X_train[good_features].sum(axis = 1))
+    X_train['log_of_max'] = np.log1p((X_train[good_features]).max(axis = 1))
+    X_train['log_of_min'] = np.log1p((X_train[good_features]).min(axis = 1))
+    X_train['the_std'] = X_train[good_features].std(axis = 1)
+    X_train['the_kur'] = X_train[good_features].kurtosis(axis = 1)
+    X_train['the_skew'] = X_train[good_features].skew(axis = 1)
+    X_train['the_var'] = X_train[good_features].var(axis = 1)
+    X_train['the_max'] = X_train[good_features].max(axis = 1)
+    X_train['the_min'] = X_train[good_features].min(axis = 1)
+    X_train['the_sum'] = X_train[good_features].sum(axis = 1)
+    X_train['the_mean'] = X_train[good_features].mean(axis = 1)
+
+    test['log_of_mean'] = np.log1p(test[good_features].mean(axis=1))
+    test['log_of_sum'] = np.log1p(test[good_features].sum(axis=1))
+    test['log_of_max'] = np.log1p((test[good_features]).max(axis=1))
+    test['log_of_min'] = np.log1p((test[good_features]).min(axis=1))
+    test['the_std'] = test[good_features].std(axis=1)
+    test['the_kur'] = test[good_features].kurtosis(axis=1)
+    test['the_skew'] = test[good_features].skew(axis=1)
+    test['the_var'] = test[good_features].var(axis=1)
+    test['the_max'] = test[good_features].max(axis=1)
+    test['the_min'] = test[good_features].min(axis=1)
+    test['the_sum'] = test[good_features].sum(axis = 1)
+    test['the_mean'] = test[good_features].mean(axis=1)
+
+    '''
+    X_train['customer_of_holiday'] = np.add(X_train.Customers.values, X_train.SchoolHoliday.values)
+    X_train['customer_of_promo'] = np.add(X_train.Customers.values, X_train.Promo2.values)
+    X_train['type_of_distance'] = np.add(X_train.StoreType.values, X_train.Promo.values)
+    X_train['year_of_month'] = np.add(X_train.year.values, X_train.month.values)
+    X_train['customer_of_day'] = np.add(X_train.Customers.values, X_train.day.values)
+    X_train['type_of_dayofweek'] = np.add(X_train.Customers.values, X_train.DayOfWeek.values)
+    # '''
+
+
+
+
+    features = good_features.tolist()
+    print(features)
+    features = features + ['customer_of_holiday','customer_of_promo'
+                            'customer_of_day','type_of_dayofweek'
+                            'log_of_mean', 'log_of_sum', 'log_of_max',
+                           'log_of_min','the_std','the_kur','the_skew','the_var',
+                           'the_max','the_min','the_sum','the_mean','the_zero']
+
+    '''
+    保存我们构造的特征，用于最后的计算,因为最后的特征是个列表，我们保存在一个txt文件即可。
+    但是后来想了下，不用存也行，就这么几个特征，直接获取csv文件的feature再拼接新的feature即可，重要是保存train和text的csv文件
+    '''
+    with open("features.txt",'w') as writer:
+        for i in features:
+            writer.writelines(str(i)+'\n')
+
+    '''
+    将最新的训练集，测试集保存，方便调用模型时使用
+    '''
+    print(X_train.shape, " ", test.shape)
+    X_train.to_csv('trainFeature.csv',index = False)
+    test.to_csv('testFeature.csv',index = False)
+
+    print('特征构造结束...')
+    print('特征工程结束...')
+    return X_train,test,features
+
+
+
+from sklearn.linear_model import ElasticNet
+from sklearn.linear_model import Lasso
+from sklearn.linear_model import ElasticNet
+from sklearn.kernel_ridge import KernelRidge
+from sklearn.linear_model import Ridge
+from sklearn import linear_model
+from sklearn.svm import SVR
+from sklearn.linear_model import BayesianRidge
+from sklearn.linear_model import SGDRegressor
+from sklearn.ensemble import GradientBoostingRegressor
+
+#根据业务写损失函数
+#PS:我们的损失计算维平方根误差，即:真实值-预测值的平方和的平均值开根号。也就是rmspe = np.sqrt(np.mean(w * (y - yhat)**2))。
+#因为最后需要除以n，所以我们先设定一个权重值。
+def ToWeight(y):
+    w = np.zeros(y.shape, dtype=float)
+    ind = y != 0
+    w[ind] = 1./(y[ind]**2)
+    return w
+
+def rmspe(yhat, y):
+    w = ToWeight(y)
+    rmspe = np.sqrt(np.mean(w * (y - yhat) ** 2))
+    return rmspe
+#返回加上"rmspe"是为了与后面的xgb的watchlist的参数更好的拼接。
+def rmspe_xg(yhat, y):
+    # y = y.values
+    y = y.get_label()
+    w = ToWeight(y)
+    rmspe = np.sqrt(np.mean(w * (y - yhat) ** 2))
+    return "rmspe", rmspe
+
+def rmspe_other(yhat, y):
+    # y = y.values
+    #y = y.get_label()
+    w = ToWeight(y)
+    rmspe = np.sqrt(np.mean(w * (y - yhat) ** 2))
+    return "rmspe", rmspe
+
+
+#Lasso回归:比较通吃，但效果往往不如ridge
+#alpha如果设置太小，随着迭代次数增加，容易使得一些特征变为0.
+def Lasso_model(train_x ,train_y,test_x):
+    train_x = pd.read_csv('trainFeature.csv')
+    test_x = pd.read_csv('testFeature.csv')
+    train_x.fillna(0,inplace=True)
+    test_x.fillna(0,inplace=True)
+    print(train_x.isnull().sum().head())
+    X_train,X_test,y_train,y_test = train_test_split(train_x,train_y,test_size=0.2)
+    lasso_model = Lasso()
+    lasso_model.fit(X_train,np.expm1(y_train))
+    pre_lasso = lasso_model.predict(test_x)
+    print(pre_lasso)
+    rmpse_lasso = rmspe_other(pre_lasso,np.expm1(y_test))
+    index = test_x.index+1
+    print(index)
+    test_x["Id"] = 0
+    test_x["Id"] = index
+    test_x["Sales"] = 0
+    test_x["Sales"] = pre_lasso
+    test_x[["Id","Sales"]].to_csv("submission_lasso.csv",index = False)
+    return rmpse_lasso
+
+# #Ridge回归:针对特征数不能太大。
+def Ridge_model(train_x ,train_y,test_x):
+    train_x = pd.read_csv('trainFeature.csv')
+    test_x = pd.read_csv('testFeature.csv')
+    train_x.fillna(0, inplace=True)
+    test_x.fillna(0, inplace=True)
+    X_train,X_test,y_train,y_test = train_test_split(train_x,train_y,test_size=0.2)
+    ridge_model = Ridge()
+    ridge_model.fit(X_train,np.expm1(y_train))
+    pre_ridge = ridge_model.predict(test_x)
+    print(pre_ridge)
+    rmpse_ridge = rmspe_other(pre_ridge,np.expm1(y_test))
+    return rmpse_ridge
+
+# #弹性网络:可以做特征数比较大的。
+def ElasticNet_model(train_x ,train_y,test_x):
+    train_x = pd.read_csv('trainFeature.csv')
+    test_x = pd.read_csv('testFeature.csv')
+    train_x.fillna(0, inplace=True)
+    test_x.fillna(0, inplace=True)
+    X_train,X_test,y_train,y_test = train_test_split(train_x,train_y,test_size=0.2)
+    eln_model = ElasticNet()
+    eln_model.fit(X_train,np.expm1(y_train))
+    pre_eln = eln_model.predict(test_x)
+    print(pre_eln)
+    rmpse_eln = rmspe_other(pre_eln,np.expm1(y_test))
+    index = test_x.index + 1
+    print(index)
+    test_x["Id"] = 0
+    test_x["Id"] = index
+    test_x["Sales"] = 0
+    test_x["Sales"] = pre_eln
+    test_x[["Id", "Sales"]].to_csv("submission_eln.csv", index=False)
+    return rmpse_eln
+
+# #svr针对非线性更好，数据量不能太大
+def SVR_model(train_x ,train_y,test_x):
+    X_train,X_test,y_train,y_test = train_test_split(train_x,train_y,test_size=0.2)
+    svr_model = SVR()
+    svr_model.fit(X_train,np.expm1(y_train))
+    pre_svr = svr_model.predict(X_test)
+    print(pre_svr)
+    rmpse_svr = rmspe_other(pre_svr,np.expm1(y_test))
+    return rmpse_svr
+
+
+#ker 主要是线性,针对小数据量，太大容易内存溢出,在本案例中就已经内存溢出，所以这里不使用了。
+def KernelRidge_model(train_x ,train_y,test_x):
+    X_train, X_test, y_train, y_test = train_test_split(train_x, train_y, test_size=0.2)
+    ker_model = KernelRidge()
+    ker_model.fit(X_train, np.expm1(y_train))
+    pre_ker = ker_model.predict(X_test)
+    print(pre_ker)
+    rmpse_ker = rmspe_other(pre_ker, np.expm1(y_test))
+    return rmpse_ker
+
+#bay线性，数据量不能太大
+def BayesianRidge_model(train_x ,train_y):
+    X_train, X_test, y_train, y_test = train_test_split(train_x, train_y, test_size=0.2)
+    bys_model = BayesianRidge()
+    bys_model.fit(X_train, np.expm1(y_train))
+    pre_bys = bys_model.predict(X_test)
+    print(pre_bys)
+    rmpse_bys = rmspe_other(pre_bys, np.expm1(y_test))
+    return rmpse_bys
+
+#sgd 梯度下降，然后不断的降低学习率，以便改变权重参数，说以针对大量稀疏矩阵比较好，原始深度学习通常用这个优化器。
+def SGD_model(train_x ,train_y,test_x):
+    train_x = pd.read_csv('trainFeature.csv')
+    test_x = pd.read_csv('testFeature.csv')
+    train_x.fillna(0, inplace=True)
+    test_x.fillna(0, inplace=True)
+    X_train, X_test, y_train, y_test = train_test_split(train_x, train_y, test_size=0.2)
+    sgd_model = SGDRegressor()
+    sgd_model.fit(X_train, np.expm1(y_train))
+    pre_sgd = sgd_model.predict(test_x)
+    print(pre_sgd)
+    rmpse_sgd = rmspe_other(pre_sgd, np.expm1(y_test))
+    index = test_x.index + 1
+    print(index)
+    test_x["Id"] = 0
+    test_x["Id"] = index
+    test_x["Sales"] = 0
+    test_x["Sales"] = pre_sgd
+    test_x[["Id", "Sales"]].to_csv("submission_sgd.csv", index=False)
+    return rmpse_sgd
+
+#随机森林
+def RF_model(train_x ,train_y,test_x):
+    train_x = pd.read_csv('trainFeature.csv')
+    test_x = pd.read_csv('testFeature.csv')
+    train_x.fillna(0, inplace=True)
+    test_x.fillna(0, inplace=True)
+    print(train_x.dtypes)
+    X_train, X_test, y_train, y_test = train_test_split(train_x, train_y, test_size=0.2)
+    #max_features在随机分类时会调节。
+    #min_impurity_decrease损失值达到大于这个数就分裂，太小容易过拟合。
+    rf_model = RandomForestRegressor(
+        n_estimators=1000,
+        max_depth=10,
+        max_leaf_nodes=200,
+        min_samples_split = 50,
+        min_samples_leaf = 20,
+        min_impurity_decrease=0.001,
+        n_jobs=-1)
+    rf_model.fit(X_train,np.expm1(y_train))
+    pre_rf = rf_model.predict(test_x)
+    print(pre_rf)
+    rmpse_rf = rmspe_other(pre_rf, np.expm1(y_test))
+    index = test_x.index + 1
+    print(index)
+    test_x["Id"] = 0
+    test_x["Id"] = index
+    test_x["Sales"] = 0
+    test_x["Sales"] = pre_rf
+    test_x[["Id", "Sales"]].to_csv("submission_rf.csv", index=False)
+    return rmpse_rf
+
+
+#GBDT
+def GBDT_model(train_x,train_y ):
+    '''
+        'n_estimators':[50,70,80,100,150,300,500,700,1000],
+        'max_depth': [4, 5, 6],
+        'min_samples_split': range(100, 801, 200),
+        'min_samples_leaf': range(60, 101, 10),
+        'subsample': [ 0.8, 0.9],
+        'max_features': range(3, 12)
+        # 'learning_rate':[0.0001,0.0005,0.001,0.002,0.005,0.01,0.02,0.05,0.1]
+    '''
+    X_train, X_test, y_train, y_test = train_test_split(train_x, train_y, test_size=0.2)
+    gbdt_model = GradientBoostingRegressor(
+        n_estimators = 500,
+        max_depth=10,
+        min_samples_split=50,
+        min_samples_leaf=20,
+        subsample=0.8,
+        min_impurity_decrease = 0.001,
+        max_leaf_nodes = 200,
+        learning_rate=0.01
+    )
+    gbdt_model.fit(X_train,np.expm1(y_train))
+    pre_gbdt =  gbdt_model.predict(X_test)
+    print( pre_gbdt)
+    rmpse_rf = rmspe_other(pre_gbdt, np.expm1(y_test))
+    return rmpse_rf
+
+#XGB
+#经过网格搜索后:
+def XGB_model(train_x,train_y,test_x):
+    trees = 100000
+    NUM_FOLDS = 5
+    num_round = 10
+    train_x = pd.read_csv('trainFeature.csv')
+    test_x = pd.read_csv('testFeature.csv')
+    param_xgb = {
+        'objective': 'reg:linear',
+        'booster': 'gbtree',
+        'eta': 0.01,
+        'max_depth': 13,
+        'min_child_weight': np.power(10, -0.5477),
+        'gamma': 1.45,
+        'alpha': np.power(10, -0.2887),
+        'lambda': np.power(10, 1.7570),
+        'subsample': 0.8143,
+        'colsample_bytree': 0.7453,
+        'n_jobs': -1
+                }
+    #这里就不需要使用交叉验证了。
+    def xgb_train(X_train,X_test,y_train,y_test,test_x):
+        D_train = xgb.DMatrix(X_train,np.log1p(y_train))
+        D_valid = xgb.DMatrix(X_test,np.log1p(y_test))
+        watchlist = [(D_valid,"valid"),(D_train, 'train')]
+
+        xgb_model = xgb.train(param_xgb, D_train, trees, evals=watchlist, early_stopping_rounds=10, feval=rmspe_xg,verbose_eval=True)
+        predict_train = xgb_model.predict(xgb.DMatrix(X_test),ntree_limit = xgb_model.best_ntree_limit)
+        test_probs = xgb_model.predict(xgb.DMatrix(test_x),ntree_limit = xgb_model.best_ntree_limit)
+        #防止有小于0的数
+        inf = predict_train < 0
+        predict_train[inf] = 0
+        print(test_probs)
+        indices = test_probs < 0
+        test_probs[indices] = 0
+        print(predict_train)
+        rmspe_test = rmspe(predict_train, np.expm1(y_test).values)
+        return predict_train,test_probs
+
+    kf = KFold(n_splits=10, shuffle=True)
+    predict_total = 0
+    for train_index, val_index in kf.split(train_x):
+        predict_train, predict_test = xgb_train(train_x.iloc[train_index], train_x.iloc[val_index],
+                                                train_y[train_index], train_y[val_index], test_x)
+        predict_total += predict_test
+
+
+
+    index = test_x.index+1
+    print(index)
+    test_x["Id"] = 0
+    test_x["Id"] = index
+    test_x["Sales"] = 0
+    test_x["Sales"] = predict_total/10
+    test_x[["Id","Sales"]].to_csv("submission_xgb.csv",index = False)
+
+
+'''
+经过网格搜索得到的LGB参数，然后带入创建LGB模型
+'''
+def LGB_model(y_train):
+    X_train = pd.read_csv('trainFeature.csv')
+    test = pd.read_csv('testFeature.csv')
+    predict_total = 0
+    # y_train = np.log1p(y_train)
+    for i in range(10):
+        train_x, test_x, train_y, test_y = train_test_split(X_train,y_train,test_size=0.1,random_state=i)
+        print(train_x.shape," ",test_x.shape," ",train_y.shape," ",test_y.shape)
+
+        lgb_model = lgb.LGBMRegressor(objective='regression',num_leaves=58,
+                              learning_rate=0.05, n_estimators=1000, max_depth=13,
+                              max_bin = 55, subsample = 0.6143,min_child_weight = np.power(10, -0.1477),
+                              min_split_gain =np.power(10, -2.5988),colsample_bytree=0.5678,
+                              reg_alpha=np.power(10, -2.2887), reg_lambda=np.power(10, 1.7570),nthread=-1
+                            )
+        lgb_model.fit(train_x,train_y)
+        predict_train = lgb_model.predict(test_x)
+        rmpse_train = rmspe(predict_train,test_y)
+        print("rmspe: ",rmpse_train)
+        predict_test = lgb_model.predict(test)
+        print(predict_test.shape)
+        predict_total+=predict_test
+
+    index = test.index + 1
+    print(index)
+    test["Id"] = 0
+    test["Id"] = index
+    test["Sales"] = 0
+    test["Sales"] = np.log1p(predict_total / 10)
+    test[["Id", "Sales"]].to_csv("submission_lgb.csv", index=False)
+
+from sklearn.base import BaseEstimator, TransformerMixin, RegressorMixin,clone
+
+'''
+由于模型并没有调整好，这次就不融合了，模型融合记住几点：模型效果之间差距不能大。
+最好线性，非线性，树形模型分开。
+如果用blending涉及到采样率问题，像这种几十万级别的数据并不推荐，可以用平均值和stacking，最好加权进一步提升准确率。
+具体看: https://blog.csdn.net/u014356002/article/details/54376138
+模型融合探讨: https://www.kaggle.com/c/bioresponse/discussion/1889#10950
+模型融合: https://blog.csdn.net/a358463121/article/details/53054686
+'''
+
+'''
+这是个blending脚本，我们最后得到我们的模型的权重，然后再用我们最后的方式去加权重得到最终结果。
+在做分类问题时，我们用这些样本模型训练出的结果，对最后线性模型LR做拟合器，得到了最终结果。而回归问题同理用线性。
+本质就是将多个模型的结果放入到LR中，做训练得到一个结果，这个结果就是针对以上四个结果得到的权重，我们最后再用这个权重去调整四个模型的结果即可
+
+blending
+
+from __future__ import division
+import numpy as np
+import load_data
+from sklearn.cross_validation import StratifiedKFold
+from sklearn.ensemble import RandomForestClassifier, ExtraTreesClassifier
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+
+
+def logloss(attempt, actual, epsilon=1.0e-15):
+    """Logloss, i.e. the score of the bioresponse competition.
+    """
+    attempt = np.clip(attempt, epsilon, 1.0-epsilon)
+    return - np.mean(actual * np.log(attempt) +
+                     (1.0 - actual) * np.log(1.0 - attempt))
+
+
+if __name__ == '__main__':
+
+    np.random.seed(0)  # seed to shuffle the train set
+
+    n_folds = 10
+    verbose = True
+    shuffle = False
+
+    X, y, X_submission = load_data.load()
+
+    if shuffle:
+        idx = np.random.permutation(y.size)
+        X = X[idx]
+        y = y[idx]
+
+    skf = list(StratifiedKFold(y, n_folds))
+
+    clfs = [RandomForestClassifier(n_estimators=100, n_jobs=-1, criterion='gini'),
+            RandomForestClassifier(n_estimators=100, n_jobs=-1, criterion='entropy'),
+            ExtraTreesClassifier(n_estimators=100, n_jobs=-1, criterion='gini'),
+            ExtraTreesClassifier(n_estimators=100, n_jobs=-1, criterion='entropy'),
+            GradientBoostingClassifier(learning_rate=0.05, subsample=0.5, max_depth=6, n_estimators=50)]
+
+    print "Creating train and test sets for blending."
+
+    dataset_blend_train = np.zeros((X.shape[0], len(clfs)))
+    dataset_blend_test = np.zeros((X_submission.shape[0], len(clfs)))
+
+    for j, clf in enumerate(clfs):
+        print j, clf
+        dataset_blend_test_j = np.zeros((X_submission.shape[0], len(skf)))
+        for i, (train, test) in enumerate(skf):
+            print "Fold", i
+            X_train = X[train]
+            y_train = y[train]
+            X_test = X[test]
+            y_test = y[test]
+            clf.fit(X_train, y_train)
+            y_submission = clf.predict_proba(X_test)[:, 1]
+            dataset_blend_train[test, j] = y_submission
+            dataset_blend_test_j[:, i] = clf.predict_proba(X_submission)[:, 1]
+        dataset_blend_test[:, j] = dataset_blend_test_j.mean(1)
+
+    print
+    print "Blending."
+    clf = LogisticRegression()
+    clf.fit(dataset_blend_train, y)
+    y_submission = clf.predict_proba(dataset_blend_test)[:, 1]
+
+    print "Linear stretch of predictions to [0,1]"
+    y_submission = (y_submission - y_submission.min()) / (y_submission.max() - y_submission.min())
+
+    print "Saving Results."
+    tmp = np.vstack([range(1, len(y_submission)+1), y_submission]).T
+    np.savetxt(fname='submission.csv', X=tmp, fmt='%d,%0.9f',
+header='MoleculeId,PredictedProbability', comments='')
+'''
+from sklearn import cross_validation
+import random
+import json
+from sklearn.metrics import log_loss, accuracy_score
+def blend_proba(clf, X_train, y, X_test, nfolds=5, save_preds="",
+                save_test_only="", seed=300373, save_params="",
+                clf_name="XX", generalizers_params=[], minimal_loss=0,
+                return_score=False, minimizer="log_loss"):
+  print("\nBlending with classifier:\n\t{}".format(clf))
+  folds = list(cross_validation.StratifiedKFold(y, nfolds,shuffle=True,random_state=seed))
+  print(X_train.shape)
+  dataset_blend_train = np.zeros((X_train.shape[0],np.unique(y).shape[0]))
+
+  #iterate through train set and train - predict folds
+  loss = 0
+  for i, (train_index, test_index) in enumerate( folds ):
+    print("Train Fold {}/{}}".format(i+1,nfolds))
+    fold_X_train = X_train[train_index]
+    fold_y_train = y[train_index]
+    fold_X_test = X_train[test_index]
+    fold_y_test = y[test_index]
+    clf.fit(fold_X_train, fold_y_train)
+
+    fold_preds = clf.predict_proba(fold_X_test)
+    print("Logistic loss: {}".format(log_loss(fold_y_test,fold_preds)))
+    dataset_blend_train[test_index] = fold_preds
+    if minimizer == "log_loss":
+      loss += log_loss(fold_y_test,fold_preds)
+    if minimizer == "accuracy":
+      fold_preds_a = np.argmax(fold_preds, axis=1)
+      loss += accuracy_score(fold_y_test,fold_preds_a)
+    #fold_preds = clf.predict(fold_X_test)
+
+    #loss += accuracy_score(fold_y_test,fold_preds)
+
+    if minimal_loss > 0 and loss > minimal_loss and i == 0:
+      return False, False
+    fold_preds = np.argmax(fold_preds, axis=1)
+    print("Accuracy:      {}".format(accuracy_score(fold_y_test,fold_preds)))
+  avg_loss = loss / float(i+1)
+  print("\nAverage:\t{}\n".format(avg_loss))
+  #predict test set (better to take average on all folds, but this is quicker)
+  print("Test Fold 1/1")
+  clf.fit(X_train, y)
+  dataset_blend_test = clf.predict_proba(X_test)
+
+
+'''
+加权的平均值模型融合
+'''
+class AverageWeight(BaseEstimator, RegressorMixin):
+    def __init__(self, mod, weight):
+        self.mod = mod
+        self.weight = weight
+
+    def fit(self, X, y):
+        self.models_ = [clone(x) for x in self.mod]
+        for model in self.models_:
+            model.fit(X, y)
+        return self
+
+    def predict(self, X):
+        w = list()
+        pred = np.array([model.predict(X) for model in self.models_])
+        # for every data point, single model prediction times weight, then add them together
+        for data in range(pred.shape[1]):
+            single = [pred[model, data] * weight for model, weight in zip(range(pred.shape[0]), self.weight)]
+            w.append(np.sum(single))
+        return w
+
+'''
+stacking模型融合法
+详解:https://blog.csdn.net/aliceyangxi1987/article/details/74857294
+'''
+class stacking(BaseEstimator, RegressorMixin, TransformerMixin):
+    def __init__(self, mod, meta_model):
+        self.mod = mod
+        self.meta_model = meta_model
+        self.kf = KFold(n_splits=5, random_state=42, shuffle=True)
+
+    def fit(self, X, y):
+        self.saved_model = [list() for i in self.mod]
+        oof_train = np.zeros((X.shape[0], len(self.mod)))
+
+        for i, model in enumerate(self.mod):
+            for train_index, val_index in self.kf.split(X, y):
+                renew_model = clone(model)
+                renew_model.fit(X[train_index], y[train_index])
+                self.saved_model[i].append(renew_model)
+                oof_train[val_index, i] = renew_model.predict(X[val_index])
+        '''
+        用上面模型得到的结果，再用meta_model取拟合。
+        '''
+        self.meta_model.fit(oof_train, y)
+        return self
+
+    def predict(self, X):
+        whole_test = np.column_stack([np.column_stack(model.predict(X) for model in single_model).mean(axis=1)
+                                      for single_model in self.saved_model])
+        return self.meta_model.predict(whole_test)
+
+    '''
+    这步其实本质就是求出权重值。
+    '''
+    def get_oof(self, X, y, test_X):
+        oof = np.zeros((X.shape[0], len(self.mod)))
+        test_single = np.zeros((test_X.shape[0], 5))
+        test_mean = np.zeros((test_X.shape[0], len(self.mod)))
+        for i, model in enumerate(self.mod):
+            for j, (train_index, val_index) in enumerate(self.kf.split(X, y)):
+                clone_model = clone(model)
+                clone_model.fit(X[train_index], y[train_index])
+                oof[val_index, i] = clone_model.predict(X[val_index])
+                test_single[:, j] = clone_model.predict(test_X)
+            test_mean[:, i] = test_single.mean(axis=1)
+        return oof, test_mean
+
+'''
+def stacking(train_x, train_y, test):
+    """ stacking
+    input: train_x, train_y, test
+    output: test的预测值
+    clfs: 5个一级分类器
+    dataset_blend_train: 一级分类器的prediction, 二级分类器的train_x
+    dataset_blend_test: 二级分类器的test
+    """
+    # 5个一级分类器
+    clfs = [SVC(C = 3, kernel="rbf"),
+            RandomForestClassifier(n_estimators=100, max_features="log2", max_depth=10, min_samples_leaf=1, bootstrap=True, n_jobs=-1, random_state=1),
+            KNeighborsClassifier(n_neighbors=15, n_jobs=-1),
+            xgb.XGBClassifier(n_estimators=100, objective="binary:logistic", gamma=1, max_depth=10, subsample=0.8, nthread=-1, seed=1),
+            ExtraTreesClassifier(n_estimators=100, criterion="gini", max_features="log2", max_depth=10, min_samples_split=2, min_samples_leaf=1,bootstrap=True, n_jobs=-1, random_state=1)]
+
+    # 二级分类器的train_x, test
+    dataset_blend_train = np.zeros((train_x.shape[0], len(clfs)), dtype=np.int)
+    dataset_blend_test = np.zeros((test.shape[0], len(clfs)), dtype=np.int)
+
+    # 5个分类器进行8_folds预测
+    n_folds = 8
+    skf = StratifiedKFold(n_splits=n_folds, shuffle=True, random_state=1)
+    for i,clf in enumerate(clfs):
+        dataset_blend_test_j = np.zeros((test.shape[0], n_folds))  # 每个分类器的单次fold预测结果
+        for j,(train_index,test_index) in enumerate(skf.split(train_x, train_y)):
+            tr_x = train_x[train_index]
+            tr_y = train_y[train_index]
+            clf.fit(tr_x, tr_y)
+            dataset_blend_train[test_index, i] = clf.predict(train_x[test_index])
+            dataset_blend_test_j[:, j] = clf.predict(test)
+        dataset_blend_test[:, i] = dataset_blend_test_j.sum(axis=1) // (n_folds//2 + 1)
+
+    # 二级分类器进行预测
+    clf = LogisticRegression(penalty="l1", tol=1e-6, C=1.0, random_state=1, n_jobs=-1)
+    clf.fit(dataset_blend_train, train_y)
+    prediction = clf.predict(dataset_blend_test)
+    return prediction
+'''
+
+
+'''
+模型融合后，可以选择加权融合进一步提高准确率。
+由于我们的模型效果俩者有一定差距，这次就不融合了。
+我会写上模型融合代码。
+'''
+def weight_model():
+    lgb_target = pd.read_csv("submission_lgb.csv")
+    xgb_target = pd.read_csv("submission_xgb.csv")
+    lgb_target = lgb_target["Sales"]
+    xgb_target = xgb_target["Sales"]
+    xgb_and_lgb_target = 0.775*xgb_target+0.225*lgb_target
+    index = xgb_target.index+1
+    aa = pd.DataFrame({"Id":index,"Sales":xgb_and_lgb_target})
+    aa.to_csv("submission_end.csv",index=False)
+
+
+'''
+a1 = pd.read_csv('D:\\kaggle比赛\\桑德斯预测比赛\\model\\my_submission.csv')
+a2 = pd.read_csv('D:\\kaggle比赛\\桑德斯预测比赛\\model\\leaky_submission.csv')
+a3 = pd.read_csv('D:\\kaggle比赛\\桑德斯预测比赛\\model\\final.csv')
+a4 = pd.read_csv('D:\\kaggle比赛\\桑德斯预测比赛\\model\\blend04.csv')
+
+'''
+'''
+设置个dataframe,然后观察方差，得出a1,a2更相似，a3,a4更相似，然后加权俩俩组合即可。
+
+CORR = pd.DataFrame()
+CORR['BEST_69'] = BEST_69.target
+CORR['ROUNED_MIN2'] = ROUNED_MIN2.target
+CORR['NOFAKE'] = NOFAKE.target
+CORR['XGB'] = XGB.target
+CORR['XGB1'] = XGB1.target
+CORR['BLEND04'] = BLEND04.target
+CORR['ISLABEL'] = ISLABEL.target
+CORR['MYSUB'] = MYSUB.target
+#下面是方差
+print(CORR.corr())
+# BEST_69  ROUNED_MIN2    ...      ISLABEL     MYSUB
+# BEST_69      1.000000     0.955497    ...     0.854990  0.585784
+# ROUNED_MIN2  0.955497     1.000000    ...     0.839340  0.569592
+# NOFAKE       0.491216     0.477915    ...     0.773567  0.779853
+# XGB          0.568647     0.558319    ...     0.907063  0.971520
+# XGB1         0.559219     0.549139    ...     0.900217  0.966780
+# BLEND04      0.854658     0.839026    ...     0.999996  0.900454
+# ISLABEL      0.854990     0.839340    ...     1.000000  0.900224
+# MYSUB        0.585784     0.569592    ...     0.900224  1.000000
+
+b1 = a1.target
+b2 = a2.target
+b3 = a3.target
+b4 = a4.target
+
+b5 = a1.copy()
+b5.target = 0.5*(0.775*(b3+b4)+0.225*(b1+b2))
+
+b5.to_csv("D:\\kaggle比赛\\桑德斯预测比赛\\model\\submission_best2.csv",index=False)
+'''
+
+
+
+
+
+
+def main():
+    train_x, train_y, test_x, train_customers = load_data()
+    train_x, test_x = parse_time_scale(train_x,test_x)
+    all_df = merge_data(train_x,test_x)
+    all_df = Standard_data(all_df)
+    all_df = parse_nan(all_df)
+    # all_df = feature_selection(all_df)
+    # all_df = feature_noisy(all_df)
+    # train_x, test_x = split_data(all_df,train_x,test_x)
+    # # #train_x, test_x = ks_sample(train_x, test_x)
+    # # #train_x, test_x = feature_extraction_rf(train_x,test_x,train_y)
+    # # #train_x, test_x = feature_extraction_ref(train_x, test_x,train_y)
+    # train_x, test_x = feature_extraction_RandomLasso(train_x, test_x,train_y)
+    # # #train_x, train_y,test_x = feature_extraction(train_x, train_y,test_x)
+    # train_x, test_x ,feature = feature_splicing(train_x, test_x)
+    weight_model()
+    #lasso = Lasso_model(train_x,train_y,test_x)
+    #ridge = Ridge_model(train_x,train_y,test_x)
+    #eln = ElasticNet_model(train_x,train_y,test_x)
+    #svr = SVR_model(train_x,train_y)
+    #ker = KernelRidge_model(train_x,train_y,test_x)
+    #bys = BayesianRidge_model(train_x,train_y)
+    #sgd = SGD_model(train_x,train_y,test_x)
+    #rf = RF_model(train_x,train_y,test_x)
+    #gbdt = GBDT_model(train_x,train_y)
+    #XGB_model(train_x,train_y,test_x)
+    #LGB_model(train_y)
+    #print("Lasso回归rmspe损失值为:",lasso)
+    #print("Ridge回归rmspe损失值为:", ridge)
+    #print("弹性网络回归rmspe损失值为:", eln)
+    #print("SVR回归rmspe损失值为:", svr)
+    #print("KerRidge回归rmspe损失值为:", ker)
+    #print("贝叶斯回归回归rmspe损失值为:", bys)
+    #print("SGD梯度下降回归rmspe损失值为:", sgd)
+   # print("随机森林回归rmpse损失值为:",rf)
+    #print("gbdt回归rmpse损失值为:",gbdt)
+    #print("xgb回归rmpse损失值为:", xgb)
+    #print("lgb回归rmpse损失值为: ",lgb)
+
+
+    #生成文件
+    #train_x['Sales'] = train_y
+    #生成csv文件。
+    #D:\\kaggle比赛\\装潢公司销量预测\\data\\
+    #train_x.to_csv("D:\\kaggle比赛\\装潢公司销量预测\\data\\train_x_end.csv",index = False)
+
+
+
+
+
+if __name__ == '__main__':
+    main()
