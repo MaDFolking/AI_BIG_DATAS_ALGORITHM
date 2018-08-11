@@ -1,0 +1,154 @@
+参数调优的一般方法。
+我们会使用和GBM中相似的方法。需要进行如下步骤：  
+1. 选择较高的学习速率(learning rate)。一般情况下，学习速率的值为0.1。但是，对于不同的问题，理想的学习速率有时候会在0.05到0.3之间波动。
+选择对应于此学习速率的理想决策树数量。XGBoost有一个很有用的函数“cv”，这个函数可以在每一次迭代中使用交叉验证，并返回理想的决策树数量。 
+2. 对于给定的学习速率和决策树数量，进行决策树特定参数调优(max_depth, min_child_weight, gamma, subsample, colsample_bytree)。
+在确定一棵树的过程中，我们可以选择不同的参数，待会儿我会举例说明。 
+3. xgboost的正则化参数的调优。(lambda, alpha)。这些参数可以降低模型的复杂度，从而提高模型的表现。 
+4. 降低学习速率，确定理想参数。
+
+咱们一起详细地一步步进行这些操作。
+
+第一步：确定学习速率和tree_based 参数调优的估计器数目。
+为了确定boosting 参数，我们要先给其它参数一个初始值。咱们先按如下方法取值： 
+1、max_depth = 5 :这个参数的取值最好在3-10之间。我选的起始值为5，但是你也可以选择其它的值。起始值在4-6之间都是不错的选择。 
+2、min_child_weight = 1:在这里选了一个比较小的值，因为这是一个极不平衡的分类问题。因此，某些叶子节点下的值会比较小。 
+3、gamma = 0: 起始值也可以选其它比较小的值，在0.1到0.2之间就可以。这个参数后继也是要调整的。 
+4、subsample,colsample_bytree = 0.8: 这个是最常见的初始值了。典型值的范围在0.5-0.9之间。 
+5、scale_pos_weight = 1: 这个值是因为类别十分不平衡。 
+注意哦，上面这些参数的值只是一个初始的估计值，后继需要调优。这里把学习速率就设成默认的0.1。然后用xgboost中的cv函数来确定最佳的决策树数量。
+前文中的函数可以完成这个工作。
+
+#Choose all predictors except target & IDcolspredictors = [x for x in train.columns if x not in [target,IDcol]]
+xgb1 = XGBClassifier( learning_rate =0.1, n_estimators=1000, max_depth=5, min_child_weight=1, gamma=0, subsample=0.8, 
+colsample_bytree=0.8, objective= 'binary:logistic', nthread=4, scale_pos_weight=1, seed=27)modelfit(xgb1, train, predictors)
+
+
+从输出结果可以看出，在学习速率为0.1时，理想的决策树数目是140。这个数字对你而言可能比较高，当然这也取决于你的系统的性能。
+
+注意：在AUC(test)这里你可以看到测试集的AUC值。但是如果你在自己的系统上运行这些命令，并不会出现这个值。因为数据并不公开。这里提供的值仅供参考。
+生成这个值的代码部分已经被删掉了。
+
+第二步： max_depth 和 min_weight 参数调优
+我们先对这两个参数调优，是因为它们对最终结果有很大的影响。首先，我们先大范围地粗调参数，然后再小范围地微调。 
+注意：在这一节我会进行高负荷的栅格搜索(grid search)，这个过程大约需要15-30分钟甚至更久，具体取决于你系统的性能。
+你也可以根据自己系统的性能选择不同的值。
+
+param_test1 = { 'max_depth':range(3,10,2), 'min_child_weight':range(1,6,2)}gsearch1 = GridSearchCV(estimator = XGBClassifier( 
+learning_rate =0.1, n_estimators=140, max_depth=5,min_child_weight=1, gamma=0, subsample=0.8,            
+colsample_bytree=0.8, objective= 'binary:logistic', nthread=4,     scale_pos_weight=1, seed=27),  param_grid = param_test1,   
+scoring='roc_auc',n_jobs=4,iid=False, cv=5)gsearch1.fit(train[predictors],train[target])gsearch1.grid_scores_, gsearch1.best_params_, 
+gsearch1.best_score_
+输出结果
+
+至此，我们对于数值进行了较大跨度的12中不同的排列组合，可以看出理想的max_depth值为5，理想的min_child_weight值为5。
+在这个值附近我们可以再进一步调整，来找出理想值。我们把上下范围各拓展1，因为之前我们进行组合的时候，参数调整的步长是2。
+
+param_test2 = { 'max_depth':[4,5,6], 'min_child_weight':[4,5,6]}gsearch2 = GridSearchCV(estimator = XGBClassifier(  
+learning_rate=0.1, n_estimators=140, max_depth=5, min_child_weight=2, gamma=0, subsample=0.8, colsample_bytree=0.8,
+objective= 'binary:logistic', nthread=4, scale_pos_weight=1,seed=27),  param_grid = param_test2, scoring='roc_auc',n_jobs=4,
+iid=False, cv=5)gsearch2.fit(train[predictors],train[target])gsearch2.grid_scores_, gsearch2.best_params_,     gsearch2.best_score_
+
+输出结果
+
+至此，我们得到max_depth的理想取值为4，min_child_weight的理想取值为6。同时，我们还能看到cv的得分有了小小一点提高。需要注意的一点是，
+随着模型表现的提升，进一步提升的难度是指数级上升的，尤其是你的表现已经接近完美的时候。当然啦，你会发现，虽然min_child_weight的理想取值是6，
+但是我们还没尝试过大于6的取值。像下面这样，就可以尝试其它值。
+
+param_test2b = { 'min_child_weight':[6,8,10,12] }gsearch2b = GridSearchCV(estimator = XGBClassifier(     learning_rate=0.1, 
+n_estimators=140, max_depth=4, min_child_weight=2, gamma=0, subsample=0.8,     colsample_bytree=0.8, objective= 'binary:logistic',
+nthread=4, scale_pos_weight=1,seed=27),  param_grid = param_test2b,     scoring='roc_auc',n_jobs=4,iid=False, cv=5)gsearch2b.fit(
+train[predictors],train[target])modelfit(gsearch3.best_estimator_, train, predictors)gsearch2b.grid_scores_, gsearch2b.best_params_, 
+gsearch2b.best_score_
+输出结果
+
+我们可以看出，6确确实实是理想的取值了。
+
+第三步：gamma参数调优
+在已经调整好其它参数的基础上，我们可以进行gamma参数的调优了。Gamma参数取值范围可以很大，我这里把取值范围设置为5了。你其实也可以取更精确的gamma值。
+
+param_test3 = { 'gamma':[i/10.0 for i in range(0,5)]}gsearch3 = GridSearchCV(estimator = XGBClassifier( learning_rate =0.1, 
+n_estimators=140, max_depth=4, min_child_weight=6, gamma=0, subsample=0.8, colsample_bytree=0.8, objective= 'binary:logistic', 
+nthread=4, scale_pos_weight=1,seed=27),  param_grid = param_test3, scoring='roc_auc',n_jobs=4,iid=False, cv=5)gsearch3.fit
+(train[predictors],train[target])gsearch3.grid_scores_, gsearch3.best_params_, gsearch3.best_score_
+从这里可以看出来，我们在第一步调参时设置的初始gamma值就是比较合适的。也就是说，理想的gamma值为0。在这个过程开始之前，最好重新调整boosting回合，
+因为参数都有变化。 
+gamma 
+从这里可以看出，得分提高了。所以，最终得到的参数是：
+
+xgb2 = XGBClassifier( learning_rate =0.1, n_estimators=1000, max_depth=4, min_child_weight=6, gamma=0, subsample=0.8, 
+colsample_bytree=0.8, objective= 'binary:logistic', nthread=4,scale_pos_weight=1,seed=27)modelfit(xgb2, train, predictors)
+最终参数
+
+第四步：调整subsample 和 colsample_bytree 参数
+下一步是尝试不同的subsample 和 colsample_bytree 参数。我们分两个阶段来进行这个步骤。这两个步骤都取0.6,0.7,0.8,0.9作为起始值。
+
+param_test4 = { 'subsample':[i/10.0 for i in range(6,10)], 'colsample_bytree':[i/10.0 for i in range(6,10)]}gsearch4 =
+GridSearchCV(estimator = XGBClassifier( learning_rate =0.1, n_estimators=177, max_depth=3, min_child_weight=4, gamma=0.1,
+subsample=0.8, colsample_bytree=0.8, objective= 'binary:logistic', nthread=4, scale_pos_weight=1,seed=27),  param_grid = param_test4, 
+scoring='roc_auc',n_jobs=4,iid=False, cv=5)gsearch4.fit(train[predictors],train[target])gsearch4.grid_scores_, gsearch4.best_params_, 
+gsearch4.best_score_
+gsearch4
+
+从这里可以看出来，subsample 和 colsample_bytree 参数的理想取值都是0.8。现在，我们以0.05为步长，在这个值附近尝试取值。
+
+param_test5 = { 'subsample':[i/100.0 for i in range(75,90,5)], 'colsample_bytree':[i/100.0 for i in range(75,90,5)]}gsearch5 =
+GridSearchCV(estimator = XGBClassifier( learning_rate =0.1, n_estimators=177, max_depth=4, min_child_weight=6, gamma=0, subsample=0.8, 
+colsample_bytree=0.8, objective= 'binary:logistic', nthread=4, scale_pos_weight=1,seed=27),  param_grid = param_test5,
+scoring='roc_auc',n_jobs=4,iid=False, cv=5)gsearch5.fit(train[predictors],train[target])
+output
+
+我们得到的理想取值还是原来的值。因此，最终的理想取值是:
+
+subsample: 0.8
+colsample_bytree: 0.8
+第五步：正则化参数调优。
+下一步是应用正则化来降低过拟合。由于gamma函数提供了一种更加有效地降低过拟合的方法，大部分人很少会用到这个参数。
+但是我们在这里也可以尝试用一下这个参数。我会在这里调整’reg_alpha’参数，然后’reg_lambda’参数留给你来完成。
+
+param_test6 = { 'reg_alpha':[1e-5, 1e-2, 0.1, 1, 100]}gsearch6 = GridSearchCV(estimator = XGBClassifier( learning_rate =0.1,
+n_estimators=177, max_depth=4, min_child_weight=6, gamma=0.1, subsample=0.8, colsample_bytree=0.8, objective= 'binary:logistic',
+nthread=4, scale_pos_weight=1,seed=27),  param_grid = param_test6, scoring='roc_auc',n_jobs=4,iid=False, cv=5)gsearch6.
+fit(train[predictors],train[target])gsearch6.grid_scores_, gsearch6.best_params_, gsearch6.best_score_
+output
+
+我们可以看到，相比之前的结果，CV的得分甚至还降低了。但是我们之前使用的取值是十分粗糙的，我们在这里选取一个比较靠近理想值(0.01)的取值，
+来看看是否有更好的表现。
+
+param_test7 = { 'reg_alpha':[0, 0.001, 0.005, 0.01, 0.05]}gsearch7 = GridSearchCV(estimator = XGBClassifier( learning_rate =0.1,
+n_estimators=177, max_depth=4, min_child_weight=6, gamma=0.1, subsample=0.8, colsample_bytree=0.8, objective= 'binary:logistic',
+nthread=4, scale_pos_weight=1,seed=27),  param_grid = param_test7, scoring='roc_auc',n_jobs=4,iid=False, cv=5)gsearch7.
+fit(train[predictors],train[target])gsearch7.grid_scores_, gsearch7.best_params_, gsearch7.best_score_
+output7
+
+可以看到，CV的得分提高了。现在，我们在模型中来使用正则化参数，来看看这个参数的影响。
+
+xgb3 = XGBClassifier( learning_rate =0.1, n_estimators=1000, max_depth=4, min_child_weight=6, gamma=0, subsample=0.8, 
+colsample_bytree=0.8, reg_alpha=0.005, objective= 'binary:logistic', nthread=4, scale_pos_weight=1, seed=27)modelfit(xgb3, 
+train, predictors)
+out_put3
+
+然后我们发现性能有了小幅度提高。
+
+第6步：降低学习速率
+最后，我们使用较低的学习速率，以及使用更多的决策树。我们可以用XGBoost中的CV函数来进行这一步工作。
+
+xgb4 = XGBClassifier( learning_rate =0.01, n_estimators=5000, max_depth=4, min_child_weight=6, gamma=0, subsample=0.8, 
+colsample_bytree=0.8, reg_alpha=0.005, objective= 'binary:logistic', nthread=4, scale_pos_weight=1, seed=27)modelfit(xgb4, train,
+predictors)
+此处输入图片的描述 
+此处输入图片的描述
+
+至此，你可以看到模型的表现有了大幅提升，调整每个参数带来的影响也更加清楚了。 
+在文章的末尾，我想分享两个重要的思想： 
+1、仅仅靠参数的调整和模型的小幅优化，想要让模型的表现有个大幅度提升是不可能的。GBM的最高得分是0.8487，XGBoost的最高得分是0.8494。
+确实是有一定的提升，但是没有达到质的飞跃。 
+2、要想让模型的表现有一个质的飞跃，需要依靠其他的手段，诸如，特征工程(feature egineering) ，模型组合(ensemble of model),以及堆叠(stacking)等。
+
+你可以从 这里 下载iPython notebook文件，里面包含了文章中提到的所有代码。如果你使用R语言，请阅读这篇文章。
+
+结束语
+这篇文章主要讲了如何提升XGBoost模型的表现。首先，我们介绍了相比于GBM，为何XGBoost可以取得这么好的表现。紧接着，我们介绍了每个参数的细节。
+我们定义了一个可以重复使用的构造模型的函数。 
+最后，我们讨论了使用XGBoost解决问题的一般方法，在AV Data Hackathon 3.x problem数据上实践了这些方法。 
+希望看过这篇文章之后，你能有所收获，下次使用XGBoost解决问题的时候可以更有信心哦~
