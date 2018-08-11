@@ -1,0 +1,18 @@
+   if plot:
+      outfile = open('xgb.fmap', 'w')
+      i = 0
+      for feat in features:
+          outfile.write('{0}\t{1}\tq\n'.format(i, feat))
+          i = i + 1
+      outfile.close()
+      importance = gbm.get_fscore(fmap='xgb.fmap')
+      importance = sorted(importance.items(), key=operator.itemgetter(1))
+      df = pd.DataFrame(importance, columns=['feature', 'fscore'])
+      df['fscore'] = df['fscore'] / df['fscore'].sum()
+      # Plotitup
+      plt.figure()
+      df.plot()
+      df.plot(kind='barh', x='feature', y='fscore', legend=False, figsize=(25, 15))
+      plt.title('XGBoost Feature Importance')
+      plt.xlabel('relative importance')
+      plt.gcf().savefig('Feature_Importance_xgb_d%s_eta%s_ntree%s_mcw%s_tsize%s.png' % (str(depth),str(eta),str(ntrees),str(mcw),str(tsize)))
