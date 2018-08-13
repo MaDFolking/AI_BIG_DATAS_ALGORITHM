@@ -1,0 +1,3380 @@
+https://github.com/HanXiaoyang/CTR_NN/blob/master/deep%20nn%20ctr%20prediction/CTR_prediction_LR_FM_CCPM_PNN.ipynb
+
+点击率预估是广告技术的核心算法之一，它是很多广告算法工程师喜爱的战场。一直想介绍一下点击率预估，但是涉及公式和模型理论太多，怕说不清楚，读者也不明白。所以，这段时间花了一些时间整理点击率预估的知识，希望在尽量不使用数据公式的情况下，把大道理讲清楚，给一些不愿意看公式的同学一个Cook Book。
+
+点击率预测是什么？
+点击率预测是对每次广告的点击情况做出预测，可以判定这次为点击或不点击，也可以给出点击的概率，有时也称作pClick。
+点击率预测和推荐算法的不同？
+广告中点击率预估需要给出精准的点击概率，A点击率0.3% , B点击率0.13%等，需要结合出价用于排序使用；推荐算法很多时候只需要得出一个最优的次序A>B>C即可；
+搜索和非搜索广告点击率预测的区别
+搜索中有强搜索信号-“查询词(Query)”，查询词和广告内容的匹配程度很大程度影响了点击概率； 点击率也高，PC搜索能到达百分之几的点击率。
+
+非搜索广告（例如展示广告，信息流广告），点击率的计算很多来源于用户的兴趣和广告特征，上下文环境；移动信息流广告的屏幕比较大，用户关注度也比较集中，好位置也能到百分之几的点击率。对于很多文章底部的广告，点击率非常低，用户关注度也不高，常常是千分之几，甚至更低；
+
+如何衡量点击率预测的准确性？
+AUC是常常被用于衡量点击率预估的准确性的方法；理解AUC之前，需要理解一下Precision/Recall；对于一个分类器，我们通常将结果分为：TP,TN,FP,FN。 
+
+本来用Precision=TP/(TP+FP)，Recall=TP/P，也可以用于评估点击率算法的好坏，毕竟这是一种监督学习，每一次预测都有正确答案。但是，这种方法对于测试数据样本的依赖性非常大，稍微不同的测试数据集合，结果差异非常大。那么，既然无法使用简单的单点Precision/Recall来描述，我们可以考虑使用一系列的点来描述准确性。做法如下：
+
+找到一系列的测试数据，点击率预估分别会对每个测试数据给出点击/不点击，和Confidence Score。
+
+按照给出的Score进行排序，那么考虑如果将Score作为一个Thresholds的话，考虑这个时候所有数据的 TP Rate 和 FP Rate； 当Thresholds分数非常高时，例如0.9，TP数很小，NP数很大，因此TP率不会太高； 
+
+当选用不同Threshold时候，画出来的ROC曲线，以及下方AUC面积
+我们计算这个曲线下面的面积就是所谓的AUC值；AUC值越大，预测约准确。
+为什么要使用AUC曲线
+既然已经这么多评价标准，为什么还要使用ROC和AUC呢？因为ROC曲线有个很好的特性：当测试集中的正负样本的分布变化的时候，ROC曲线能够保持不变。在实际的数据集中经常会出现类不平衡（class imbalance）现象，即负样本比正样本多很多（或者相反），而且测试数据中的正负样本的分布也可能随着时间变化。AUC对样本的比例变化有一定的容忍性。AUC的值通常在0.6-0.85之间。
+
+如何来进行点击率预测？
+点击率预测可以考虑为一个黑盒，输入一堆信号，输出点击的概率。这些信号就包括如下信号
+
+广告：历史点击率，文字，格式，图片等等
+环境：手机型号，时间媒体，位置，尺寸，曝光时间，网络IP，上网方式，代理等
+用户：基础属性（男女，年龄等），兴趣属性（游戏，旅游等），历史浏览，点击行为，电商行为
+信号的粒度： Low Level : 数据来自一些原始访问行为的记录，例如用户是否点击过Landing Page，流量IP等。这些特征可以用于粗选，模型简单， High Level: 特征来自一些可解释的数据，例如兴趣标签，性别等
+特征编码Feature Encoding：
+特征离散化：把连续的数字，变成离散化，例如温度值可以办成多个温度区间。
+
+特征交叉： 把多个特征进行叫交叉的出的值，用于训练，这种值可以表示一些非线性的关系。例如，点击率预估中应用最多的就是广告跟用户的交叉特征、广告跟性别的交叉特征，广告跟年龄的交叉特征，广告跟手机平台的交叉特征，广告跟地域的交叉特征等等。
+
+特征选取（Feature Selection）：
+特征选择就是选择那些靠谱的Feature，去掉冗余的Feature，对于搜索广告Query和广告的匹配程度很关键；对于展示广告，广告本身的历史表现，往往是最重要的Feature。
+
+独热编码（One-Hot encoding）
+假设有三组特征，分别表示年龄，城市，设备；
+
+["男", "女"]
+
+["北京", "上海", "广州"]
+
+["苹果", "小米", "华为", "微软"]
+
+传统变化： 对每一组特征，使用枚举类型，从0开始；
+
+["男“，”上海“，”小米“]=[ 0,1,1]
+
+["女“，”北京“，”苹果“] =[1,0,0]
+
+传统变化后的数据不是连续的，而是随机分配的，不容易应用在分类器中。
+
+ 热独编码是一种经典编码，是使用N位状态寄存器来对N个状态进行编码，每个状态都由他独立的寄存器位，并且在任意时候，其中只有一位有效。
+
+["男“，”上海“，”小米“]=[ 1,0,0,1,0,0,1,0,0]
+
+["女“，”北京“，”苹果“] =[0,1,1,0,0,1,0,0,0]
+
+经过热独编码，数据会变成稀疏的，方便分类器处理。
+点击率预估整体过程：
+三个基本过程：特征工程，模型训练，线上服务
+
+
+
+特征工程：准备各种特征，编码，去掉冗余特征（用PCA等）
+
+模型训练：选定训练，测试等数据集，计算AUC，如果AUC有提升，通常可以在进一步在线上分流实验。
+
+线上服务：线上服务，需要实时计算CTR，实时计算相关特征和利用模型计算CTR，对于不同来源的CTR，可能需要一个Calibration的服务。
+
+```
+
+用tensorflow构建各种模型完成ctr预估
+In [1]:
+!head -5 ./data/train.txt
+0 5:1 9:1 357943:1 445905:1 446144:1 446294:1 450548:1 479123:1 491626:1 491634:1 491641:1 491644:1 491648:1 491668:1 491700:1 491709:1
+0 5:1 9:1 403405:1 445920:1 446287:1 446293:1 452727:1 490863:1 491629:1 491637:1 491639:1 491645:1 491659:1 491668:1 491698:1 491708:1
+0 5:1 9:1 414259:1 445897:1 446049:1 446293:1 454694:1 491595:1 491625:1 491633:1 491639:1 491646:1 491660:1 491668:1 491674:1 491708:1
+0 5:1 9:1 430407:1 445892:1 446063:1 446294:1 448775:1 476818:1 491625:1 491633:1 491641:1 491644:1 491660:1 491668:1 491700:1 491709:1
+0 5:1 9:1 140858:1 445908:1 446177:1 446293:1 449140:1 490778:1 491626:1 491634:1 491641:1 491645:1 491648:1 491668:1 491700:1 491708:1
+In [3]:
+!head -10 ./data/featindex.txt
+0:other	0
+0:0	1
+0:1	2
+0:2	3
+0:3	4
+0:4	5
+0:5	6
+0:6	7
+1:other	8
+1:00	9
+In [1]:
+from __future__ import print_function
+from __future__ import absolute_import
+from __future__ import division
+import cPickle as pkl
+import numpy as np
+import tensorflow as tf
+from scipy.sparse import coo_matrix
+In [7]:
+# 读取数据，统计基本的信息，field等
+DTYPE = tf.float32
+
+FIELD_SIZES = [0] * 26
+with open('./data/featindex.txt') as fin:
+    for line in fin:
+        line = line.strip().split(':')
+        if len(line) > 1:
+            f = int(line[0]) - 1
+            FIELD_SIZES[f] += 1
+print('field sizes:', FIELD_SIZES)
+FIELD_OFFSETS = [sum(FIELD_SIZES[:i]) for i in range(len(FIELD_SIZES))]
+INPUT_DIM = sum(FIELD_SIZES)
+OUTPUT_DIM = 1
+STDDEV = 1e-3
+MINVAL = -1e-3
+MAXVAL = 1e-3
+field sizes: [25, 445852, 36, 371, 4, 11328, 33995, 12, 7, 5, 4, 20, 2, 38, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8]
+In [8]:
+# 读取libsvm格式数据成稀疏矩阵形式
+# 0 5:1 9:1 140858:1 445908:1 446177:1 446293:1 449140:1 490778:1 491626:1 491634:1 491641:1 491645:1 491648:1 491668:1 491700:1 491708:1
+def read_data(file_name):
+    X = []
+    D = []
+    y = []
+    with open(file_name) as fin:
+        for line in fin:
+            fields = line.strip().split()
+            y_i = int(fields[0])
+            X_i = [int(x.split(':')[0]) for x in fields[1:]]
+            D_i = [int(x.split(':')[1]) for x in fields[1:]]
+            y.append(y_i)
+            X.append(X_i)
+            D.append(D_i)
+    y = np.reshape(np.array(y), [-1])
+    X = libsvm_2_coo(zip(X, D), (len(X), INPUT_DIM)).tocsr()
+    return X, y
+In [9]:
+# 数据乱序
+def shuffle(data):
+    X, y = data
+    ind = np.arange(X.shape[0])
+    for i in range(7):
+        np.random.shuffle(ind)
+    return X[ind], y[ind]
+In [11]:
+# 工具函数，libsvm格式转成coo稀疏存储格式
+def libsvm_2_coo(libsvm_data, shape):
+    coo_rows = []
+    coo_cols = []
+    coo_data = []
+    n = 0
+    for x, d in libsvm_data:
+        coo_rows.extend([n] * len(x))
+        coo_cols.extend(x)
+        coo_data.extend(d)
+        n += 1
+    coo_rows = np.array(coo_rows)
+    coo_cols = np.array(coo_cols)
+    coo_data = np.array(coo_data)
+    return coo_matrix((coo_data, (coo_rows, coo_cols)), shape=shape)
+In [12]:
+# csr转成输入格式
+def csr_2_input(csr_mat):
+    if not isinstance(csr_mat, list):
+        coo_mat = csr_mat.tocoo()
+        indices = np.vstack((coo_mat.row, coo_mat.col)).transpose()
+        values = csr_mat.data
+        shape = csr_mat.shape
+        return indices, values, shape
+    else:
+        inputs = []
+        for csr_i in csr_mat:
+            inputs.append(csr_2_input(csr_i))
+        return inputs
+In [13]:
+# 数据切片
+def slice(csr_data, start=0, size=-1):
+    if not isinstance(csr_data[0], list):
+        if size == -1 or start + size >= csr_data[0].shape[0]:
+            slc_data = csr_data[0][start:]
+            slc_labels = csr_data[1][start:]
+        else:
+            slc_data = csr_data[0][start:start + size]
+            slc_labels = csr_data[1][start:start + size]
+    else:
+        if size == -1 or start + size >= csr_data[0][0].shape[0]:
+            slc_data = []
+            for d_i in csr_data[0]:
+                slc_data.append(d_i[start:])
+            slc_labels = csr_data[1][start:]
+        else:
+            slc_data = []
+            for d_i in csr_data[0]:
+                slc_data.append(d_i[start:start + size])
+            slc_labels = csr_data[1][start:start + size]
+    return csr_2_input(slc_data), slc_labels
+In [14]:
+# 数据切分
+def split_data(data, skip_empty=True):
+    fields = []
+    for i in range(len(FIELD_OFFSETS) - 1):
+        start_ind = FIELD_OFFSETS[i]
+        end_ind = FIELD_OFFSETS[i + 1]
+        if skip_empty and start_ind == end_ind:
+            continue
+        field_i = data[0][:, start_ind:end_ind]
+        fields.append(field_i)
+    fields.append(data[0][:, FIELD_OFFSETS[-1]:])
+    return fields, data[1]
+In [15]:
+# 在tensorflow中初始化各种参数变量
+def init_var_map(init_vars, init_path=None):
+    if init_path is not None:
+        load_var_map = pkl.load(open(init_path, 'rb'))
+        print('load variable map from', init_path, load_var_map.keys())
+    var_map = {}
+    for var_name, var_shape, init_method, dtype in init_vars:
+        if init_method == 'zero':
+            var_map[var_name] = tf.Variable(tf.zeros(var_shape, dtype=dtype), name=var_name, dtype=dtype)
+        elif init_method == 'one':
+            var_map[var_name] = tf.Variable(tf.ones(var_shape, dtype=dtype), name=var_name, dtype=dtype)
+        elif init_method == 'normal':
+            var_map[var_name] = tf.Variable(tf.random_normal(var_shape, mean=0.0, stddev=STDDEV, dtype=dtype),
+                                            name=var_name, dtype=dtype)
+        elif init_method == 'tnormal':
+            var_map[var_name] = tf.Variable(tf.truncated_normal(var_shape, mean=0.0, stddev=STDDEV, dtype=dtype),
+                                            name=var_name, dtype=dtype)
+        elif init_method == 'uniform':
+            var_map[var_name] = tf.Variable(tf.random_uniform(var_shape, minval=MINVAL, maxval=MAXVAL, dtype=dtype),
+                                            name=var_name, dtype=dtype)
+        elif init_method == 'xavier':
+            maxval = np.sqrt(6. / np.sum(var_shape))
+            minval = -maxval
+            var_map[var_name] = tf.Variable(tf.random_uniform(var_shape, minval=minval, maxval=maxval, dtype=dtype),
+                                            name=var_name, dtype=dtype)
+        elif isinstance(init_method, int) or isinstance(init_method, float):
+            var_map[var_name] = tf.Variable(tf.ones(var_shape, dtype=dtype) * init_method, name=var_name, dtype=dtype)
+        elif init_method in load_var_map:
+            if load_var_map[init_method].shape == tuple(var_shape):
+                var_map[var_name] = tf.Variable(load_var_map[init_method], name=var_name, dtype=dtype)
+            else:
+                print('BadParam: init method', init_method, 'shape', var_shape, load_var_map[init_method].shape)
+        else:
+            print('BadParam: init method', init_method)
+    return var_map
+In [16]:
+# 不同的激活函数选择
+def activate(weights, activation_function):
+    if activation_function == 'sigmoid':
+        return tf.nn.sigmoid(weights)
+    elif activation_function == 'softmax':
+        return tf.nn.softmax(weights)
+    elif activation_function == 'relu':
+        return tf.nn.relu(weights)
+    elif activation_function == 'tanh':
+        return tf.nn.tanh(weights)
+    elif activation_function == 'elu':
+        return tf.nn.elu(weights)
+    elif activation_function == 'none':
+        return weights
+    else:
+        return weights
+In [17]:
+# 不同的优化器选择
+def get_optimizer(opt_algo, learning_rate, loss):
+    if opt_algo == 'adaldeta':
+        return tf.train.AdadeltaOptimizer(learning_rate).minimize(loss)
+    elif opt_algo == 'adagrad':
+        return tf.train.AdagradOptimizer(learning_rate).minimize(loss)
+    elif opt_algo == 'adam':
+        return tf.train.AdamOptimizer(learning_rate).minimize(loss)
+    elif opt_algo == 'ftrl':
+        return tf.train.FtrlOptimizer(learning_rate).minimize(loss)
+    elif opt_algo == 'gd':
+        return tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
+    elif opt_algo == 'padagrad':
+        return tf.train.ProximalAdagradOptimizer(learning_rate).minimize(loss)
+    elif opt_algo == 'pgd':
+        return tf.train.ProximalGradientDescentOptimizer(learning_rate).minimize(loss)
+    elif opt_algo == 'rmsprop':
+        return tf.train.RMSPropOptimizer(learning_rate).minimize(loss)
+    else:
+        return tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
+In [18]:
+# 工具函数
+# 提示：tf.slice(input_, begin, size, name=None)：按照指定的下标范围抽取连续区域的子集
+#   tf.gather(params, indices, validate_indices=None, name=None)：按照指定的下标集合从axis=0中抽取子集，适合抽取不连续区域的子集
+def gather_2d(params, indices):
+    shape = tf.shape(params)
+    flat = tf.reshape(params, [-1])
+    flat_idx = indices[:, 0] * shape[1] + indices[:, 1]
+    flat_idx = tf.reshape(flat_idx, [-1])
+    return tf.gather(flat, flat_idx)
+In [19]:
+def gather_3d(params, indices):
+    shape = tf.shape(params)
+    flat = tf.reshape(params, [-1])
+    flat_idx = indices[:, 0] * shape[1] * shape[2] + indices[:, 1] * shape[2] + indices[:, 2]
+    flat_idx = tf.reshape(flat_idx, [-1])
+    return tf.gather(flat, flat_idx)
+In [20]:
+def gather_4d(params, indices):
+    shape = tf.shape(params)
+    flat = tf.reshape(params, [-1])
+    flat_idx = indices[:, 0] * shape[1] * shape[2] * shape[3] + \
+               indices[:, 1] * shape[2] * shape[3] + indices[:, 2] * shape[3] + indices[:, 3]
+    flat_idx = tf.reshape(flat_idx, [-1])
+    return tf.gather(flat, flat_idx)
+In [21]:
+# 池化2d
+def max_pool_2d(params, k):
+    _, indices = tf.nn.top_k(params, k, sorted=False)
+    shape = tf.shape(indices)
+    r1 = tf.reshape(tf.range(shape[0]), [-1, 1])
+    r1 = tf.tile(r1, [1, k])
+    r1 = tf.reshape(r1, [-1, 1])
+    indices = tf.concat([r1, tf.reshape(indices, [-1, 1])], 1)
+    return tf.reshape(gather_2d(params, indices), [-1, k])
+In [22]:
+# 池化3d
+def max_pool_3d(params, k):
+    _, indices = tf.nn.top_k(params, k, sorted=False)
+    shape = tf.shape(indices)
+    r1 = tf.reshape(tf.range(shape[0]), [-1, 1])
+    r2 = tf.reshape(tf.range(shape[1]), [-1, 1])
+    r1 = tf.tile(r1, [1, k * shape[1]])
+    r2 = tf.tile(r2, [1, k])
+    r1 = tf.reshape(r1, [-1, 1])
+    r2 = tf.tile(tf.reshape(r2, [-1, 1]), [shape[0], 1])
+    indices = tf.concat([r1, r2, tf.reshape(indices, [-1, 1])], 1)
+    return tf.reshape(gather_3d(params, indices), [-1, shape[1], k])
+In [23]:
+# 池化4d
+def max_pool_4d(params, k):
+    _, indices = tf.nn.top_k(params, k, sorted=False)
+    shape = tf.shape(indices)
+    r1 = tf.reshape(tf.range(shape[0]), [-1, 1])
+    r2 = tf.reshape(tf.range(shape[1]), [-1, 1])
+    r3 = tf.reshape(tf.range(shape[2]), [-1, 1])
+    r1 = tf.tile(r1, [1, shape[1] * shape[2] * k])
+    r2 = tf.tile(r2, [1, shape[2] * k])
+    r3 = tf.tile(r3, [1, k])
+    r1 = tf.reshape(r1, [-1, 1])
+    r2 = tf.tile(tf.reshape(r2, [-1, 1]), [shape[0], 1])
+    r3 = tf.tile(tf.reshape(r3, [-1, 1]), [shape[0] * shape[1], 1])
+    indices = tf.concat([r1, r2, r3, tf.reshape(indices, [-1, 1])], 1)
+    return tf.reshape(gather_4d(params, indices), [-1, shape[1], shape[2], k])
+定义不同的模型
+In [4]:
+# 定义基类模型
+dtype = DTYPE
+class Model:
+    def __init__(self):
+        self.sess = None
+        self.X = None
+        self.y = None
+        self.layer_keeps = None
+        self.vars = None
+        self.keep_prob_train = None
+        self.keep_prob_test = None
+
+    # run model
+    def run(self, fetches, X=None, y=None, mode='train'):
+            # 通过feed_dict传入数据
+            feed_dict = {}
+            if type(self.X) is list:
+                for i in range(len(X)):
+                    feed_dict[self.X[i]] = X[i]
+            else:
+                feed_dict[self.X] = X
+            if y is not None:
+                feed_dict[self.y] = y
+            if self.layer_keeps is not None:
+                if mode == 'train':
+                    feed_dict[self.layer_keeps] = self.keep_prob_train
+                elif mode == 'test':
+                    feed_dict[self.layer_keeps] = self.keep_prob_test
+            #通过session.run去执行op
+            return self.sess.run(fetches, feed_dict)
+
+    # 模型参数持久化
+    def dump(self, model_path):
+        var_map = {}
+        for name, var in self.vars.iteritems():
+            var_map[name] = self.run(var)
+        pkl.dump(var_map, open(model_path, 'wb'))
+        print('model dumped at', model_path)
+1.LR逻辑回归
+输入输出:{X,y}
+映射函数f(x)：单层单节点的“DNN”, 宽而不深，sigmoid(wx+b)输出概率，需要大量的人工特征工程，非线性来源于特征处理
+损失函数：logloss/... + L1/L2/...
+优化方法：sgd/...
+评估：logloss/auc/...
+
+In [19]:
+class LR(Model):
+    def __init__(self, input_dim=None, output_dim=1, init_path=None, opt_algo='gd', learning_rate=1e-2, l2_weight=0,
+                 random_seed=None):
+        Model.__init__(self)
+        # 声明参数
+        init_vars = [('w', [input_dim, output_dim], 'xavier', dtype),
+                     ('b', [output_dim], 'zero', dtype)]
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            if random_seed is not None:
+                tf.set_random_seed(random_seed)
+            # 用稀疏的placeholder
+            self.X = tf.sparse_placeholder(dtype)
+            self.y = tf.placeholder(dtype)
+            # init参数
+            self.vars = init_var_map(init_vars, init_path)
+
+            w = self.vars['w']
+            b = self.vars['b']
+            # sigmoid(wx+b)
+            xw = tf.sparse_tensor_dense_matmul(self.X, w)
+            logits = tf.reshape(xw + b, [-1])
+            self.y_prob = tf.sigmoid(logits)
+
+            self.loss = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(labels=self.y, logits=logits)) + \
+                        l2_weight * tf.nn.l2_loss(xw)
+            self.optimizer = get_optimizer(opt_algo, learning_rate, self.loss)
+            # GPU设定
+            config = tf.ConfigProto()
+            config.gpu_options.allow_growth = True
+            self.sess = tf.Session(config=config)
+            # 初始化图里的参数
+            tf.global_variables_initializer().run(session=self.sess)
+In [ ]:
+import numpy as np
+from sklearn.metrics import roc_auc_score
+import progressbar
+train_file = './data/train.txt'
+test_file = './data/test.txt'
+
+input_dim = INPUT_DIM
+
+# 读取数据
+#train_data = read_data(train_file)
+#test_data = read_data(test_file)
+train_data = pkl.load(open('./data/train.pkl', 'rb'))
+#train_data = shuffle(train_data)
+test_data = pkl.load(open('./data/test.pkl', 'rb'))
+# pkl.dump(train_data, open('./data/train.pkl', 'wb'))
+# pkl.dump(test_data, open('./data/test.pkl', 'wb'))
+
+# 输出数据信息维度
+if train_data[1].ndim > 1:
+    print('label must be 1-dim')
+    exit(0)
+print('read finish')
+print('train data size:', train_data[0].shape)
+print('test data size:', test_data[0].shape)
+
+# 训练集与测试集
+train_size = train_data[0].shape[0]
+test_size = test_data[0].shape[0]
+num_feas = len(FIELD_SIZES)
+
+# 超参数设定
+min_round = 1
+num_round = 200
+early_stop_round = 5
+# train + val
+batch_size = 1024
+
+field_sizes = FIELD_SIZES
+field_offsets = FIELD_OFFSETS
+
+# 逻辑回归参数设定
+lr_params = {
+    'input_dim': input_dim,
+    'opt_algo': 'gd',
+    'learning_rate': 0.1,
+    'l2_weight': 0,
+    'random_seed': 0
+}
+print(lr_params)
+model = LR(**lr_params)
+print("training LR...")
+def train(model):
+    history_score = []
+    # 执行num_round轮
+    for i in range(num_round):
+        # 主要的2个op是优化器和损失
+        fetches = [model.optimizer, model.loss]
+        if batch_size > 0:
+            ls = []
+            # 进度条工具
+            bar = progressbar.ProgressBar()
+            print('[%d]\ttraining...' % i)
+            for j in bar(range(int(train_size / batch_size + 1))):
+                X_i, y_i = slice(train_data, j * batch_size, batch_size)
+                # 训练，run op
+                _, l = model.run(fetches, X_i, y_i)
+                ls.append(l)
+        elif batch_size == -1:
+            X_i, y_i = slice(train_data)
+            _, l = model.run(fetches, X_i, y_i)
+            ls = [l]
+        train_preds = []
+        print('[%d]\tevaluating...' % i)
+        bar = progressbar.ProgressBar()
+        for j in bar(range(int(train_size / 10000 + 1))):
+            X_i, _ = slice(train_data, j * 10000, 10000)
+            preds = model.run(model.y_prob, X_i, mode='test')
+            train_preds.extend(preds)
+        test_preds = []
+        bar = progressbar.ProgressBar()
+        for j in bar(range(int(test_size / 10000 + 1))):
+            X_i, _ = slice(test_data, j * 10000, 10000)
+            preds = model.run(model.y_prob, X_i, mode='test')
+            test_preds.extend(preds)
+        # 把预估的结果和真实结果拿出来计算auc
+        train_score = roc_auc_score(train_data[1], train_preds)
+        test_score = roc_auc_score(test_data[1], test_preds)
+        # 输出auc信息
+        print('[%d]\tloss (with l2 norm):%f\ttrain-auc: %f\teval-auc: %f' % (i, np.mean(ls), train_score, test_score))
+        history_score.append(test_score)
+        # early stopping
+        if i > min_round and i > early_stop_round:
+            if np.argmax(history_score) == i - early_stop_round and history_score[-1] - history_score[
+                        -1 * early_stop_round] < 1e-5:
+                print('early stop\nbest iteration:\n[%d]\teval-auc: %f' % (
+                    np.argmax(history_score), np.max(history_score)))
+                break
+
+train(model)
+read finish
+train data size: (1742104, 491713)
+test data size: (300928, 491713)
+{'l2_weight': 0, 'learning_rate': 0.1, 'random_seed': 0, 'input_dim': 491713, 'opt_algo': 'gd'}
+  2% (43 of 1702) |                         | Elapsed Time: 0:00:00 ETA: 0:00:07
+[0]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[0]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[0]	loss (with l2 norm):0.013310	train-auc: 0.571926	eval-auc: 0.680297
+[1]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[1]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[1]	loss (with l2 norm):0.006428	train-auc: 0.591210	eval-auc: 0.697057
+[2]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[2]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[2]	loss (with l2 norm):0.006289	train-auc: 0.607686	eval-auc: 0.709637
+[3]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[3]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[3]	loss (with l2 norm):0.006240	train-auc: 0.621519	eval-auc: 0.717216
+[4]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[4]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[4]	loss (with l2 norm):0.006211	train-auc: 0.633832	eval-auc: 0.723307
+[5]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[5]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[5]	loss (with l2 norm):0.006188	train-auc: 0.644035	eval-auc: 0.727950
+[6]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[6]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[6]	loss (with l2 norm):0.006170	train-auc: 0.652786	eval-auc: 0.731563
+[7]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[7]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[7]	loss (with l2 norm):0.006154	train-auc: 0.659413	eval-auc: 0.734468
+[8]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[8]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[8]	loss (with l2 norm):0.006141	train-auc: 0.664736	eval-auc: 0.736973
+[9]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[9]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[9]	loss (with l2 norm):0.006129	train-auc: 0.669460	eval-auc: 0.738954
+[10]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[10]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[10]	loss (with l2 norm):0.006118	train-auc: 0.673616	eval-auc: 0.740694
+[11]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[11]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[11]	loss (with l2 norm):0.006108	train-auc: 0.677262	eval-auc: 0.742230
+[12]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[12]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[12]	loss (with l2 norm):0.006100	train-auc: 0.680487	eval-auc: 0.743845
+[13]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[13]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[13]	loss (with l2 norm):0.006091	train-auc: 0.683437	eval-auc: 0.745453
+[14]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[14]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[14]	loss (with l2 norm):0.006084	train-auc: 0.686213	eval-auc: 0.747034
+[15]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[15]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[15]	loss (with l2 norm):0.006077	train-auc: 0.688810	eval-auc: 0.748585
+[16]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[16]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[16]	loss (with l2 norm):0.006070	train-auc: 0.691280	eval-auc: 0.750020
+[17]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[17]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[17]	loss (with l2 norm):0.006064	train-auc: 0.693641	eval-auc: 0.751441
+[18]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[18]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[18]	loss (with l2 norm):0.006058	train-auc: 0.695897	eval-auc: 0.752858
+[19]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[19]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[19]	loss (with l2 norm):0.006052	train-auc: 0.698024	eval-auc: 0.754320
+[20]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[20]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[20]	loss (with l2 norm):0.006047	train-auc: 0.700048	eval-auc: 0.755676
+[21]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[21]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[21]	loss (with l2 norm):0.006042	train-auc: 0.701964	eval-auc: 0.756917
+[22]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:03 Time: 0:00:03
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[22]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  1% (22 of 1702) |                        | Elapsed Time: 0:00:00 ETA:  0:00:00
+[22]	loss (with l2 norm):0.006037	train-auc: 0.703786	eval-auc: 0.758051
+[23]	training...
+ 43% (745 of 1702) |##########              | Elapsed Time: 0:00:03 ETA: 0:00:04
+2.FM
+FM可以视作有二次交叉的LR，为了控制参数量和充分学习，提出了user vector和item vector的概念 
+
+In [5]:
+class FM(Model):
+    def __init__(self, input_dim=None, output_dim=1, factor_order=10, init_path=None, opt_algo='gd', learning_rate=1e-2,
+                 l2_w=0, l2_v=0, random_seed=None):
+        Model.__init__(self)
+        # 一次、二次交叉、偏置项
+        init_vars = [('w', [input_dim, output_dim], 'xavier', dtype),
+                     ('v', [input_dim, factor_order], 'xavier', dtype),
+                     ('b', [output_dim], 'zero', dtype)]
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            if random_seed is not None:
+                tf.set_random_seed(random_seed)
+            self.X = tf.sparse_placeholder(dtype)
+            self.y = tf.placeholder(dtype)
+            self.vars = init_var_map(init_vars, init_path)
+
+            w = self.vars['w']
+            v = self.vars['v']
+            b = self.vars['b']
+            
+            # [(x1+x2+x3)^2 - (x1^2+x2^2+x3^2)]/2
+            # 先计算所有的交叉项，再减去平方项(自己和自己相乘)
+            X_square = tf.SparseTensor(self.X.indices, tf.square(self.X.values), tf.to_int64(tf.shape(self.X)))
+            xv = tf.square(tf.sparse_tensor_dense_matmul(self.X, v))
+            p = 0.5 * tf.reshape(
+                tf.reduce_sum(xv - tf.sparse_tensor_dense_matmul(X_square, tf.square(v)), 1),
+                [-1, output_dim])
+            xw = tf.sparse_tensor_dense_matmul(self.X, w)
+            logits = tf.reshape(xw + b + p, [-1])
+            self.y_prob = tf.sigmoid(logits)
+
+            self.loss = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=self.y)) + \
+                        l2_w * tf.nn.l2_loss(xw) + \
+                        l2_v * tf.nn.l2_loss(xv)
+            self.optimizer = get_optimizer(opt_algo, learning_rate, self.loss)
+
+            #GPU设定
+            config = tf.ConfigProto()
+            config.gpu_options.allow_growth = True
+            self.sess = tf.Session(config=config)
+            # 图中所有variable初始化
+            tf.global_variables_initializer().run(session=self.sess)
+In [24]:
+import numpy as np
+from sklearn.metrics import roc_auc_score
+import progressbar
+train_file = './data/train.txt'
+test_file = './data/test.txt'
+
+input_dim = INPUT_DIM
+train_data = pkl.load(open('./data/train.pkl', 'rb'))
+train_data = shuffle(train_data)
+test_data = pkl.load(open('./data/test.pkl', 'rb'))
+
+if train_data[1].ndim > 1:
+    print('label must be 1-dim')
+    exit(0)
+print('read finish')
+print('train data size:', train_data[0].shape)
+print('test data size:', test_data[0].shape)
+
+# 训练集与测试集
+train_size = train_data[0].shape[0]
+test_size = test_data[0].shape[0]
+num_feas = len(FIELD_SIZES)
+
+# 超参数设定
+min_round = 1
+num_round = 200
+early_stop_round = 5
+batch_size = 1024
+
+field_sizes = FIELD_SIZES
+field_offsets = FIELD_OFFSETS
+
+# FM参数设定
+fm_params = {
+    'input_dim': input_dim,
+    'factor_order': 10,
+    'opt_algo': 'gd',
+    'learning_rate': 0.1,
+    'l2_w': 0,
+    'l2_v': 0,
+}
+print(fm_params)
+model = FM(**fm_params)
+print("training FM...")
+
+def train(model):
+    history_score = []
+    for i in range(num_round):
+        # 同样是优化器和损失两个op
+        fetches = [model.optimizer, model.loss]
+        if batch_size > 0:
+            ls = []
+            bar = progressbar.ProgressBar()
+            print('[%d]\ttraining...' % i)
+            for j in bar(range(int(train_size / batch_size + 1))):
+                X_i, y_i = slice(train_data, j * batch_size, batch_size)
+                # 训练
+                _, l = model.run(fetches, X_i, y_i)
+                ls.append(l)
+        elif batch_size == -1:
+            X_i, y_i = slice(train_data)
+            _, l = model.run(fetches, X_i, y_i)
+            ls = [l]
+        train_preds = []
+        print('[%d]\tevaluating...' % i)
+        bar = progressbar.ProgressBar()
+        for j in bar(range(int(train_size / 10000 + 1))):
+            X_i, _ = slice(train_data, j * 10000, 10000)
+            preds = model.run(model.y_prob, X_i, mode='test')
+            train_preds.extend(preds)
+        test_preds = []
+        bar = progressbar.ProgressBar()
+        for j in bar(range(int(test_size / 10000 + 1))):
+            X_i, _ = slice(test_data, j * 10000, 10000)
+            preds = model.run(model.y_prob, X_i, mode='test')
+            test_preds.extend(preds)
+        train_score = roc_auc_score(train_data[1], train_preds)
+        test_score = roc_auc_score(test_data[1], test_preds)
+        print('[%d]\tloss (with l2 norm):%f\ttrain-auc: %f\teval-auc: %f' % (i, np.mean(ls), train_score, test_score))
+        history_score.append(test_score)
+        if i > min_round and i > early_stop_round:
+            if np.argmax(history_score) == i - early_stop_round and history_score[-1] - history_score[
+                        -1 * early_stop_round] < 1e-5:
+                print('early stop\nbest iteration:\n[%d]\teval-auc: %f' % (
+                    np.argmax(history_score), np.max(history_score)))
+                break
+
+train(model)
+read finish
+train data size: (1742104, 491713)
+test data size: (300928, 491713)
+{'l2_w': 0, 'l2_v': 0, 'factor_order': 10, 'learning_rate': 0.1, 'input_dim': 491713, 'opt_algo': 'gd'}
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:37
+[0]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:19 Time: 0:00:19
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[0]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[0]	loss (with l2 norm):0.013312	train-auc: 0.572517	eval-auc: 0.680232
+[1]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:19 Time: 0:00:19
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[1]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[1]	loss (with l2 norm):0.006431	train-auc: 0.591746	eval-auc: 0.696854
+[2]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[2]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[2]	loss (with l2 norm):0.006290	train-auc: 0.608052	eval-auc: 0.709254
+[3]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[3]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:35
+[3]	loss (with l2 norm):0.006240	train-auc: 0.621882	eval-auc: 0.716983
+[4]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[4]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:35
+[4]	loss (with l2 norm):0.006210	train-auc: 0.634064	eval-auc: 0.723087
+[5]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[5]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[5]	loss (with l2 norm):0.006188	train-auc: 0.644236	eval-auc: 0.727615
+[6]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[6]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[6]	loss (with l2 norm):0.006169	train-auc: 0.652855	eval-auc: 0.731220
+[7]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[7]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[7]	loss (with l2 norm):0.006154	train-auc: 0.659409	eval-auc: 0.734181
+[8]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[8]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[8]	loss (with l2 norm):0.006140	train-auc: 0.664734	eval-auc: 0.736699
+[9]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[9]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[9]	loss (with l2 norm):0.006128	train-auc: 0.669438	eval-auc: 0.738620
+[10]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[10]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[10]	loss (with l2 norm):0.006118	train-auc: 0.673561	eval-auc: 0.740343
+[11]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[11]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[11]	loss (with l2 norm):0.006108	train-auc: 0.677189	eval-auc: 0.741901
+[12]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[12]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[12]	loss (with l2 norm):0.006099	train-auc: 0.680385	eval-auc: 0.743532
+[13]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[13]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[13]	loss (with l2 norm):0.006091	train-auc: 0.683334	eval-auc: 0.745170
+[14]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[14]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[14]	loss (with l2 norm):0.006083	train-auc: 0.686123	eval-auc: 0.746798
+[15]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[15]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[15]	loss (with l2 norm):0.006076	train-auc: 0.688741	eval-auc: 0.748355
+[16]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[16]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[16]	loss (with l2 norm):0.006070	train-auc: 0.691228	eval-auc: 0.749849
+[17]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[17]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:35
+[17]	loss (with l2 norm):0.006063	train-auc: 0.693605	eval-auc: 0.751326
+[18]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  1% (3 of 175) |                          | Elapsed Time: 0:00:00 ETA:  0:00:00
+[18]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[18]	loss (with l2 norm):0.006057	train-auc: 0.695872	eval-auc: 0.752829
+[19]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[19]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[19]	loss (with l2 norm):0.006051	train-auc: 0.698019	eval-auc: 0.754315
+[20]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[20]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[20]	loss (with l2 norm):0.006046	train-auc: 0.700072	eval-auc: 0.755707
+[21]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[21]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:35
+[21]	loss (with l2 norm):0.006041	train-auc: 0.702021	eval-auc: 0.756975
+[22]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[22]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[22]	loss (with l2 norm):0.006036	train-auc: 0.703862	eval-auc: 0.758121
+[23]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[23]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[23]	loss (with l2 norm):0.006031	train-auc: 0.705590	eval-auc: 0.759207
+[24]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[24]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:35
+[24]	loss (with l2 norm):0.006026	train-auc: 0.707201	eval-auc: 0.760243
+[25]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[25]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[25]	loss (with l2 norm):0.006022	train-auc: 0.708724	eval-auc: 0.761232
+[26]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[26]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:35
+[26]	loss (with l2 norm):0.006017	train-auc: 0.710174	eval-auc: 0.762215
+[27]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[27]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[27]	loss (with l2 norm):0.006013	train-auc: 0.711557	eval-auc: 0.763158
+[28]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[28]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:35
+[28]	loss (with l2 norm):0.006009	train-auc: 0.712884	eval-auc: 0.764041
+[29]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[29]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[29]	loss (with l2 norm):0.006005	train-auc: 0.714163	eval-auc: 0.764895
+[30]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[30]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[30]	loss (with l2 norm):0.006001	train-auc: 0.715414	eval-auc: 0.765709
+[31]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[31]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:35
+[31]	loss (with l2 norm):0.005997	train-auc: 0.716624	eval-auc: 0.766517
+[32]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[32]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[32]	loss (with l2 norm):0.005993	train-auc: 0.717808	eval-auc: 0.767284
+[33]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[33]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[33]	loss (with l2 norm):0.005989	train-auc: 0.718957	eval-auc: 0.768054
+[34]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[34]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[34]	loss (with l2 norm):0.005986	train-auc: 0.720085	eval-auc: 0.768790
+[35]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[35]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[35]	loss (with l2 norm):0.005982	train-auc: 0.721192	eval-auc: 0.769500
+[36]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[36]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[36]	loss (with l2 norm):0.005979	train-auc: 0.722283	eval-auc: 0.770220
+[37]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[37]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:36
+[37]	loss (with l2 norm):0.005975	train-auc: 0.723355	eval-auc: 0.770910
+[38]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[38]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[38]	loss (with l2 norm):0.005972	train-auc: 0.724409	eval-auc: 0.771589
+[39]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[39]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[39]	loss (with l2 norm):0.005968	train-auc: 0.725454	eval-auc: 0.772260
+[40]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[40]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:28
+[40]	loss (with l2 norm):0.005965	train-auc: 0.726482	eval-auc: 0.772911
+[41]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[41]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[41]	loss (with l2 norm):0.005962	train-auc: 0.727501	eval-auc: 0.773554
+[42]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[42]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[42]	loss (with l2 norm):0.005959	train-auc: 0.728506	eval-auc: 0.774188
+[43]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[43]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[43]	loss (with l2 norm):0.005955	train-auc: 0.729498	eval-auc: 0.774825
+[44]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[44]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[44]	loss (with l2 norm):0.005952	train-auc: 0.730480	eval-auc: 0.775452
+[45]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[45]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:35
+[45]	loss (with l2 norm):0.005949	train-auc: 0.731445	eval-auc: 0.776082
+[46]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[46]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[46]	loss (with l2 norm):0.005946	train-auc: 0.732409	eval-auc: 0.776694
+[47]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[47]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[47]	loss (with l2 norm):0.005943	train-auc: 0.733362	eval-auc: 0.777302
+[48]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[48]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[48]	loss (with l2 norm):0.005940	train-auc: 0.734307	eval-auc: 0.777906
+[49]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[49]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[49]	loss (with l2 norm):0.005937	train-auc: 0.735243	eval-auc: 0.778527
+[50]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[50]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[50]	loss (with l2 norm):0.005934	train-auc: 0.736174	eval-auc: 0.779165
+[51]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[51]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[51]	loss (with l2 norm):0.005931	train-auc: 0.737104	eval-auc: 0.779798
+[52]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[52]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[52]	loss (with l2 norm):0.005928	train-auc: 0.738029	eval-auc: 0.780431
+[53]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[53]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[53]	loss (with l2 norm):0.005925	train-auc: 0.738954	eval-auc: 0.781075
+[54]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[54]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[54]	loss (with l2 norm):0.005922	train-auc: 0.739882	eval-auc: 0.781734
+[55]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[55]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[55]	loss (with l2 norm):0.005919	train-auc: 0.740809	eval-auc: 0.782392
+[56]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[56]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[56]	loss (with l2 norm):0.005916	train-auc: 0.741742	eval-auc: 0.783065
+[57]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[57]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[57]	loss (with l2 norm):0.005913	train-auc: 0.742674	eval-auc: 0.783734
+[58]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[58]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[58]	loss (with l2 norm):0.005910	train-auc: 0.743603	eval-auc: 0.784390
+[59]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[59]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[59]	loss (with l2 norm):0.005908	train-auc: 0.744541	eval-auc: 0.785050
+[60]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[60]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[60]	loss (with l2 norm):0.005905	train-auc: 0.745479	eval-auc: 0.785693
+[61]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[61]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[61]	loss (with l2 norm):0.005902	train-auc: 0.746413	eval-auc: 0.786332
+[62]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[62]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[62]	loss (with l2 norm):0.005899	train-auc: 0.747347	eval-auc: 0.786966
+[63]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[63]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[63]	loss (with l2 norm):0.005896	train-auc: 0.748281	eval-auc: 0.787589
+[64]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[64]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[64]	loss (with l2 norm):0.005894	train-auc: 0.749219	eval-auc: 0.788193
+[65]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[65]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[65]	loss (with l2 norm):0.005891	train-auc: 0.750158	eval-auc: 0.788766
+[66]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[66]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[66]	loss (with l2 norm):0.005888	train-auc: 0.751093	eval-auc: 0.789330
+[67]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[67]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[67]	loss (with l2 norm):0.005885	train-auc: 0.752032	eval-auc: 0.789876
+[68]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[68]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[68]	loss (with l2 norm):0.005883	train-auc: 0.752964	eval-auc: 0.790419
+[69]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[69]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[69]	loss (with l2 norm):0.005880	train-auc: 0.753902	eval-auc: 0.790936
+[70]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[70]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[70]	loss (with l2 norm):0.005877	train-auc: 0.754838	eval-auc: 0.791411
+[71]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[71]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[71]	loss (with l2 norm):0.005875	train-auc: 0.755772	eval-auc: 0.791876
+[72]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[72]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[72]	loss (with l2 norm):0.005872	train-auc: 0.756704	eval-auc: 0.792331
+[73]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[73]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[73]	loss (with l2 norm):0.005870	train-auc: 0.757638	eval-auc: 0.792788
+[74]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[74]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[74]	loss (with l2 norm):0.005867	train-auc: 0.758559	eval-auc: 0.793237
+[75]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[75]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[75]	loss (with l2 norm):0.005864	train-auc: 0.759475	eval-auc: 0.793674
+[76]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[76]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[76]	loss (with l2 norm):0.005862	train-auc: 0.760380	eval-auc: 0.794104
+[77]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[77]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[77]	loss (with l2 norm):0.005859	train-auc: 0.761283	eval-auc: 0.794523
+[78]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[78]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[78]	loss (with l2 norm):0.005857	train-auc: 0.762179	eval-auc: 0.794943
+[79]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[79]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:35
+[79]	loss (with l2 norm):0.005854	train-auc: 0.763071	eval-auc: 0.795352
+[80]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[80]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[80]	loss (with l2 norm):0.005852	train-auc: 0.763952	eval-auc: 0.795765
+[81]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[81]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[81]	loss (with l2 norm):0.005849	train-auc: 0.764824	eval-auc: 0.796156
+[82]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[82]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[82]	loss (with l2 norm):0.005847	train-auc: 0.765688	eval-auc: 0.796567
+[83]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[83]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[83]	loss (with l2 norm):0.005845	train-auc: 0.766541	eval-auc: 0.796970
+[84]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[84]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[84]	loss (with l2 norm):0.005842	train-auc: 0.767385	eval-auc: 0.797374
+[85]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[85]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[85]	loss (with l2 norm):0.005840	train-auc: 0.768219	eval-auc: 0.797772
+[86]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[86]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[86]	loss (with l2 norm):0.005837	train-auc: 0.769043	eval-auc: 0.798171
+[87]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[87]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[87]	loss (with l2 norm):0.005835	train-auc: 0.769855	eval-auc: 0.798564
+[88]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[88]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[88]	loss (with l2 norm):0.005833	train-auc: 0.770657	eval-auc: 0.798941
+[89]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[89]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[89]	loss (with l2 norm):0.005830	train-auc: 0.771454	eval-auc: 0.799306
+[90]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[90]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[90]	loss (with l2 norm):0.005828	train-auc: 0.772240	eval-auc: 0.799669
+[91]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[91]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[91]	loss (with l2 norm):0.005826	train-auc: 0.773015	eval-auc: 0.800018
+[92]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[92]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:01 Time: 0:00:01
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[92]	loss (with l2 norm):0.005823	train-auc: 0.773777	eval-auc: 0.800352
+[93]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[93]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[93]	loss (with l2 norm):0.005821	train-auc: 0.774526	eval-auc: 0.800686
+[94]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[94]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[94]	loss (with l2 norm):0.005819	train-auc: 0.775270	eval-auc: 0.801004
+[95]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[95]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[95]	loss (with l2 norm):0.005817	train-auc: 0.776005	eval-auc: 0.801311
+[96]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[96]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[96]	loss (with l2 norm):0.005814	train-auc: 0.776721	eval-auc: 0.801615
+[97]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[97]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[97]	loss (with l2 norm):0.005812	train-auc: 0.777430	eval-auc: 0.801900
+[98]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[98]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[98]	loss (with l2 norm):0.005810	train-auc: 0.778128	eval-auc: 0.802164
+[99]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[99]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[99]	loss (with l2 norm):0.005808	train-auc: 0.778816	eval-auc: 0.802430
+[100]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[100]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[100]	loss (with l2 norm):0.005806	train-auc: 0.779492	eval-auc: 0.802681
+[101]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[101]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[101]	loss (with l2 norm):0.005803	train-auc: 0.780156	eval-auc: 0.802917
+[102]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[102]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[102]	loss (with l2 norm):0.005801	train-auc: 0.780813	eval-auc: 0.803150
+[103]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[103]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[103]	loss (with l2 norm):0.005799	train-auc: 0.781461	eval-auc: 0.803374
+[104]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[104]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:35
+[104]	loss (with l2 norm):0.005797	train-auc: 0.782095	eval-auc: 0.803589
+[105]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  1% (3 of 175) |                          | Elapsed Time: 0:00:00 ETA:  0:00:00
+[105]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[105]	loss (with l2 norm):0.005795	train-auc: 0.782722	eval-auc: 0.803793
+[106]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[106]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:35
+[106]	loss (with l2 norm):0.005793	train-auc: 0.783339	eval-auc: 0.803982
+[107]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[107]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[107]	loss (with l2 norm):0.005790	train-auc: 0.783942	eval-auc: 0.804173
+[108]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[108]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[108]	loss (with l2 norm):0.005788	train-auc: 0.784537	eval-auc: 0.804346
+[109]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[109]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[109]	loss (with l2 norm):0.005786	train-auc: 0.785123	eval-auc: 0.804512
+[110]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[110]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[110]	loss (with l2 norm):0.005784	train-auc: 0.785701	eval-auc: 0.804663
+[111]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[111]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[111]	loss (with l2 norm):0.005782	train-auc: 0.786269	eval-auc: 0.804820
+[112]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[112]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[112]	loss (with l2 norm):0.005780	train-auc: 0.786826	eval-auc: 0.804961
+[113]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[113]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[113]	loss (with l2 norm):0.005778	train-auc: 0.787374	eval-auc: 0.805094
+[114]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[114]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[114]	loss (with l2 norm):0.005775	train-auc: 0.787915	eval-auc: 0.805220
+[115]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[115]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[115]	loss (with l2 norm):0.005773	train-auc: 0.788450	eval-auc: 0.805341
+[116]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[116]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[116]	loss (with l2 norm):0.005771	train-auc: 0.788977	eval-auc: 0.805453
+[117]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[117]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[117]	loss (with l2 norm):0.005769	train-auc: 0.789497	eval-auc: 0.805562
+[118]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[118]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[118]	loss (with l2 norm):0.005767	train-auc: 0.790007	eval-auc: 0.805666
+[119]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[119]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[119]	loss (with l2 norm):0.005765	train-auc: 0.790509	eval-auc: 0.805770
+[120]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[120]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[120]	loss (with l2 norm):0.005763	train-auc: 0.791010	eval-auc: 0.805870
+[121]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[121]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[121]	loss (with l2 norm):0.005761	train-auc: 0.791504	eval-auc: 0.805965
+[122]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[122]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[122]	loss (with l2 norm):0.005759	train-auc: 0.791990	eval-auc: 0.806058
+[123]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[123]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[123]	loss (with l2 norm):0.005757	train-auc: 0.792471	eval-auc: 0.806146
+[124]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[124]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[124]	loss (with l2 norm):0.005755	train-auc: 0.792947	eval-auc: 0.806231
+[125]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[125]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[125]	loss (with l2 norm):0.005753	train-auc: 0.793419	eval-auc: 0.806313
+[126]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[126]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[126]	loss (with l2 norm):0.005750	train-auc: 0.793884	eval-auc: 0.806395
+[127]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[127]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[127]	loss (with l2 norm):0.005748	train-auc: 0.794346	eval-auc: 0.806473
+[128]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[128]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[128]	loss (with l2 norm):0.005746	train-auc: 0.794803	eval-auc: 0.806557
+[129]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[129]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[129]	loss (with l2 norm):0.005744	train-auc: 0.795253	eval-auc: 0.806634
+[130]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[130]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[130]	loss (with l2 norm):0.005742	train-auc: 0.795701	eval-auc: 0.806705
+[131]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[131]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[131]	loss (with l2 norm):0.005740	train-auc: 0.796146	eval-auc: 0.806780
+[132]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[132]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[132]	loss (with l2 norm):0.005738	train-auc: 0.796586	eval-auc: 0.806855
+[133]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[133]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[133]	loss (with l2 norm):0.005736	train-auc: 0.797025	eval-auc: 0.806926
+[134]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[134]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[134]	loss (with l2 norm):0.005734	train-auc: 0.797458	eval-auc: 0.806991
+[135]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[135]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[135]	loss (with l2 norm):0.005732	train-auc: 0.797890	eval-auc: 0.807056
+[136]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[136]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[136]	loss (with l2 norm):0.005730	train-auc: 0.798321	eval-auc: 0.807115
+[137]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[137]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[137]	loss (with l2 norm):0.005728	train-auc: 0.798748	eval-auc: 0.807189
+[138]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[138]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[138]	loss (with l2 norm):0.005726	train-auc: 0.799173	eval-auc: 0.807235
+[139]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[139]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:35
+[139]	loss (with l2 norm):0.005724	train-auc: 0.799597	eval-auc: 0.807287
+[140]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[140]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[140]	loss (with l2 norm):0.005722	train-auc: 0.800019	eval-auc: 0.807348
+[141]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[141]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[141]	loss (with l2 norm):0.005720	train-auc: 0.800437	eval-auc: 0.807413
+[142]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[142]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[142]	loss (with l2 norm):0.005718	train-auc: 0.800857	eval-auc: 0.807476
+[143]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[143]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[143]	loss (with l2 norm):0.005716	train-auc: 0.801272	eval-auc: 0.807530
+[144]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[144]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[144]	loss (with l2 norm):0.005714	train-auc: 0.801684	eval-auc: 0.807590
+[145]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[145]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[145]	loss (with l2 norm):0.005712	train-auc: 0.802093	eval-auc: 0.807659
+[146]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[146]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[146]	loss (with l2 norm):0.005710	train-auc: 0.802502	eval-auc: 0.807727
+[147]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[147]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[147]	loss (with l2 norm):0.005708	train-auc: 0.802911	eval-auc: 0.807797
+[148]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[148]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[148]	loss (with l2 norm):0.005706	train-auc: 0.803312	eval-auc: 0.807856
+[149]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[149]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[149]	loss (with l2 norm):0.005704	train-auc: 0.803717	eval-auc: 0.807932
+[150]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[150]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[150]	loss (with l2 norm):0.005702	train-auc: 0.804122	eval-auc: 0.807991
+[151]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[151]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[151]	loss (with l2 norm):0.005700	train-auc: 0.804527	eval-auc: 0.808073
+[152]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[152]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[152]	loss (with l2 norm):0.005698	train-auc: 0.804931	eval-auc: 0.808138
+[153]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[153]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[153]	loss (with l2 norm):0.005696	train-auc: 0.805334	eval-auc: 0.808200
+[154]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[154]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[154]	loss (with l2 norm):0.005694	train-auc: 0.805735	eval-auc: 0.808271
+[155]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[155]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[155]	loss (with l2 norm):0.005692	train-auc: 0.806135	eval-auc: 0.808333
+[156]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[156]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[156]	loss (with l2 norm):0.005690	train-auc: 0.806537	eval-auc: 0.808393
+[157]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[157]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[157]	loss (with l2 norm):0.005688	train-auc: 0.806938	eval-auc: 0.808459
+[158]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[158]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[158]	loss (with l2 norm):0.005686	train-auc: 0.807335	eval-auc: 0.808528
+[159]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[159]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[159]	loss (with l2 norm):0.005684	train-auc: 0.807732	eval-auc: 0.808602
+[160]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[160]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[160]	loss (with l2 norm):0.005682	train-auc: 0.808127	eval-auc: 0.808669
+[161]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[161]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[161]	loss (with l2 norm):0.005680	train-auc: 0.808524	eval-auc: 0.808733
+[162]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[162]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[162]	loss (with l2 norm):0.005678	train-auc: 0.808921	eval-auc: 0.808788
+[163]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[163]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[163]	loss (with l2 norm):0.005676	train-auc: 0.809316	eval-auc: 0.808847
+[164]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[164]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[164]	loss (with l2 norm):0.005674	train-auc: 0.809709	eval-auc: 0.808920
+[165]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[165]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[165]	loss (with l2 norm):0.005671	train-auc: 0.810099	eval-auc: 0.808986
+[166]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[166]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:31
+[166]	loss (with l2 norm):0.005669	train-auc: 0.810490	eval-auc: 0.809052
+[167]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[167]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[167]	loss (with l2 norm):0.005667	train-auc: 0.810880	eval-auc: 0.809114
+[168]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[168]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[168]	loss (with l2 norm):0.005665	train-auc: 0.811266	eval-auc: 0.809179
+[169]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[169]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[169]	loss (with l2 norm):0.005663	train-auc: 0.811655	eval-auc: 0.809238
+[170]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[170]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[170]	loss (with l2 norm):0.005661	train-auc: 0.812043	eval-auc: 0.809290
+[171]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[171]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[171]	loss (with l2 norm):0.005659	train-auc: 0.812431	eval-auc: 0.809354
+[172]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[172]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[172]	loss (with l2 norm):0.005657	train-auc: 0.812818	eval-auc: 0.809402
+[173]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[173]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[173]	loss (with l2 norm):0.005655	train-auc: 0.813202	eval-auc: 0.809437
+[174]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[174]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[174]	loss (with l2 norm):0.005653	train-auc: 0.813590	eval-auc: 0.809490
+[175]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[175]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:33
+[175]	loss (with l2 norm):0.005651	train-auc: 0.813975	eval-auc: 0.809542
+[176]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[176]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[176]	loss (with l2 norm):0.005649	train-auc: 0.814360	eval-auc: 0.809587
+[177]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[177]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[177]	loss (with l2 norm):0.005647	train-auc: 0.814744	eval-auc: 0.809632
+[178]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[178]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[178]	loss (with l2 norm):0.005645	train-auc: 0.815130	eval-auc: 0.809678
+[179]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[179]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[179]	loss (with l2 norm):0.005643	train-auc: 0.815516	eval-auc: 0.809731
+[180]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[180]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[180]	loss (with l2 norm):0.005641	train-auc: 0.815900	eval-auc: 0.809772
+[181]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[181]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[181]	loss (with l2 norm):0.005639	train-auc: 0.816281	eval-auc: 0.809817
+[182]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[182]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[182]	loss (with l2 norm):0.005637	train-auc: 0.816659	eval-auc: 0.809850
+[183]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[183]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[183]	loss (with l2 norm):0.005635	train-auc: 0.817039	eval-auc: 0.809890
+[184]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[184]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[184]	loss (with l2 norm):0.005633	train-auc: 0.817418	eval-auc: 0.809921
+[185]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[185]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[185]	loss (with l2 norm):0.005631	train-auc: 0.817795	eval-auc: 0.809954
+[186]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[186]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[186]	loss (with l2 norm):0.005629	train-auc: 0.818174	eval-auc: 0.809990
+[187]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[187]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[187]	loss (with l2 norm):0.005627	train-auc: 0.818549	eval-auc: 0.810017
+[188]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[188]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[188]	loss (with l2 norm):0.005625	train-auc: 0.818925	eval-auc: 0.810045
+[189]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[189]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[189]	loss (with l2 norm):0.005623	train-auc: 0.819300	eval-auc: 0.810069
+[190]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[190]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[190]	loss (with l2 norm):0.005620	train-auc: 0.819676	eval-auc: 0.810096
+[191]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[191]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[191]	loss (with l2 norm):0.005618	train-auc: 0.820051	eval-auc: 0.810119
+[192]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[192]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:34
+[192]	loss (with l2 norm):0.005616	train-auc: 0.820427	eval-auc: 0.810137
+[193]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[193]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[193]	loss (with l2 norm):0.005614	train-auc: 0.820800	eval-auc: 0.810159
+[194]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[194]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[194]	loss (with l2 norm):0.005612	train-auc: 0.821171	eval-auc: 0.810176
+[195]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:18 Time: 0:00:18
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[195]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[195]	loss (with l2 norm):0.005610	train-auc: 0.821545	eval-auc: 0.810189
+[196]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[196]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:29
+[196]	loss (with l2 norm):0.005608	train-auc: 0.821916	eval-auc: 0.810204
+[197]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[197]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[197]	loss (with l2 norm):0.005606	train-auc: 0.822285	eval-auc: 0.810217
+[198]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:04
+[198]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (6 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:30
+[198]	loss (with l2 norm):0.005604	train-auc: 0.822655	eval-auc: 0.810227
+[199]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:17 Time: 0:00:17
+  2% (5 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[199]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:02 Time: 0:00:02
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+[199]	loss (with l2 norm):0.005602	train-auc: 0.823025	eval-auc: 0.810234
+FNN
+FNN的考虑是模型的capacity可以进一步提升，以对更复杂的场景建模。
+FNN可以视作FM + MLP = LR + MF + MLP 
+
+In [25]:
+class FNN(Model):
+    def __init__(self, field_sizes=None, embed_size=10, layer_sizes=None, layer_acts=None, drop_out=None,
+                 embed_l2=None, layer_l2=None, init_path=None, opt_algo='gd', learning_rate=1e-2, random_seed=None):
+        Model.__init__(self)
+        init_vars = []
+        num_inputs = len(field_sizes)
+        for i in range(num_inputs):
+            init_vars.append(('embed_%d' % i, [field_sizes[i], embed_size], 'xavier', dtype))
+        node_in = num_inputs * embed_size
+        for i in range(len(layer_sizes)):
+            init_vars.append(('w%d' % i, [node_in, layer_sizes[i]], 'xavier', dtype))
+            init_vars.append(('b%d' % i, [layer_sizes[i]], 'zero', dtype))
+            node_in = layer_sizes[i]
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            if random_seed is not None:
+                tf.set_random_seed(random_seed)
+            self.X = [tf.sparse_placeholder(dtype) for i in range(num_inputs)]
+            self.y = tf.placeholder(dtype)
+            self.keep_prob_train = 1 - np.array(drop_out)
+            self.keep_prob_test = np.ones_like(drop_out)
+            self.layer_keeps = tf.placeholder(dtype)
+            self.vars = init_var_map(init_vars, init_path)
+            w0 = [self.vars['embed_%d' % i] for i in range(num_inputs)]
+            xw = tf.concat([tf.sparse_tensor_dense_matmul(self.X[i], w0[i]) for i in range(num_inputs)], 1)
+            l = xw
+
+            for i in range(len(layer_sizes)):
+                wi = self.vars['w%d' % i]
+                bi = self.vars['b%d' % i]
+                print(l.shape, wi.shape, bi.shape)
+                l = tf.nn.dropout(
+                    activate(
+                        tf.matmul(l, wi) + bi,
+                        layer_acts[i]),
+                    self.layer_keeps[i])
+
+            l = tf.squeeze(l)
+            self.y_prob = tf.sigmoid(l)
+
+            self.loss = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(logits=l, labels=self.y))
+            if layer_l2 is not None:
+                self.loss += embed_l2 * tf.nn.l2_loss(xw)
+                for i in range(len(layer_sizes)):
+                    wi = self.vars['w%d' % i]
+                    self.loss += layer_l2[i] * tf.nn.l2_loss(wi)
+            self.optimizer = get_optimizer(opt_algo, learning_rate, self.loss)
+
+            config = tf.ConfigProto()
+            config.gpu_options.allow_growth = True
+            self.sess = tf.Session(config=config)
+            tf.global_variables_initializer().run(session=self.sess)
+In [ ]:
+import numpy as np
+from sklearn.metrics import roc_auc_score
+import progressbar
+train_file = './data/train.txt'
+test_file = './data/test.txt'
+
+input_dim = INPUT_DIM
+train_data = pkl.load(open('./data/train.pkl', 'rb'))
+train_data = shuffle(train_data)
+test_data = pkl.load(open('./data/test.pkl', 'rb'))
+
+if train_data[1].ndim > 1:
+    print('label must be 1-dim')
+    exit(0)
+print('read finish')
+print('train data size:', train_data[0].shape)
+print('test data size:', test_data[0].shape)
+
+train_size = train_data[0].shape[0]
+test_size = test_data[0].shape[0]
+num_feas = len(FIELD_SIZES)
+
+min_round = 1
+num_round = 200
+early_stop_round = 5
+batch_size = 1024
+
+field_sizes = FIELD_SIZES
+field_offsets = FIELD_OFFSETS
+
+train_data = split_data(train_data)
+test_data = split_data(test_data)
+tmp = []
+for x in field_sizes:
+    if x > 0:
+        tmp.append(x)
+field_sizes = tmp
+print('remove empty fields', field_sizes)
+    
+fnn_params = {
+    'field_sizes': field_sizes,
+    'embed_size': 10,
+    'layer_sizes': [500, 1],
+    'layer_acts': ['relu', None],
+    'drop_out': [0, 0],
+    'opt_algo': 'gd',
+    'learning_rate': 0.1,
+    'embed_l2': 0,
+    'layer_l2': [0, 0],
+    'random_seed': 0
+}
+print(fnn_params)
+model = FNN(**fnn_params)
+
+def train(model):
+    history_score = []
+    for i in range(num_round):
+        fetches = [model.optimizer, model.loss]
+        if batch_size > 0:
+            ls = []
+            bar = progressbar.ProgressBar()
+            print('[%d]\ttraining...' % i)
+            for j in bar(range(int(train_size / batch_size + 1))):
+                X_i, y_i = slice(train_data, j * batch_size, batch_size)
+                _, l = model.run(fetches, X_i, y_i)
+                ls.append(l)
+        elif batch_size == -1:
+            X_i, y_i = slice(train_data)
+            _, l = model.run(fetches, X_i, y_i)
+            ls = [l]
+        train_preds = []
+        print('[%d]\tevaluating...' % i)
+        bar = progressbar.ProgressBar()
+        for j in bar(range(int(train_size / 10000 + 1))):
+            X_i, _ = slice(train_data, j * 10000, 10000)
+            preds = model.run(model.y_prob, X_i, mode='test')
+            train_preds.extend(preds)
+        test_preds = []
+        bar = progressbar.ProgressBar()
+        for j in bar(range(int(test_size / 10000 + 1))):
+            X_i, _ = slice(test_data, j * 10000, 10000)
+            preds = model.run(model.y_prob, X_i, mode='test')
+            test_preds.extend(preds)
+        train_score = roc_auc_score(train_data[1], train_preds)
+        test_score = roc_auc_score(test_data[1], test_preds)
+        print('[%d]\tloss (with l2 norm):%f\ttrain-auc: %f\teval-auc: %f' % (i, np.mean(ls), train_score, test_score))
+        history_score.append(test_score)
+        if i > min_round and i > early_stop_round:
+            if np.argmax(history_score) == i - early_stop_round and history_score[-1] - history_score[
+                        -1 * early_stop_round] < 1e-5:
+                print('early stop\nbest iteration:\n[%d]\teval-auc: %f' % (
+                    np.argmax(history_score), np.max(history_score)))
+                break
+
+train(model)
+read finish
+train data size: (1742104, 491713)
+test data size: (300928, 491713)
+remove empty fields [25, 445852, 36, 371, 4, 11328, 33995, 12, 7, 5, 4, 20, 2, 38, 6, 8]
+{'field_sizes': [25, 445852, 36, 371, 4, 11328, 33995, 12, 7, 5, 4, 20, 2, 38, 6, 8], 'layer_acts': ['relu', None], 'embed_l2': 0, 'drop_out': [0, 0], 'embed_size': 10, 'random_seed': 0, 'learning_rate': 0.1, 'layer_sizes': [500, 1], 'layer_l2': [0, 0], 'opt_algo': 'gd'}
+(?, 160) (160, 500) (500,)
+(?, 500) (500, 1) (1,)
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:47
+[0]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[0]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[0]	loss (with l2 norm):0.009847	train-auc: 0.581307	eval-auc: 0.644375
+[1]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[1]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:45
+[1]	loss (with l2 norm):0.006281	train-auc: 0.608522	eval-auc: 0.667282
+[2]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[2]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (3 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:57
+[2]	loss (with l2 norm):0.006206	train-auc: 0.625896	eval-auc: 0.682097
+[3]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[3]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:44
+[3]	loss (with l2 norm):0.006159	train-auc: 0.639077	eval-auc: 0.694792
+[4]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[4]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:44
+[4]	loss (with l2 norm):0.006125	train-auc: 0.650153	eval-auc: 0.706379
+[5]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[5]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[5]	loss (with l2 norm):0.006099	train-auc: 0.660329	eval-auc: 0.717581
+[6]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[6]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[6]	loss (with l2 norm):0.006078	train-auc: 0.669520	eval-auc: 0.727669
+[7]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[7]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:44
+[7]	loss (with l2 norm):0.006062	train-auc: 0.677378	eval-auc: 0.736270
+[8]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[8]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:44
+[8]	loss (with l2 norm):0.006048	train-auc: 0.684017	eval-auc: 0.743570
+[9]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[9]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:44
+[9]	loss (with l2 norm):0.006037	train-auc: 0.689573	eval-auc: 0.749456
+[10]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[10]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:44
+[10]	loss (with l2 norm):0.006027	train-auc: 0.694193	eval-auc: 0.753969
+[11]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[11]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[11]	loss (with l2 norm):0.006019	train-auc: 0.697991	eval-auc: 0.757776
+[12]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[12]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:37
+[12]	loss (with l2 norm):0.006012	train-auc: 0.701157	eval-auc: 0.760820
+[13]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[13]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:45
+[13]	loss (with l2 norm):0.006005	train-auc: 0.703853	eval-auc: 0.763331
+[14]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[14]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[14]	loss (with l2 norm):0.006000	train-auc: 0.706178	eval-auc: 0.765325
+[15]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[15]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:44
+[15]	loss (with l2 norm):0.005995	train-auc: 0.708246	eval-auc: 0.766979
+[16]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[16]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[16]	loss (with l2 norm):0.005991	train-auc: 0.710113	eval-auc: 0.768357
+[17]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[17]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[17]	loss (with l2 norm):0.005987	train-auc: 0.711873	eval-auc: 0.769506
+[18]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                          | Elapsed Time: 0:00:00 ETA:  0:00:00
+[18]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[18]	loss (with l2 norm):0.005983	train-auc: 0.713545	eval-auc: 0.770486
+[19]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[19]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[19]	loss (with l2 norm):0.005980	train-auc: 0.715137	eval-auc: 0.771379
+[20]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[20]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[20]	loss (with l2 norm):0.005977	train-auc: 0.716647	eval-auc: 0.772130
+[21]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[21]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[21]	loss (with l2 norm):0.005974	train-auc: 0.718079	eval-auc: 0.772788
+[22]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[22]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[22]	loss (with l2 norm):0.005971	train-auc: 0.719445	eval-auc: 0.773440
+[23]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[23]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:44
+[23]	loss (with l2 norm):0.005968	train-auc: 0.720751	eval-auc: 0.774004
+[24]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[24]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[24]	loss (with l2 norm):0.005966	train-auc: 0.722009	eval-auc: 0.774528
+[25]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[25]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[25]	loss (with l2 norm):0.005963	train-auc: 0.723223	eval-auc: 0.775038
+[26]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[26]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[26]	loss (with l2 norm):0.005961	train-auc: 0.724407	eval-auc: 0.775512
+[27]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                          | Elapsed Time: 0:00:00 ETA:  0:00:00
+[27]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:44
+[27]	loss (with l2 norm):0.005959	train-auc: 0.725545	eval-auc: 0.775912
+[28]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[28]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[28]	loss (with l2 norm):0.005957	train-auc: 0.726659	eval-auc: 0.776282
+[29]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[29]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[29]	loss (with l2 norm):0.005955	train-auc: 0.727729	eval-auc: 0.776646
+[30]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[30]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[30]	loss (with l2 norm):0.005952	train-auc: 0.728766	eval-auc: 0.777004
+[31]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[31]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:38
+[31]	loss (with l2 norm):0.005950	train-auc: 0.729771	eval-auc: 0.777317
+[32]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[32]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[32]	loss (with l2 norm):0.005948	train-auc: 0.730748	eval-auc: 0.777607
+[33]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[33]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:38
+[33]	loss (with l2 norm):0.005946	train-auc: 0.731701	eval-auc: 0.777890
+[34]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[34]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:38
+[34]	loss (with l2 norm):0.005944	train-auc: 0.732625	eval-auc: 0.778188
+[35]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[35]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:38
+[35]	loss (with l2 norm):0.005942	train-auc: 0.733536	eval-auc: 0.778467
+[36]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[36]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[36]	loss (with l2 norm):0.005940	train-auc: 0.734430	eval-auc: 0.778747
+[37]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[37]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[37]	loss (with l2 norm):0.005938	train-auc: 0.735314	eval-auc: 0.779026
+[38]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[38]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[38]	loss (with l2 norm):0.005937	train-auc: 0.736179	eval-auc: 0.779294
+[39]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[39]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[39]	loss (with l2 norm):0.005935	train-auc: 0.737031	eval-auc: 0.779562
+[40]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[40]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[40]	loss (with l2 norm):0.005933	train-auc: 0.737870	eval-auc: 0.779827
+[41]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[41]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[41]	loss (with l2 norm):0.005931	train-auc: 0.738701	eval-auc: 0.780079
+[42]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[42]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:38
+[42]	loss (with l2 norm):0.005929	train-auc: 0.739521	eval-auc: 0.780356
+[43]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:23 Time: 0:00:23
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[43]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:38
+[43]	loss (with l2 norm):0.005927	train-auc: 0.740340	eval-auc: 0.780629
+[44]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[44]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[44]	loss (with l2 norm):0.005925	train-auc: 0.741152	eval-auc: 0.780899
+[45]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[45]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[45]	loss (with l2 norm):0.005923	train-auc: 0.741951	eval-auc: 0.781198
+[46]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                          | Elapsed Time: 0:00:00 ETA:  0:00:00
+[46]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[46]	loss (with l2 norm):0.005921	train-auc: 0.742746	eval-auc: 0.781472
+[47]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[47]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[47]	loss (with l2 norm):0.005919	train-auc: 0.743541	eval-auc: 0.781722
+[48]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[48]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:38
+[48]	loss (with l2 norm):0.005917	train-auc: 0.744337	eval-auc: 0.781993
+[49]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[49]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[49]	loss (with l2 norm):0.005915	train-auc: 0.745134	eval-auc: 0.782266
+[50]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[50]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[50]	loss (with l2 norm):0.005913	train-auc: 0.745921	eval-auc: 0.782548
+[51]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[51]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[51]	loss (with l2 norm):0.005911	train-auc: 0.746717	eval-auc: 0.782820
+[52]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[52]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (5 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:38
+[52]	loss (with l2 norm):0.005909	train-auc: 0.747517	eval-auc: 0.783118
+[53]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[53]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:43
+[53]	loss (with l2 norm):0.005907	train-auc: 0.748325	eval-auc: 0.783410
+[54]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:05
+[54]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+100% (31 of 31) |##########################| Elapsed Time: 0:00:00 Time: 0:00:00
+  0% (4 of 1702) |                          | Elapsed Time: 0:00:00 ETA: 0:00:42
+[54]	loss (with l2 norm):0.005905	train-auc: 0.749130	eval-auc: 0.783702
+[55]	training...
+100% (1702 of 1702) |######################| Elapsed Time: 0:00:24 Time: 0:00:24
+  1% (3 of 175) |                           | Elapsed Time: 0:00:00 ETA: 0:00:06
+[55]	evaluating...
+100% (175 of 175) |########################| Elapsed Time: 0:00:04 Time: 0:00:04
+ 32% (10 of 31) |########                   | Elapsed Time: 0:00:00 ETA: 0:00:01
+CCPM
+reference：ctr模型汇总
+
+FM只能学习特征的二阶组合，但CNN能学习更高阶的组合，可学习的阶数和卷积的视野相关。 mbedding层：e1, e2…en是某特定用户被展示的一系列广告。如果在预测广告是否会点击时不考虑历史展示广告的点击情况，则n=1。同时embedding矩阵的具体值是随着模型训练学出来的。Embedding矩阵为S，向量维度为d。
+
+卷积层：卷积参数W有dw个，即对于矩阵S，上图每一列对应一个参数不共享的一维卷积，其视野为w，卷积共有d个，每个输出向量维度为(n+w-1)，输出矩阵维度d(n+w-1)。因为对于ctr预估而言，矩阵S每一列都对应特定的描述维度，所以需要分别处理，得到的输出矩阵的每一列就都是描述广告特定方面的特征。
+
+Pooling层：flexible p-max pooling。 L是模型总卷积层数，n是输入序列长度，pi就是第i层的pooling参数。这样最后一层卷积层都是输出3个最大的元素，长度固定方便后面接全连接层。同时这个指数型的参数，一开始改变比较小，几乎都是n，后面就减少得比较快。这样可以防止在模型浅层的时候就损失太多信息，众所周知深度模型在前面几层最好不要做得太简单，容易损失很多信息。文章还提到p-max pooling输出的几个最大的元素是保序的，可输入时的顺序一致，这点对于保留序列信息是重要的。
+
+激活层：tanh
+
+最后， Fij是指低i层的第j个feature map。感觉是不同输入通道的卷积参数也不共享，对应输出是所有输入通道卷积的输出的求和。
+
+In [ ]:
+class CCPM(Model):
+    def __init__(self, field_sizes=None, embed_size=10, filter_sizes=None, layer_acts=None, drop_out=None,
+                 init_path=None, opt_algo='gd', learning_rate=1e-2, random_seed=None):
+        Model.__init__(self)
+        init_vars = []
+        num_inputs = len(field_sizes)
+        for i in range(num_inputs):
+            init_vars.append(('embed_%d' % i, [field_sizes[i], embed_size], 'xavier', dtype))
+        init_vars.append(('f1', [embed_size, filter_sizes[0], 1, 2], 'xavier', dtype))
+        init_vars.append(('f2', [embed_size, filter_sizes[1], 2, 2], 'xavier', dtype))
+        init_vars.append(('w1', [2 * 3 * embed_size, 1], 'xavier', dtype))
+        init_vars.append(('b1', [1], 'zero', dtype))
+
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            if random_seed is not None:
+                tf.set_random_seed(random_seed)
+            self.X = [tf.sparse_placeholder(dtype) for i in range(num_inputs)]
+            self.y = tf.placeholder(dtype)
+            self.keep_prob_train = 1 - np.array(drop_out)
+            self.keep_prob_test = np.ones_like(drop_out)
+            self.layer_keeps = tf.placeholder(dtype)
+            self.vars = init_var_map(init_vars, init_path)
+            w0 = [self.vars['embed_%d' % i] for i in range(num_inputs)]
+            xw = tf.concat([tf.sparse_tensor_dense_matmul(self.X[i], w0[i]) for i in range(num_inputs)], 1)
+            l = xw
+
+            l = tf.transpose(tf.reshape(l, [-1, num_inputs, embed_size, 1]), [0, 2, 1, 3])
+            f1 = self.vars['f1']
+            l = tf.nn.conv2d(l, f1, [1, 1, 1, 1], 'SAME')
+            l = tf.transpose(
+                max_pool_4d(
+                    tf.transpose(l, [0, 1, 3, 2]),
+                    int(num_inputs / 2)),
+                [0, 1, 3, 2])
+            f2 = self.vars['f2']
+            l = tf.nn.conv2d(l, f2, [1, 1, 1, 1], 'SAME')
+            l = tf.transpose(
+                max_pool_4d(
+                    tf.transpose(l, [0, 1, 3, 2]), 3),
+                [0, 1, 3, 2])
+            l = tf.nn.dropout(
+                activate(
+                    tf.reshape(l, [-1, embed_size * 3 * 2]),
+                    layer_acts[0]),
+                self.layer_keeps[0])
+            w1 = self.vars['w1']
+            b1 = self.vars['b1']
+            l = tf.matmul(l, w1) + b1
+
+            l = tf.squeeze(l)
+            self.y_prob = tf.sigmoid(l)
+
+            self.loss = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(logits=l, labels=self.y))
+            self.optimizer = get_optimizer(opt_algo, learning_rate, self.loss)
+
+            config = tf.ConfigProto()
+            config.gpu_options.allow_growth = True
+            self.sess = tf.Session(config=config)
+            tf.global_variables_initializer().run(session=self.sess)
+PNN
+reference:
+深度学习在CTR预估中的应用
+
+可以视作FNN+product layer 
+
+PNN和FNN的主要不同在于除了得到z向量，还增加了一个p向量，即Product向量。Product向量由每个category field的feature vector做inner product 或则 outer product 得到，作者认为这样做有助于特征交叉。另外PNN中Embeding层不再由FM生成，可以在整个网络中训练得到。
+
+对比 FNN 网络，PNN的区别在于中间多了一层 Product Layer 层。Product Layer 层由两部分组成，左边z为 embedding 层的线性部分，右边为 embedding 层的特征交叉部分。
+
+除了 Product Layer 不同，PNN 和 FNN 的 MLP 结构是一样的。这种 product 思想来源于，在 CTR 预估中，认为特征之间的关系更多是一种 and“且”的关系，而非 add"加”的关系。例如，性别为男且喜欢游戏的人群，比起性别男和喜欢游戏的人群，前者的组合比后者更能体现特征交叉的意义。
+
+根据 product 的方式不同，可以分为 inner product (IPNN) 和 outer product (OPNN)，如下图所示。
+
+
+
+PNN1
+In [ ]:
+class PNN1(Model):
+    def __init__(self, field_sizes=None, embed_size=10, layer_sizes=None, layer_acts=None, drop_out=None,
+                 embed_l2=None, layer_l2=None, init_path=None, opt_algo='gd', learning_rate=1e-2, random_seed=None):
+        Model.__init__(self)
+        init_vars = []
+        num_inputs = len(field_sizes)
+        for i in range(num_inputs):
+            init_vars.append(('embed_%d' % i, [field_sizes[i], embed_size], 'xavier', dtype))
+        num_pairs = int(num_inputs * (num_inputs - 1) / 2)
+        node_in = num_inputs * embed_size + num_pairs
+        # node_in = num_inputs * (embed_size + num_inputs)
+        for i in range(len(layer_sizes)):
+            init_vars.append(('w%d' % i, [node_in, layer_sizes[i]], 'xavier', dtype))
+            init_vars.append(('b%d' % i, [layer_sizes[i]], 'zero', dtype))
+            node_in = layer_sizes[i]
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            if random_seed is not None:
+                tf.set_random_seed(random_seed)
+            self.X = [tf.sparse_placeholder(dtype) for i in range(num_inputs)]
+            self.y = tf.placeholder(dtype)
+            self.keep_prob_train = 1 - np.array(drop_out)
+            self.keep_prob_test = np.ones_like(drop_out)
+            self.layer_keeps = tf.placeholder(dtype)
+            self.vars = init_var_map(init_vars, init_path)
+            w0 = [self.vars['embed_%d' % i] for i in range(num_inputs)]
+            xw = tf.concat([tf.sparse_tensor_dense_matmul(self.X[i], w0[i]) for i in range(num_inputs)], 1)
+            xw3d = tf.reshape(xw, [-1, num_inputs, embed_size])
+
+            row = []
+            col = []
+            for i in range(num_inputs-1):
+                for j in range(i+1, num_inputs):
+                    row.append(i)
+                    col.append(j)
+            # batch * pair * k
+            p = tf.transpose(
+                # pair * batch * k
+                tf.gather(
+                    # num * batch * k
+                    tf.transpose(
+                        xw3d, [1, 0, 2]),
+                    row),
+                [1, 0, 2])
+            # batch * pair * k
+            q = tf.transpose(
+                tf.gather(
+                    tf.transpose(
+                        xw3d, [1, 0, 2]),
+                    col),
+                [1, 0, 2])
+            p = tf.reshape(p, [-1, num_pairs, embed_size])
+            q = tf.reshape(q, [-1, num_pairs, embed_size])
+            ip = tf.reshape(tf.reduce_sum(p * q, [-1]), [-1, num_pairs])
+
+            # simple but redundant
+            # batch * n * 1 * k, batch * 1 * n * k
+            # ip = tf.reshape(
+            #     tf.reduce_sum(
+            #         tf.expand_dims(xw3d, 2) *
+            #         tf.expand_dims(xw3d, 1),
+            #         3),
+            #     [-1, num_inputs**2])
+            l = tf.concat([xw, ip], 1)
+
+            for i in range(len(layer_sizes)):
+                wi = self.vars['w%d' % i]
+                bi = self.vars['b%d' % i]
+                l = tf.nn.dropout(
+                    activate(
+                        tf.matmul(l, wi) + bi,
+                        layer_acts[i]),
+                    self.layer_keeps[i])
+
+            l = tf.squeeze(l)
+            self.y_prob = tf.sigmoid(l)
+
+            self.loss = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(logits=l, labels=self.y))
+            if layer_l2 is not None:
+                self.loss += embed_l2 * tf.nn.l2_loss(xw)
+                for i in range(len(layer_sizes)):
+                    wi = self.vars['w%d' % i]
+                    self.loss += layer_l2[i] * tf.nn.l2_loss(wi)
+            self.optimizer = get_optimizer(opt_algo, learning_rate, self.loss)
+
+            config = tf.ConfigProto()
+            config.gpu_options.allow_growth = True
+            self.sess = tf.Session(config=config)
+            tf.global_variables_initializer().run(session=self.sess)
+PNN2
+In [ ]:
+class PNN2(Model):
+    def __init__(self, field_sizes=None, embed_size=10, layer_sizes=None, layer_acts=None, drop_out=None,
+                 embed_l2=None, layer_l2=None, init_path=None, opt_algo='gd', learning_rate=1e-2, random_seed=None,
+                 layer_norm=True):
+        Model.__init__(self)
+        init_vars = []
+        num_inputs = len(field_sizes)
+        for i in range(num_inputs):
+            init_vars.append(('embed_%d' % i, [field_sizes[i], embed_size], 'xavier', dtype))
+        num_pairs = int(num_inputs * (num_inputs - 1) / 2)
+        node_in = num_inputs * embed_size + num_pairs
+        init_vars.append(('kernel', [embed_size, num_pairs, embed_size], 'xavier', dtype))
+        for i in range(len(layer_sizes)):
+            init_vars.append(('w%d' % i, [node_in, layer_sizes[i]], 'xavier', dtype))
+            init_vars.append(('b%d' % i, [layer_sizes[i]], 'zero',  dtype))
+            node_in = layer_sizes[i]
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            if random_seed is not None:
+                tf.set_random_seed(random_seed)
+            self.X = [tf.sparse_placeholder(dtype) for i in range(num_inputs)]
+            self.y = tf.placeholder(dtype)
+            self.keep_prob_train = 1 - np.array(drop_out)
+            self.keep_prob_test = np.ones_like(drop_out)
+            self.layer_keeps = tf.placeholder(dtype)
+            self.vars = init_var_map(init_vars, init_path)
+            w0 = [self.vars['embed_%d' % i] for i in range(num_inputs)]
+            xw = tf.concat([tf.sparse_tensor_dense_matmul(self.X[i], w0[i]) for i in range(num_inputs)], 1)
+            xw3d = tf.reshape(xw, [-1, num_inputs, embed_size])
+
+            row = []
+            col = []
+            for i in range(num_inputs - 1):
+                for j in range(i + 1, num_inputs):
+                    row.append(i)
+                    col.append(j)
+            # batch * pair * k
+            p = tf.transpose(
+                # pair * batch * k
+                tf.gather(
+                    # num * batch * k
+                    tf.transpose(
+                        xw3d, [1, 0, 2]),
+                    row),
+                [1, 0, 2])
+            # batch * pair * k
+            q = tf.transpose(
+                tf.gather(
+                    tf.transpose(
+                        xw3d, [1, 0, 2]),
+                    col),
+                [1, 0, 2])
+            # b * p * k
+            p = tf.reshape(p, [-1, num_pairs, embed_size])
+            # b * p * k
+            q = tf.reshape(q, [-1, num_pairs, embed_size])
+            # k * p * k
+            k = self.vars['kernel']
+
+            # batch * 1 * pair * k
+            p = tf.expand_dims(p, 1)
+            # batch * pair
+            kp = tf.reduce_sum(
+                # batch * pair * k
+                tf.multiply(
+                    # batch * pair * k
+                    tf.transpose(
+                        # batch * k * pair
+                        tf.reduce_sum(
+                            # batch * k * pair * k
+                            tf.multiply(
+                                p, k),
+                            -1),
+                        [0, 2, 1]),
+                    q),
+                -1)
+
+            #
+            # if layer_norm:
+            #     # x_mean, x_var = tf.nn.moments(xw, [1], keep_dims=True)
+            #     # xw = (xw - x_mean) / tf.sqrt(x_var)
+            #     # x_g = tf.Variable(tf.ones([num_inputs * embed_size]), name='x_g')
+            #     # x_b = tf.Variable(tf.zeros([num_inputs * embed_size]), name='x_b')
+            #     # x_g = tf.Print(x_g, [x_g[:10], x_b])
+            #     # xw = xw * x_g + x_b
+            #     p_mean, p_var = tf.nn.moments(op, [1], keep_dims=True)
+            #     op = (op - p_mean) / tf.sqrt(p_var)
+            #     p_g = tf.Variable(tf.ones([embed_size**2]), name='p_g')
+            #     p_b = tf.Variable(tf.zeros([embed_size**2]), name='p_b')
+            #     # p_g = tf.Print(p_g, [p_g[:10], p_b])
+            #     op = op * p_g + p_b
+
+            l = tf.concat([xw, kp], 1)
+            for i in range(len(layer_sizes)):
+                wi = self.vars['w%d' % i]
+                bi = self.vars['b%d' % i]
+                l = tf.nn.dropout(
+                    activate(
+                        tf.matmul(l, wi) + bi,
+                        layer_acts[i]),
+                    self.layer_keeps[i])
+
+            l = tf.squeeze(l)
+            self.y_prob = tf.sigmoid(l)
+
+            self.loss = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(logits=l, labels=self.y))
+            if layer_l2 is not None:
+                self.loss += embed_l2 * tf.nn.l2_loss(xw)#tf.concat(w0, 0))
+                for i in range(len(layer_sizes)):
+                    wi = self.vars['w%d' % i]
+                    self.loss += layer_l2[i] * tf.nn.l2_loss(wi)
+            self.optimizer = get_optimizer(opt_algo, learning_rate, self.loss)
+
+            config = tf.ConfigProto()
+            config.gpu_options.allow_growth = True
+            self.sess = tf.Session(config=config)
+            tf.global_variables_initializer().run(session=self.sess)
