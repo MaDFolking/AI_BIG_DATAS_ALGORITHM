@@ -1,0 +1,896 @@
+wide & Deep 和 Deep & Cross 及tensorflow实现 
+https://blog.csdn.net/yujianmin1990/article/details/78989099
+https://github.com/jxyyjm/tensorflow_test/blob/master/src/deep_and_cross.py
+https://github.com/jxyyjm/tensorflow_test/blob/master/src/multi.py
+
+DCN项目案例: https://yq.aliyun.com/articles/551671
+本原文: https://blog.csdn.net/han_xiaoyang/article/details/81031961
+
+FM和相关算法实现广告预估： https://github.com/HanXiaoyang/CTR_NN/blob/master/deep%20nn%20ctr%20prediction/CTR_prediction_LR_FM_CCPM_PNN.ipynb
+宽度模型实现广告预估: https://github.com/HanXiaoyang/CTR_NN/blob/master/deep%20nn%20ctr%20prediction/wide_and_deep_model_criteo.ipynb
+宽度+深度模板实现广告预估: https://github.com/HanXiaoyang/CTR_NN/blob/master/deep%20nn%20ctr%20prediction/wide_and_deep_model_criteo.ipynb
+DeepFM和NFM和DeepCTR: https://github.com/HanXiaoyang/CTR_NN/blob/master/deep%20nn%20ctr%20prediction/DeepFM_NFM_DeepCTR.ipynb
+DeepFM: https://github.com/HanXiaoyang/CTR_NN/blob/master/deep%20nn%20ctr%20prediction/DeepFM.py
+run_dfm(这个先不用看): https://github.com/HanXiaoyang/CTR_NN/blob/master/deep%20nn%20ctr%20prediction/run_dfm.ipynb
+
+CTR预估是一个二分类问题，
+主要依据业务:
+(1)日志中用户的信息(年龄，性别,国籍,手机安装的APP列表)。
+(2)广告侧的信息(广告id,广告类别,广告标题等)。
+(3)上下文侧信息:渠道id等。
+综上去预测用户是否会点击该广告。
+我在这里用的是传统方法:构建特征+线性+树形+blending融合。
+而难点就在于特征组合(手机,网站，时间，职业,年龄，以及很多隐藏特征。)
+
+比如: 男性+大学生特征对应大概率点击游戏类广告，这样: 男性且是大学生是游戏类的特征组合就是一个关键特征。
+本质是线性特征： 函数内积为: ylinear=σ(⟨ w,x⟩)   x为特征向量，w为权重向量。 外面套着一个sigmod函数使其更平滑。
+
+缺点: 特征爆炸，特征难以识别，组合特征难以设计。再加很多隐藏特征。
+
+一.FM算法:
+
+为了解决这一问题，引出让模型自动考虑特征之间的二阶组合信息，线性模型推广为二阶多项式:
+ypoly=σ(⟨w⃗ ,x⃗ ⟩+∑i=1n∑j=1nwij⋅xi⋅xj)
+本质是对特征两两相乘组合构成新特征(离散化之后其实就是 且 操作)。 对每个新特征分配独立权重。
+ypoly=σ( wT.x +xTWx)
+W为二阶特征组合的权重矩阵，是对称矩阵。参数是O(n^2) 为了降低维度，因子分解，: n*k k*k k*n 这种格式。
+W = WT.W
+
+这就是因子分解机， FM 名字由来。
+公式如下: Yfm = σ( wT.x+xT.WT.W.x)
+内积形式: Yfm = σ( (w,x)+(W.x,W.x))
+最终利用求和公式 => yFM = σ((w,x) + ∑∑(vi,vj).xi.xj)
+
+FM的特征特点: 两两相乘组合，权重相互不独立。 参数少，表达能力强。
+FM通过内积进行无重复项与特征平方项的特征组合过程使用了一个小trick(戏法)
+∑i=1n∑j=i+1nxixj=1/2×[(∑i=1nxi)2−∑i=1nx2i]
+
+FM代码如下：
+class FM(Model):
+    def __init__(self, input_dim=None, output_dim=1, factor_order=10, init_path=None, opt_algo='gd', learning_rate=1e-2,
+                 l2_w=0, l2_v=0, random_seed=None):
+        Model.__init__(self)
+        # 一次、二次交叉、偏置项
+        init_vars = [('w', [input_dim, output_dim], 'xavier', dtype),
+                     ('v', [input_dim, factor_order], 'xavier', dtype),
+                     ('b', [output_dim], 'zero', dtype)]
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            if random_seed is not None:
+                tf.set_random_seed(random_seed)
+            self.X = tf.sparse_placeholder(dtype)
+            self.y = tf.placeholder(dtype)
+            self.vars = init_var_map(init_vars, init_path)
+
+            w = self.vars['w']
+            v = self.vars['v']
+            b = self.vars['b']
+
+            # [(x1+x2+x3)^2 - (x1^2+x2^2+x3^2)]/2
+            # 先计算所有的交叉项，再减去平方项(自己和自己相乘)
+            X_square = tf.SparseTensor(self.X.indices, tf.square(self.X.values), tf.to_int64(tf.shape(self.X)))
+            xv = tf.square(tf.sparse_tensor_dense_matmul(self.X, v))
+            p = 0.5 * tf.reshape(
+                tf.reduce_sum(xv - tf.sparse_tensor_dense_matmul(X_square, tf.square(v)), 1),
+                [-1, output_dim])
+            xw = tf.sparse_tensor_dense_matmul(self.X, w)
+            logits = tf.reshape(xw + b + p, [-1])
+            self.y_prob = tf.sigmoid(logits)
+
+            self.loss = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(logits=logits, labels=self.y)) + \
+                        l2_w * tf.nn.l2_loss(xw) + \
+                        l2_v * tf.nn.l2_loss(xv)
+            self.optimizer = get_optimizer(opt_algo, learning_rate, self.loss)
+
+            #GPU设定
+            config = tf.ConfigProto()
+            config.gpu_options.allow_growth = True
+            self.sess = tf.Session(config=config)
+            # 图中所有variable初始化
+            tf.global_variables_initializer().run(session=self.sess)
+           
+           
+二. 从神经网络来看FM:
+FM的核心本质是将离散系数特征通过 矩阵乘法降维成一个低维稠密向量。而且是不重复。
+在神经网络里来说，就叫嵌入 (embedding)/
+所以神经网络来解释 FM:
+(1)FM 是对离散特征进行嵌入。
+(2)通过对嵌入后的稠密向量进行内积来进行二阶特征组合。
+(3)最后与线性模型的结果求和进而得到预估点击率(lr 的 softmax)
+
+三.FM实际应用
+以离散特征领域为主: 广告类别，用户职业,手机APP列表。处理方式通常是one-hot转为二值特征，再将这些高维稀疏特征
+嵌入转化为低维连续特征。但我这里由于数据内存溢出问题，我是手工处理。但FM的问题就是没考虑领域信息，这样会使得同领域
+的特征也被当做不同领域进行两两组合。
+
+四.FM进阶:
+我们可以将特征具有领域关系的特点作为先验知识，加入到神经网络设计中。 同领域的特征嵌入后直接求和作为一个整体嵌入向量。
+进而其他领域的整体嵌入向量 进而两两组合。
+这个先嵌入后求和的过程，就是一个单领域的小离散特征向量乘以矩阵的过程。
+
+所以升级为: FFM : ==》 不同领域离散特征分别嵌入，再求二阶特征向量的内积。
+
+我用神经网络的方式解释下: 
+(1)原来的FM:
+假设有三个向量：X1,X2,X3. 如果是之前的FM ，是分别与隐层做全连接操作，这是神经网络的正常操作。也是我们在做特征拼接。
+还有一部分是它原始的向量和原始相应的系数w，里面进行本身的特征与系数内积。最后这个原始的特征*w系数+特征拼接求和进行sigmod平滑，
+softmax求概率得到最终值。
+(2)现在的FFM:
+隐层我们可以看做对应该X的领域，这时候就不会进行交叉相乘，而是一一拼接，最后得到新的结果再交叉相乘。这就是在同领域先两两拼接
+最后再二阶求内积。
+
+优点：
+(1) 给FM增加了正则，考虑到了领域内信息的相似性。(游戏类广告，主播类广告会有一些相似性。)
+(2) 同领域特征拼接，作为更深的神经网络输入，(因为多了一个隐层，用于分领域)。加大了网络深度，同时还有降低维度作用(比开始就全连接操作要少)
+
+五.FFM
+由台大学生研发出，其思考点就是考虑了领域信息，让同一个特征与不同领域进行特征组合，对应的嵌入向量是不同的。
+公式上，将Vi,j后又加个变量。也就是将Vi,f中的f归于到其他特征。
+本质是某一列属于某个域。比如:
+双11，双12归于节日。
+中国，美国归于国家。
+所以计算量更大了。原本是2*2组合。现在每个组合后接个新的域。
+这样不同feature可以成为多个不同的域。
+这样计算量相当恐怖了。
+这样可以捕捉到特征和阈的关联，这样更加细致了。
+我们每次出现一个特征，就要做一个编号。如图:箭头方向是对这个电影所有特征都做个编号。
+比如名字，类型，价格等做了5个编号。而左边是对这个域做编码。
+比如用户是1，电影是2，题材3，价格4. 四个域。
+也就是5个特征，4一个阈值。
+这样从v1,v2 变为 v12,v13,v14,v21,v22,v23,v24.
+也就是提起隐藏特征后又加了新的域做了新的组合，
+这样能更细致的关联，我们能从特征和特征所属的域上的值做更细致的表达。虽然特征变多，
+但不会导致稀疏性问题，因为都有关联，都有数。
+ 
+六.深度学习CTR通用框架: embedding+MLP
+embedding+MLP是对于分领域离散特征进行深度学习CTR预估的通用框架。深度学习在特征组合挖掘(特征学习)方面具有很大的优势。
+比如以CNN为代表的深度网络主要用于图像、语音等稠密特征上的学习，以W2V、RNN为代表的深度网络主要用于文本的同质化、序列化高维稀疏特征的学习。
+CTR预估的主要场景是对离散且有具体领域的特征进行学习，所以其深度网络结构也不同于CNN与RNN。 
+具体来说， embedding+MLP的过程如下：
+
+(1)对不同领域的one-hot特征进行嵌入（embedding），使其降维成低维度稠密特征。
+(2)然后将这些特征向量拼接（concatenate）成一个隐含层。
+(3)之后再不断堆叠全连接层，也就是多层感知机(Multilayer Perceptron, MLP，有时也叫作前馈神经网络)。 多层感知机就理解为全连接。
+(4)最终输出预测的点击率。 
+
+缺点:只学习高阶特征组合，对于低阶或者手动特征组合不够兼容。而且参数较多，学习困难。
+
+七. FNN: FM与MLP串联结合。
+Weinan Zhang等在2016年提出的因子分解机神经网络(Factorisation Machine supported Neural Network，FNN)将考FM与MLP进行了结合。它有着十分显著的特点：
+
+(1) 采用FM预训练得到的隐含层及其权重作为神经网络的第一层的初始值，之后再不断堆叠全连接层，最终输出预测的点击率。
+(2) 可以将FNN理解成一种特殊的embedding+MLP，其要求第一层嵌入后的各领域特征维度一致，并且嵌入权重的初始化是FM预训练好的。
+(3) 这不是一个端到端的训练过程，有贪心训练的思路。而且如果不考虑预训练过程，模型网络结构也没有考虑低阶特征组合。 
+代码:
+class FNN(Model):
+    def __init__(self, field_sizes=None, embed_size=10, layer_sizes=None, layer_acts=None, drop_out=None,
+                 embed_l2=None, layer_l2=None, init_path=None, opt_algo='gd', learning_rate=1e-2, random_seed=None):
+        Model.__init__(self)
+        init_vars = []
+        num_inputs = len(field_sizes)
+        for i in range(num_inputs):
+            init_vars.append(('embed_%d' % i, [field_sizes[i], embed_size], 'xavier', dtype))
+        node_in = num_inputs * embed_size
+        for i in range(len(layer_sizes)):
+            init_vars.append(('w%d' % i, [node_in, layer_sizes[i]], 'xavier', dtype))
+            init_vars.append(('b%d' % i, [layer_sizes[i]], 'zero', dtype))
+            node_in = layer_sizes[i]
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            if random_seed is not None:
+                tf.set_random_seed(random_seed)
+            self.X = [tf.sparse_placeholder(dtype) for i in range(num_inputs)]
+            self.y = tf.placeholder(dtype)
+            self.keep_prob_train = 1 - np.array(drop_out)
+            self.keep_prob_test = np.ones_like(drop_out)
+            self.layer_keeps = tf.placeholder(dtype)
+            self.vars = init_var_map(init_vars, init_path)
+            w0 = [self.vars['embed_%d' % i] for i in range(num_inputs)]
+            xw = tf.concat([tf.sparse_tensor_dense_matmul(self.X[i], w0[i]) for i in range(num_inputs)], 1)
+            l = xw
+
+            #全连接部分
+            for i in range(len(layer_sizes)):
+                wi = self.vars['w%d' % i]
+                bi = self.vars['b%d' % i]
+                print(l.shape, wi.shape, bi.shape)
+                l = tf.nn.dropout(
+                    activate(
+                        tf.matmul(l, wi) + bi,
+                        layer_acts[i]),
+                    self.layer_keeps[i])
+
+            l = tf.squeeze(l)
+            self.y_prob = tf.sigmoid(l)
+
+            self.loss = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(logits=l, labels=self.y))
+            if layer_l2 is not None:
+                self.loss += embed_l2 * tf.nn.l2_loss(xw)
+                for i in range(len(layer_sizes)):
+                    wi = self.vars['w%d' % i]
+                    self.loss += layer_l2[i] * tf.nn.l2_loss(wi)
+            self.optimizer = get_optimizer(opt_algo, learning_rate, self.loss)
+
+            config = tf.ConfigProto()
+            config.gpu_options.allow_growth = True
+            self.sess = tf.Session(config=config)
+            tf.global_variables_initializer().run(session=self.sess)
+ 
+ 
+八.DeepFM: FM和MLP的并联结合。
+针对FNN需要预训练的问题，Huifeng Guo等提出了深度因子分解机模型（Deep Factorisation Machine, DeepFM, 2017）。该模型的特点是：
+
+(1)不需要预训练。
+(2)将考虑领域信息的FM部分与MLP部分并联起来（借用初中电路的术语），其实就是对两个模型进行联合训练。
+(3)考虑领域信息的FM部分的嵌入向量拼接起来作为MLP部分的输入特征，也就是是两个模型共享嵌入后的特征
+ 代码：
+ def model_fn(features, labels, mode, params):
+    """Bulid Model function f(x) for Estimator."""
+    #------超参数的设定----
+    field_size = params["field_size"]
+    feature_size = params["feature_size"]
+    embedding_size = params["embedding_size"]
+    l2_reg = params["l2_reg"]
+    learning_rate = params["learning_rate"]
+    #batch_norm_decay = params["batch_norm_decay"]
+    #optimizer = params["optimizer"]
+    layers = map(int, params["deep_layers"].split(','))
+    dropout = map(float, params["dropout"].split(','))
+
+    #------权重------
+    FM_B = tf.get_variable(name='fm_bias', shape=[1], initializer=tf.constant_initializer(0.0))
+    FM_W = tf.get_variable(name='fm_w', shape=[feature_size], initializer=tf.glorot_normal_initializer())
+    # F
+    FM_V = tf.get_variable(name='fm_v', shape=[feature_size, embedding_size], initializer=tf.glorot_normal_initializer())
+    # F * E    
+    #------build feaure-------
+    feat_ids  = features['feat_ids']
+    feat_ids = tf.reshape(feat_ids,shape=[-1,field_size]) # None * f/K * K
+    feat_vals = features['feat_vals']
+    feat_vals = tf.reshape(feat_vals,shape=[-1,field_size]) # None * f/K * K
+
+    #------build f(x)------
+    with tf.variable_scope("First-order"):
+        feat_wgts = tf.nn.embedding_lookup(FM_W, feat_ids) # None * f/K * K
+        y_w = tf.reduce_sum(tf.multiply(feat_wgts, feat_vals),1)
+
+    with tf.variable_scope("Second-order"):
+        embeddings = tf.nn.embedding_lookup(FM_V, feat_ids) # None * f/K * K * E
+        feat_vals = tf.reshape(feat_vals, shape=[-1, field_size, 1]) # None * f/K * K * 1 ？
+        embeddings = tf.multiply(embeddings, feat_vals) #vij*xi  
+        sum_square = tf.square(tf.reduce_sum(embeddings,1)) # None * K * E
+        square_sum = tf.reduce_sum(tf.square(embeddings),1)
+        y_v = 0.5*tf.reduce_sum(tf.subtract(sum_square, square_sum),1)  # None * 1
+
+    with tf.variable_scope("Deep-part"):
+        if FLAGS.batch_norm:
+            #normalizer_fn = tf.contrib.layers.batch_norm
+            #normalizer_fn = tf.layers.batch_normalization
+            if mode == tf.estimator.ModeKeys.TRAIN:
+                train_phase = True
+                #normalizer_params = {'decay': batch_norm_decay, 'center': True, 'scale': True, 'updates_collections': None, 'is_training': True, 'reuse': None}
+            else:
+                train_phase = False
+                #normalizer_params = {'decay': batch_norm_decay, 'center': True, 'scale': True, 'updates_collections': None, 'is_training': False, 'reuse': True}
+        else:
+            normalizer_fn = None
+            normalizer_params = None
+
+        deep_inputs = tf.reshape(embeddings,shape=[-1,field_size*embedding_size]) # None * (F*K)
+        for i in range(len(layers)):
+            #if FLAGS.batch_norm:
+            #    deep_inputs = batch_norm_layer(deep_inputs, train_phase=train_phase, scope_bn='bn_%d' %i)
+                #normalizer_params.update({'scope': 'bn_%d' %i})
+            deep_inputs = tf.contrib.layers.fully_connected(inputs=deep_inputs, num_outputs=layers[i], \
+                #normalizer_fn=normalizer_fn, normalizer_params=normalizer_params, \
+                weights_regularizer=tf.contrib.layers.l2_regularizer(l2_reg), scope='mlp%d' % i)
+            if FLAGS.batch_norm:
+                deep_inputs = batch_norm_layer(deep_inputs, train_phase=train_phase, scope_bn='bn_%d' %i)   #放在RELU之后 https://github.com/ducha-aiki/caffenet-benchmark/blob/master/batchnorm.md#bn----before-or-after-relu
+            if mode == tf.estimator.ModeKeys.TRAIN:
+                deep_inputs = tf.nn.dropout(deep_inputs, keep_prob=dropout[i])                              #Apply Dropout after all BN layers and set dropout=0.8(drop_ratio=0.2)
+                #deep_inputs = tf.layers.dropout(inputs=deep_inputs, rate=dropout[i], training=mode == tf.estimator.ModeKeys.TRAIN)
+
+        y_deep = tf.contrib.layers.fully_connected(inputs=deep_inputs, num_outputs=1, activation_fn=tf.identity, \
+                weights_regularizer=tf.contrib.layers.l2_regularizer(l2_reg), scope='deep_out')
+        y_d = tf.reshape(y_deep,shape=[-1])
+        #sig_wgts = tf.get_variable(name='sigmoid_weights', shape=[layers[-1]], initializer=tf.glorot_normal_initializer())
+        #sig_bias = tf.get_variable(name='sigmoid_bias', shape=[1], initializer=tf.constant_initializer(0.0))
+        #deep_out = tf.nn.xw_plus_b(deep_inputs,sig_wgts,sig_bias,name='deep_out')
+
+    with tf.variable_scope("DeepFM-out"):
+        #y_bias = FM_B * tf.ones_like(labels, dtype=tf.float32)  # None * 1  warning;这里不能用label，否则调用predict/export函数会出错，train/evaluate正常；初步判断estimator做了优化，用不到label时不传
+        y_bias = FM_B * tf.ones_like(y_d, dtype=tf.float32)     # None * 1
+        y = y_bias + y_w + y_v + y_d
+        pred = tf.sigmoid(y)
+
+    predictions={"prob": pred}
+    export_outputs = {tf.saved_model.signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY: tf.estimator.export.PredictOutput(predictions)}
+    # Provide an estimator spec for `ModeKeys.PREDICT`
+    if mode == tf.estimator.ModeKeys.PREDICT:
+        return tf.estimator.EstimatorSpec(
+                mode=mode,
+                predictions=predictions,
+                export_outputs=export_outputs)
+
+    #------bulid loss------
+    loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=y, labels=labels)) + \
+        l2_reg * tf.nn.l2_loss(FM_W) + \
+        l2_reg * tf.nn.l2_loss(FM_V) #+ \ l2_reg * tf.nn.l2_loss(sig_wgts)
+
+    # Provide an estimator spec for `ModeKeys.EVAL`
+    eval_metric_ops = {
+        "auc": tf.metrics.auc(labels, pred)
+    }
+    if mode == tf.estimator.ModeKeys.EVAL:
+        return tf.estimator.EstimatorSpec(
+                mode=mode,
+                predictions=predictions,
+                loss=loss,
+                eval_metric_ops=eval_metric_ops)
+
+    #------bulid optimizer------
+    if FLAGS.optimizer == 'Adam':
+        optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, beta1=0.9, beta2=0.999, epsilon=1e-8)
+    elif FLAGS.optimizer == 'Adagrad':
+        optimizer = tf.train.AdagradOptimizer(learning_rate=learning_rate, initial_accumulator_value=1e-8)
+    elif FLAGS.optimizer == 'Momentum':
+        optimizer = tf.train.MomentumOptimizer(learning_rate=learning_rate, momentum=0.95)
+    elif FLAGS.optimizer == 'ftrl':
+        optimizer = tf.train.FtrlOptimizer(learning_rate)
+
+    train_op = optimizer.minimize(loss, global_step=tf.train.get_global_step())
+
+    # Provide an estimator spec for `ModeKeys.TRAIN` modes
+    if mode == tf.estimator.ModeKeys.TRAIN:
+        return tf.estimator.EstimatorSpec(
+                mode=mode,
+                predictions=predictions,
+                loss=loss,
+                train_op=train_op)
+                
+
+
+九.NFM:通过逐元素乘法延迟FM的实现过程
+ 
+我们再回到考虑领域信息的FM，它仍有改进的空间。因为以上这些网络的FM部分都是只进行嵌入向量的两两内积后直接求和，
+没有充分利用二阶特征组合的信息。Xiangnan He等在2017年提出了神经网络因子分解机（Neural Factorization Machines，NFM）对此作出了改进。
+
+NFM的基本特点是：
+(1)利用二阶交互池化层（Bi-Interaction Pooling）对FM嵌入后的向量两两进行元素级别的乘法，形成同维度的向量求和后作为前馈神经网络的输入。
+计算图中用圈乘⨂表示逐元素乘法运算。
+(2)NFM与DeepFM的区别是没有单独的FM的浅层网络进行联合训练，而是将其整合后直接输出给前馈神经网络。
+
+(3)当MLP的全连接层都是恒等变换且最后一层参数全为1时，NFM就退化成了FM。可见，NFM是FM的推广，它推迟了FM的实现过程，并在其中加入了更多非线性运算。
+另一方面，我们观察计算图会发现NFM与FNN非常相似。它们的主要区别是NFM 在embedding之后对特征进行了两两逐元素乘法。因为逐元素相乘的向量维数不变，
+之后对这些向量求和的维数仍然与embedding的维数一致。因此输入到MLP的参数比起直接concatenate的FNN更少。 
+
+代码：
+def model_fn(features, labels, mode, params):
+    """Bulid Model function f(x) for Estimator."""
+    #------hyperparameters----
+    field_size = params["field_size"]
+    feature_size = params["feature_size"]
+    embedding_size = params["embedding_size"]
+    l2_reg = params["l2_reg"]
+    learning_rate = params["learning_rate"]
+    #optimizer = params["optimizer"]
+    layers = map(int, params["deep_layers"].split(','))
+    dropout = map(float, params["dropout"].split(','))
+
+    #------bulid weights------
+    Global_Bias = tf.get_variable(name='bias', shape=[1], initializer=tf.constant_initializer(0.0))
+    Feat_Bias = tf.get_variable(name='linear', shape=[feature_size], initializer=tf.glorot_normal_initializer())
+    Feat_Emb = tf.get_variable(name='emb', shape=[feature_size,embedding_size], initializer=tf.glorot_normal_initializer())
+
+    #------build feaure-------
+    feat_ids  = features['feat_ids']
+    feat_ids = tf.reshape(feat_ids,shape=[-1,field_size])
+    feat_vals = features['feat_vals']
+    feat_vals = tf.reshape(feat_vals,shape=[-1,field_size])
+
+    #------build f(x)------
+    with tf.variable_scope("Linear-part"):
+        feat_wgts = tf.nn.embedding_lookup(Feat_Bias, feat_ids)         # None * F * 1
+        y_linear = tf.reduce_sum(tf.multiply(feat_wgts, feat_vals),1)
+
+    with tf.variable_scope("BiInter-part"):
+        embeddings = tf.nn.embedding_lookup(Feat_Emb, feat_ids)         # None * F * K
+        feat_vals = tf.reshape(feat_vals, shape=[-1, field_size, 1])
+        embeddings = tf.multiply(embeddings, feat_vals)                 # vij * xi
+        sum_square_emb = tf.square(tf.reduce_sum(embeddings,1))
+        square_sum_emb = tf.reduce_sum(tf.square(embeddings),1)
+        deep_inputs = 0.5*tf.subtract(sum_square_emb, square_sum_emb)   # None * K
+
+    with tf.variable_scope("Deep-part"):
+        if mode == tf.estimator.ModeKeys.TRAIN:
+            train_phase = True
+        else:
+            train_phase = False
+
+        if mode == tf.estimator.ModeKeys.TRAIN:
+            deep_inputs = tf.nn.dropout(deep_inputs, keep_prob=dropout[0])                      # None * K
+        for i in range(len(layers)):
+            deep_inputs = tf.contrib.layers.fully_connected(inputs=deep_inputs, num_outputs=layers[i], \
+                weights_regularizer=tf.contrib.layers.l2_regularizer(l2_reg), scope='mlp%d' % i)
+
+            if FLAGS.batch_norm:
+                deep_inputs = batch_norm_layer(deep_inputs, train_phase=train_phase, scope_bn='bn_%d' %i)   #放在RELU之后 https://github.com/ducha-aiki/caffenet-benchmark/blob/master/batchnorm.md#bn----before-or-after-relu
+            if mode == tf.estimator.ModeKeys.TRAIN:
+                deep_inputs = tf.nn.dropout(deep_inputs, keep_prob=dropout[i])                              #Apply Dropout after all BN layers and set dropout=0.8(drop_ratio=0.2)
+                #deep_inputs = tf.layers.dropout(inputs=deep_inputs, rate=dropout[i], training=mode == tf.estimator.ModeKeys.TRAIN)
+
+        y_deep = tf.contrib.layers.fully_connected(inputs=deep_inputs, num_outputs=1, activation_fn=tf.identity, \
+            weights_regularizer=tf.contrib.layers.l2_regularizer(l2_reg), scope='deep_out')
+        y_d = tf.reshape(y_deep,shape=[-1])
+
+    with tf.variable_scope("NFM-out"):
+        #y_bias = Global_Bias * tf.ones_like(labels, dtype=tf.float32)  # None * 1  warning;这里不能用label，否则调用predict/export函数会出错，train/evaluate正常；初步判断estimator做了优化，用不到label时不传
+        y_bias = Global_Bias * tf.ones_like(y_d, dtype=tf.float32)      # None * 1
+        y = y_bias + y_linear + y_d
+        pred = tf.sigmoid(y)
+
+    predictions={"prob": pred}
+    export_outputs = {tf.saved_model.signature_constants.DEFAULT_SERVING_SIGNATURE_DEF_KEY: tf.estimator.export.PredictOutput(predictions)}
+    # Provide an estimator spec for `ModeKeys.PREDICT`
+    if mode == tf.estimator.ModeKeys.PREDICT:
+        return tf.estimator.EstimatorSpec(
+                mode=mode,
+                predictions=predictions,
+                export_outputs=export_outputs)
+
+    #------bulid loss------
+    loss = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=y, labels=labels)) + \
+        l2_reg * tf.nn.l2_loss(Feat_Bias) + l2_reg * tf.nn.l2_loss(Feat_Emb)
+
+    # Provide an estimator spec for `ModeKeys.EVAL`
+    eval_metric_ops = {
+        "auc": tf.metrics.auc(labels, pred)
+    }
+    if mode == tf.estimator.ModeKeys.EVAL:
+        return tf.estimator.EstimatorSpec(
+                mode=mode,
+                predictions=predictions,
+                loss=loss,
+                eval_metric_ops=eval_metric_ops)
+
+    #------bulid optimizer------
+    if FLAGS.optimizer == 'Adam':
+        optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate, beta1=0.9, beta2=0.999, epsilon=1e-8)
+    elif FLAGS.optimizer == 'Adagrad':
+        optimizer = tf.train.AdagradOptimizer(learning_rate=learning_rate, initial_accumulator_value=1e-8)
+    elif FLAGS.optimizer == 'Momentum':
+        optimizer = tf.train.MomentumOptimizer(learning_rate=learning_rate, momentum=0.95)
+    elif FLAGS.optimizer == 'ftrl':
+        optimizer = tf.train.FtrlOptimizer(learning_rate)
+
+    train_op = optimizer.minimize(loss, global_step=tf.train.get_global_step())
+
+    # Provide an estimator spec for `ModeKeys.TRAIN` modes
+    if mode == tf.estimator.ModeKeys.TRAIN:
+        return tf.estimator.EstimatorSpec(
+                mode=mode,
+                predictions=predictions,
+                loss=loss,
+                train_op=train_op)
+
+
+十.AFM: 对简化版NFM进行加权求和
+
+NFM的主要创新点是在FM过程中添加了逐元素相乘的运算来增加模型的复杂度。但没有在此基础上添加更复杂的运算过程，
+比如对加权求和。Jun Xiao等在2017年提出了注意力因子分解模型（Attentional Factorization Machine，AFM）就是在这个方向上的改进。 
+ 
+AFM的特点是：
+(1)AFM与NFM都是致力于充分利用二阶特征组合的信息，对嵌入后的向量两两进行逐元素乘法，形成同维度的向量。而且AFM没有MLP部分。
+(2)AFM通过在逐元素乘法之后形成的向量进行加权求和，而且权重是基于网络自身来产生的。其方法是引入一个注意力子网络（Attention Net）。
+(3)当权重都相等时，AFM退化成无全连接层的NFM。
+“注意力子网络”的主要操作是进行矩阵乘法，其最终输出结果为softmax，以保证各分量的权重本身是一个概率分布。
+PS:sigmoid将一个real value映射到（0,1）的区间（当然也可以是（-1,1）），这样可以用来做二分类。 所以我们这里最后使用sigmod,并不是中间使用sigmod
+而softmax把一个k维的real value向量（a1,a2,a3,a4….）映射成一个（b1,b2,b3,b4….）其中bi是一个0-1的常数，
+然后可以根据bi的大小来进行多分类的任务，如取权重最大的一维。 这个softmax就是上面注意力网络求权重的算法。
+ 
+ 
+十一.PNN:再回到FM。既然AFM、NFM可以通过添加逐元素乘法的运算来增加模型的复杂度，那向量乘法有这么多，
+ 可否用其他的方法增加FM复杂度？答案是可以的。Huifeng Guo等在2016年提出了基于向量积的神经网络（Product-based Neural Networks，PNN）
+ 就是一个典型例子。
+ 
+ 特点:
+ (1)利用二阶向量积层（Pair-wisely Connected Product Layer）对FM嵌入后的向量两两进行向量积，形成的结果作为之后MLP的输入。
+计算图中用圆点•表示向量积运算。PNN采用的向量积有内积与外积两种形式。
+需要说明的是，本计算图中省略了PNN中向量与常数1进行的乘法运算。这部分其实与FNN类似，不是PNN的主要创新点。故在此图中省略。
+(2)对于内积形式的PNN，因为两个向量相乘的结果为标量，可以直接把各个标量“拼接”成一个大向量，就可以作为MLP的输入了。
+当MLP的全连接层都是恒等变换且最后一层参数全为1时，内积形式的PNN就退化成了FM。
+(3)对于外积形式的PNN，因为两个向量相乘相当于列向量与行向量进行矩阵相乘，得到的结果为一个矩阵。
+各个矩阵向之前内积形式的操作一样直接拼接起来维数太多，论文的简化方案是直接对各个矩阵进行求和，
+得到的新矩阵（可以理解成之后对其拉长成向量）就直接作为MLP的输入。
+观察计算图发现外积形式的PNN与NFM很像，其实就是PNN把NFM的逐元素乘法换成了外积。
+ 
+ class PNN1(Model):
+    def __init__(self, field_sizes=None, embed_size=10, layer_sizes=None, layer_acts=None, drop_out=None,
+                 embed_l2=None, layer_l2=None, init_path=None, opt_algo='gd', learning_rate=1e-2, random_seed=None):
+        Model.__init__(self)
+        init_vars = []
+        num_inputs = len(field_sizes)
+        for i in range(num_inputs):
+            init_vars.append(('embed_%d' % i, [field_sizes[i], embed_size], 'xavier', dtype))
+        num_pairs = int(num_inputs * (num_inputs - 1) / 2)
+        node_in = num_inputs * embed_size + num_pairs
+        # node_in = num_inputs * (embed_size + num_inputs)
+        for i in range(len(layer_sizes)):
+            init_vars.append(('w%d' % i, [node_in, layer_sizes[i]], 'xavier', dtype))
+            init_vars.append(('b%d' % i, [layer_sizes[i]], 'zero', dtype))
+            node_in = layer_sizes[i]
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            if random_seed is not None:
+                tf.set_random_seed(random_seed)
+            self.X = [tf.sparse_placeholder(dtype) for i in range(num_inputs)]
+            self.y = tf.placeholder(dtype)
+            self.keep_prob_train = 1 - np.array(drop_out)
+            self.keep_prob_test = np.ones_like(drop_out)
+            self.layer_keeps = tf.placeholder(dtype)
+            self.vars = init_var_map(init_vars, init_path)
+            w0 = [self.vars['embed_%d' % i] for i in range(num_inputs)]
+            xw = tf.concat([tf.sparse_tensor_dense_matmul(self.X[i], w0[i]) for i in range(num_inputs)], 1)
+            xw3d = tf.reshape(xw, [-1, num_inputs, embed_size])
+
+            row = []
+            col = []
+            for i in range(num_inputs-1):
+                for j in range(i+1, num_inputs):
+                    row.append(i)
+                    col.append(j)
+            # batch * pair * k
+            p = tf.transpose(
+                # pair * batch * k
+                tf.gather(
+                    # num * batch * k
+                    tf.transpose(
+                        xw3d, [1, 0, 2]),
+                    row),
+                [1, 0, 2])
+            # batch * pair * k
+            q = tf.transpose(
+                tf.gather(
+                    tf.transpose(
+                        xw3d, [1, 0, 2]),
+                    col),
+                [1, 0, 2])
+            p = tf.reshape(p, [-1, num_pairs, embed_size])
+            q = tf.reshape(q, [-1, num_pairs, embed_size])
+            ip = tf.reshape(tf.reduce_sum(p * q, [-1]), [-1, num_pairs])
+
+            # simple but redundant
+            # batch * n * 1 * k, batch * 1 * n * k
+            # ip = tf.reshape(
+            #     tf.reduce_sum(
+            #         tf.expand_dims(xw3d, 2) *
+            #         tf.expand_dims(xw3d, 1),
+            #         3),
+            #     [-1, num_inputs**2])
+            l = tf.concat([xw, ip], 1)
+
+            for i in range(len(layer_sizes)):
+                wi = self.vars['w%d' % i]
+                bi = self.vars['b%d' % i]
+                l = tf.nn.dropout(
+                    activate(
+                        tf.matmul(l, wi) + bi,
+                        layer_acts[i]),
+                    self.layer_keeps[i])
+
+            l = tf.squeeze(l)
+            self.y_prob = tf.sigmoid(l)
+
+            self.loss = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(logits=l, labels=self.y))
+            if layer_l2 is not None:
+                self.loss += embed_l2 * tf.nn.l2_loss(xw)
+                for i in range(len(layer_sizes)):
+                    wi = self.vars['w%d' % i]
+                    self.loss += layer_l2[i] * tf.nn.l2_loss(wi)
+            self.optimizer = get_optimizer(opt_algo, learning_rate, self.loss)
+
+            config = tf.ConfigProto()
+            config.gpu_options.allow_growth = True
+            self.sess = tf.Session(config=config)
+            tf.global_variables_initializer().run(session=self.sess)
+
+class PNN2(Model):
+    def __init__(self, field_sizes=None, embed_size=10, layer_sizes=None, layer_acts=None, drop_out=None,
+                 embed_l2=None, layer_l2=None, init_path=None, opt_algo='gd', learning_rate=1e-2, random_seed=None,
+                 layer_norm=True):
+        Model.__init__(self)
+        init_vars = []
+        num_inputs = len(field_sizes)
+        for i in range(num_inputs):
+            init_vars.append(('embed_%d' % i, [field_sizes[i], embed_size], 'xavier', dtype))
+        num_pairs = int(num_inputs * (num_inputs - 1) / 2)
+        node_in = num_inputs * embed_size + num_pairs
+        init_vars.append(('kernel', [embed_size, num_pairs, embed_size], 'xavier', dtype))
+        for i in range(len(layer_sizes)):
+            init_vars.append(('w%d' % i, [node_in, layer_sizes[i]], 'xavier', dtype))
+            init_vars.append(('b%d' % i, [layer_sizes[i]], 'zero',  dtype))
+            node_in = layer_sizes[i]
+        self.graph = tf.Graph()
+        with self.graph.as_default():
+            if random_seed is not None:
+                tf.set_random_seed(random_seed)
+            self.X = [tf.sparse_placeholder(dtype) for i in range(num_inputs)]
+            self.y = tf.placeholder(dtype)
+            self.keep_prob_train = 1 - np.array(drop_out)
+            self.keep_prob_test = np.ones_like(drop_out)
+            self.layer_keeps = tf.placeholder(dtype)
+            self.vars = init_var_map(init_vars, init_path)
+            w0 = [self.vars['embed_%d' % i] for i in range(num_inputs)]
+            xw = tf.concat([tf.sparse_tensor_dense_matmul(self.X[i], w0[i]) for i in range(num_inputs)], 1)
+            xw3d = tf.reshape(xw, [-1, num_inputs, embed_size])
+
+            row = []
+            col = []
+            for i in range(num_inputs - 1):
+                for j in range(i + 1, num_inputs):
+                    row.append(i)
+                    col.append(j)
+            # batch * pair * k
+            p = tf.transpose(
+                # pair * batch * k
+                tf.gather(
+                    # num * batch * k
+                    tf.transpose(
+                        xw3d, [1, 0, 2]),
+                    row),
+                [1, 0, 2])
+            # batch * pair * k
+            q = tf.transpose(
+                tf.gather(
+                    tf.transpose(
+                        xw3d, [1, 0, 2]),
+                    col),
+                [1, 0, 2])
+            # b * p * k
+            p = tf.reshape(p, [-1, num_pairs, embed_size])
+            # b * p * k
+            q = tf.reshape(q, [-1, num_pairs, embed_size])
+            # k * p * k
+            k = self.vars['kernel']
+
+            # batch * 1 * pair * k
+            p = tf.expand_dims(p, 1)
+            # batch * pair
+            kp = tf.reduce_sum(
+                # batch * pair * k
+                tf.multiply(
+                    # batch * pair * k
+                    tf.transpose(
+                        # batch * k * pair
+                        tf.reduce_sum(
+                            # batch * k * pair * k
+                            tf.multiply(
+                                p, k),
+                            -1),
+                        [0, 2, 1]),
+                    q),
+                -1)
+
+            #
+            # if layer_norm:
+            #     # x_mean, x_var = tf.nn.moments(xw, [1], keep_dims=True)
+            #     # xw = (xw - x_mean) / tf.sqrt(x_var)
+            #     # x_g = tf.Variable(tf.ones([num_inputs * embed_size]), name='x_g')
+            #     # x_b = tf.Variable(tf.zeros([num_inputs * embed_size]), name='x_b')
+            #     # x_g = tf.Print(x_g, [x_g[:10], x_b])
+            #     # xw = xw * x_g + x_b
+            #     p_mean, p_var = tf.nn.moments(op, [1], keep_dims=True)
+            #     op = (op - p_mean) / tf.sqrt(p_var)
+            #     p_g = tf.Variable(tf.ones([embed_size**2]), name='p_g')
+            #     p_b = tf.Variable(tf.zeros([embed_size**2]), name='p_b')
+            #     # p_g = tf.Print(p_g, [p_g[:10], p_b])
+            #     op = op * p_g + p_b
+
+            l = tf.concat([xw, kp], 1)
+            for i in range(len(layer_sizes)):
+                wi = self.vars['w%d' % i]
+                bi = self.vars['b%d' % i]
+                l = tf.nn.dropout(
+                    activate(
+                        tf.matmul(l, wi) + bi,
+                        layer_acts[i]),
+                    self.layer_keeps[i])
+
+            l = tf.squeeze(l)
+            self.y_prob = tf.sigmoid(l)
+
+            self.loss = tf.reduce_mean(
+                tf.nn.sigmoid_cross_entropy_with_logits(logits=l, labels=self.y))
+            if layer_l2 is not None:
+                self.loss += embed_l2 * tf.nn.l2_loss(xw)#tf.concat(w0, 0))
+                for i in range(len(layer_sizes)):
+                    wi = self.vars['w%d' % i]
+                    self.loss += layer_l2[i] * tf.nn.l2_loss(wi)
+            self.optimizer = get_optimizer(opt_algo, learning_rate, self.loss)
+
+            config = tf.ConfigProto()
+            config.gpu_options.allow_growth = True
+            self.sess = tf.Session(config=config)
+            tf.global_variables_initializer().run(session=self.sess)
+ 
+ 
+十二.DCN(高阶FM的降维实现)
+以上的FM推广形式，主要是对FM进行二阶特征组合。高阶特征组合是通过MLP实现的。但这两种实现方式是有很大不同的，
+FM更多是通过向量embedding之间的内积来实现，而MLP则是在向量embedding之后一层一层进行权重矩阵乘法实现。
+可否直接将FM的过程在高阶特征组合上进行推广？答案是可以的。Ruoxi Wang等在2017提出的深度与交叉神经网络（Deep & Cross Network，DCN）
+就是在这个方向进行改进的
+ 
+DCN的特点如下：
+(1)Deep部分就是普通的MLP网络，主要是全连接。
+与DeepFM类似，DCN是由embedding+MLP部分与cross部分进行联合训练的。Cross部分是对FM部分的推广。
+
+(2)公式:xl+1 = x0.xlT.wl+bl+xl = f(xl,wl,bl)+xl
+
+(3)可以证明，cross网络是FM的过程在高阶特征组合的推广。完全的证明需要一些公式推导，感兴趣的同学可以直接参考原论文的附录。
+而用简单的公式证明可以得到一个很重要的结论：只有两层且第一层与最后一层权重参数相等时的Cross网络与简化版FM等价。
+此处对应简化版的FM视角是将拼接好的稠密向量作为输入向量，且不做领域方面的区分（但产生这些稠密向量的过程是考虑领域信息的，相对全特征维度的全连接层减少了大量参数，可以视作稀疏链接思想的体现）。而且之后进行embedding权重矩阵W只有一列——是退化成列向量的情形。
+与MLP网络相比，Cross部分在增加高阶特征组合的同时减少了参数的个数，并省去了非线性激活函数。 
+ 
+ 十三. Wide&Deep: DeepFM与DCN的基础框架
+ Cross网络: https://blog.csdn.net/fengxueniu/article/details/73824318  本质就是二阶导，减缓参数更新。
+ 联合训练： http://www.sohu.com/a/132511048_473283
+ 工作原理:先用你的设备下载当前的模型，然后用你手机上的数据训练这个模型，之后所有的改变都会总结为一个小的更新。
+ 最后，只有这个更新会被传到云端（使用加密通信的方式），并立即就与其他用户的更新合在一起平均化，然后改善共享的模型。
+ 所有的训练数据都保留在你的设备上，云端也不会存储单独的更新。
+ 你的手机会根据你的使用情况（A）在本地将模型个性化（personalize）。多位用户的更新会被聚合（B）成共享模型的一种共同的（consensus）变化（C），以此往复。
+
+使用联合学习能够提升模型质量，降低延迟、减少功耗，同时确保隐私。这种方法还有一个直接的好处：在向云端传输模型更新之外，更新后的模型也能立马就在手机上使用，提升你的使用体验
+ 
+开篇已经提到，本文思路有两条主线。到此为止已经将基于FM的主线介绍基本完毕。接下来将串讲从embedding+MLP自身的演进特点的CTR预估模型主线，
+而这条思路与我们之前的FM思路同样有千丝万缕的联系。 
+Google在2016年提出的宽度与深度模型（Wide&Deep）在深度学习CTR预估模型中占有非常重要的位置，
+它奠定了之后基于深度学习的广告点击率预估模型的框架。 
+Wide&Deep将深度模型与线性模型进行联合训练，二者的结果求和输出为最终点击率。
+
+特点:
+我们将Wide&Deep的计算图与之前的模型进行对比可知：
+(1)Wide&Deep是前面介绍模型DeepFM与DCN的基础框架。这些模型均采用神经网络联合训练的思路，对神经网络进行并联。
+(2)DeepFM、DCN与Wide&Deep的Deep部分都是MLP。
+(3)Wide&Deep的Wide部分是逻辑回归，可以手动设计组合特征。
+(4)DeepFM的Wide部分是FM，DCN的Wide部分是Cross网络，二者均不强求手动设计特征。但此时都与字面意义上的Wide有一定差异，
+因为均共享了降维后的嵌入特征。
+
+代码：
+def get_model(model_type, model_dir):
+    print("Model directory = %s" % model_dir)
+
+    # 对checkpoint去做设定
+    runconfig = tf.contrib.learn.RunConfig(
+        save_checkpoints_secs=None,
+        save_checkpoints_steps = 100,
+    )
+
+    m = None
+
+    # 宽模型
+    if model_type == 'WIDE':
+        m = tf.contrib.learn.LinearClassifier(
+            model_dir=model_dir,
+            feature_columns=wide_columns)
+
+    # 深度模型
+    if model_type == 'DEEP':
+        m = tf.contrib.learn.DNNClassifier(
+            model_dir=model_dir,
+            feature_columns=deep_columns,
+            hidden_units=[100, 50, 25])
+
+    # 宽度深度模型
+    if model_type == 'WIDE_AND_DEEP':
+        m = tf.contrib.learn.DNNLinearCombinedClassifier(
+            model_dir=model_dir,
+            linear_feature_columns=wide_columns,
+            dnn_feature_columns=deep_columns,
+            dnn_hidden_units=[100, 70, 50, 25],
+            config=runconfig)
+
+    print('estimator built')
+
+    return m
+
+
+
+十四.Deep Cross: DCN由其残差网络思想进化  (resnet是取和。)
+由K. He等提出的深度残差网络能够大大加深神经网络的深度，同时不会引起退化的问题，
+显著提高了模型的精度。Ying Shan等将该思路应用到广告点击率预估模型中，提出深度交叉模型（DeepCross,2016）。
+
+将Deep Cross与之前的模型对比，可以发现其特点是：
+（1）对embedding+MLP的改进主要是MLP部分增加跳跃连接成为残差网络。
+（2）Deep Cross 与传统的残差网络的区别主要是没有采用卷积操作。其中一个原因是在广告点击率预估领域，特征不具备平移不变性。
+ (3) DCN其实是从Deep Cross进化出来的版本。DCN相对Deep Cross的主要贡献是解耦了Deep 与Cross（特征交叉）部分。
+因此DCN中的Cross部分可以理解为残差网络的变体：其将Deep Cross的跨越链接缩短为只有一层，而全连接部分改为与权重向量和输入向量的内积。
+
+十五. DIN:对同领域历史信息引入注意力机制的MLP
+以上神经网络对同领域离散特征的处理基本是将其嵌入后直接求和，这在一般情况下没太大问题。但其实可以做得更加精细。
+比如对于历史统计类特征。以用户历史浏览的商户id为例，假设用户历史浏览了10个商户，这些商户id的常规处理方法是作为同一个领域的特征嵌入后直接求和
+得到一个嵌入向量。但这10个商户只有一两个商户与当前被预测的广告所在的商户相似，其他商户关系不大。增加这两个商户在求和过程中的权重，
+应该能够更好地提高模型的表现力。而增加求和权重的思路就是典型的注意力机制思路。 '
+
+由 Bahdanau et al. (2015) 引入的现代注意力机制，本质上是加权平均(权重是模型根据数据学习出来的)，其在机器翻译上应用得非常成功。
+受注意力机制的启发，Guorui Zhou等在2017年提出了深度兴趣网络(Deep Interest Network，DIN)。DIN主要关注用户在同一领域的历史行为特征，
+如浏览了多个商家、多个商品等。DIN可以对这些特征分配不同的权重进行求和。
+
+特点:
+(1)此处采用原论文的结构图，表示起来更清晰。
+(2)DIN考虑对同一领域的历史特征进行加权求和，以加强其感兴趣的特征的影响。
+(3)用户的每个领域的历史特征权重则由该历史特征及其对应备选广告特征通过一个子网络得到。
+即用户历史浏览的商户特征与当前浏览商户特征对应，历史浏览的商品特征与当前浏览商品特征对应。
+(4)权重子网络主要包括特征之间的元素级别的乘法、加法和全连接等操作。
+AFM也引入了注意力机制。但是AFM是将注意力机制与FM同领域特征求和之后进行结合，DIN直接是将注意力机制与同领域特征求和之前进行结合。
+
+十六.多任务视角：信息的迁移与补充
+对于数据驱动的解决方案而言，数据和模型同样重要，数据(特征)通常决定了效果的上限，各式各样的模型会以不同的方式去逼近这个上限。
+而所有算法应用的老司机都知道很多场景下，如果有更多的数据进行模型训练，效果一般都能显著得到提高。广告也是一样的场景，
+在很多电商的平台上会有很多不同场景的广告位，每个场景蕴含了用户的不同兴趣的表达，这些信息的汇总与融合可以带来最后效果的提升。
+但是将不同场景的数据直接进行合并用来训练(ctr/cvr)模型，结果很多时候并不是很乐观，仔细想想也是合理的，不同场景下的样本分布存在差异
+，直接对样本累加会影响分布导致效果负向。 
+图
+
+而深度学习发展，使得信息的融合与应用有了更好的进展，用Multi−task learning(MTL)的方式可以很漂亮的解决上面提到的问题。我们不直接对样本进行累加和训练，
+而是像上图所示，把两个场景分为两个task，即分为两个子网络。对单个网络而言，底层的embedding层的表达受限于单场景的数据量，很可能学习不充分。
+而上图这样的网络结合，使得整个训练过程有了表示学习的共享（Shared Lookup Table），这种共享有助于大样本的子任务帮助小样本的子任务，
+使得底层的表达学习更加充分。 DeepFM和DCN也用到了这个思路！只是它们是对同一任务的不同模型进行结合，而多任务学习是对不同任务的不同模型进行结合。
+而且，我们可以玩得更加复杂。 
+Multi-task learning(MTL)整个结构的上层的不同的task的子网络是不一样的，这样每个子网络可以各自去拟合自己task对应的概念分布。并且，
+取决于问题与场景的相似性和复杂度，可以把底层的表达学习，从简单的共享embedding到共享一些层次的表达。极端的情况是我们可以直接共享所有的表达学习
+(representation learning)部分，而只接不同的网络head来完成不一样的任务。这样带来的另外一个好处是，不同的task可以共享一部分计算
+，从而实现计算的加速。 
+值得一提的另一篇paper是阿里妈妈团队提出的“完整空间多任务模型”（Entire Space Multi-Task Model，ESMM），也是很典型的多任务学习和信息补充思路，
+这篇paper解决的问题不是ctr(点击率)预估而是cvr(转化率)预估，传统CVR预估模型会有比较明显的样本选择偏差（sample selection bias）和训练数据过于稀疏
+（data sparsity ）的问题，而ESMM模型利用用户行为序列数据，在完整的样本数据空间同时学习点击率和转化率（post-view clickthrough&conversion rate，
+CTCVR），在一定程度上解决了这个问题。 
+在电商的场景下，用户的决策过程很可能是这样的，在观察到系统展现的推荐商品列表后，点击自己感兴趣的商品，进而产生购买行为。所以用户行为遵循这样一
+个决策顺序：impression → click → conversion。CVR模型旨在预估用户在观察到曝光商品进而点击到商品详情页之后购买此商品的概率，
+即pCVR = p(conversion|click,impression)。 
+预估点击率pCTR，预估点击下单率pCVR和预估点击与下单率pCTCVR关系如下。 
+图
+传统的CVR预估任务通常采用类似于CTR预估的技术进行建模。但是不同于CTR预估任务的是，这个场景面临一些特有的挑战：1) 样本选择偏差；2) 
+训练数据稀疏；3) 延迟反馈等。 
+图
+
+ESMM模型提出了下述的网络结构进行问题建模 
+图
+
+EMMS的特点是：
+在整个样本空间建模。pCVR 可以在先估计出pCTR 和pCTCVR之后计算得出，如下述公式。从原理上看，相当于分别单独训练两个模型拟合出pCTR
+和pCTCVR，进而计算得到pCVR 。 
+图
+
+注意到pCTR 和pCTCVR是在整个样本空间上建模得到的，pCVR 只是一个中间变量。因此，ESMM模型是在整个样本空间建模，而不像传统CVR预估模型那
+样只在点击样本空间建模。
+特征表示层共享。ESMM模型借鉴迁移学习和multi-task learning的思路，在两个子网络的embedding层共享特征表示词典。embedding层的表达参数占
+了整个网络参数的绝大部分，参数量大，需要大量的训练样本才能学习充分。显然CTR任务的训练样本量要大大超过CVR任务的训练样本量，ESMM模型中特征表
+示共享的机制能够使得CVR子任务也能够从只有展现没有点击的样本中学习，从而在一定程度上缓解训练数据稀疏性问题。
+
+
+总结:
+
+(1)FM其实是对嵌入特征进行两两内积实现特征二阶组合；FNN在FM基础上引入了MLP；
+(2)DeepFM通过联合训练、嵌入特征共享来兼顾FM部分与MLP部分不同的特征组合机制；
+(3)NFM、PNN则是通过改造向量积的方式来延迟FM的实现过程，在其中添加非线性成分来提升模型表现力；
+(4)AFM更进一步，直接通过子网络来对嵌入向量的两两逐元素乘积进行加权求和，以实现不同组合的差异化，也是一种延迟FM实现的方式；
+(5)DCN则是将FM进行高阶特征组合的方向上进行推广，并结合MLP的全连接式的高阶特征组合机制；
+(6)Wide&Deep是兼容手工特征组合与MLP的特征组合方式，是许多模型的基础框架；
+(7)Deep Cross是引入残差网络机制的前馈神经网络，给高维的MLP特征组合增加了低维的特征组合形式，启发了DCN；
+(8)DIN则是对用户侧的某历史特征和广告侧的同领域特征进行组合，组合成的权重反过来重新影响用户侧的该领域各历史特征的求和过程；
+(9)多任务视角则是更加宏观的思路，结合不同任务（而不仅是同任务的不同模型）对特征的组合过程，以提高模型的泛化能力。
+当然，广告点击率预估深度学习模型还有很多，比如Jie Zhu提出的基于决策树的神经网络（Deep Embedding Forest）将深度学习与树型模型结合起来。如果数据特征存在图像或者大量文本相关特征，传统的卷积神经网络、循环神经网络均可以结合到广告点击率预估的场景中。各个深度模型都有相应的特点，限于篇幅，我们就不再赘述了。
+
+18.后记
+目前深度学习的算法层出不穷，看论文确实有些应接不暇。我们的经验有两点：要有充分的生产实践经验，同时要有扎实的算法理论基础。
+很多论文的亮点其实是来自于实际做工程的经验。也辛亏笔者一直都在生产一线并带领算法团队进行工程研发
+（当然也因此荒废了近2年的博客，T△T ），积淀了一些特征工程、模型训练的经验，才勉强跟得上新论文。
+比如DIN“对用户侧的某领域历史特征基于广告侧的同领域特征进行加权求和”的思想，其实与传统机器学习对强业务相关特征进行针对性特征组合的特
+征工程思路比较相似。另一方面，对深度学习的经典、前沿方法的熟悉也很重要。从前面我们的串讲也能够看出，CTR预估作为一个业务特点很强的场景，
+在应用深度学习的道路上，也充分借鉴了注意力机制、残差网络、联合训练、多任务学习等经典的深度学习方法。了解博主的朋友也知道我们一直推崇理论
+与实践相结合的思路，我们自身对这条经验也非常受用。当然，计算广告是一个很深的领域，自己研究尚浅，串讲难免存在纰漏。欢迎大家指出问题，共同交流学习。
+
+
