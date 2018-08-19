@@ -1,0 +1,424 @@
+import tensorflow as tf
+import numpy as np
+import gym
+
+np.random.seed(1)
+tf.set_random_seed(1)
+
+#####################  hyper parameters  ####################
+
+MAX_EPISODES = 200
+MAX_EP_STEPS = 200
+LR_A = 0.001    # learning rate for actor
+LR_C = 0.001    # learning rate for critic
+GAMMA = 0.9     # reward discount
+REPLACEMENT = [
+    dict(name='soft', tau=0.01),
+    dict(name='hard', rep_iter_a=600, rep_iter_c=500)
+][1]            # you can try different target replacement strategies
+MEMORY_CAPACITY = 10000
+BATCH_SIZE = 32
+
+RENDER = False
+OUTPUT_GRAPH = True
+ENV_NAME = 'Pendulum-v0'
+
+###############################  Actor  ####################################
+
+'''
+定义超参数
+我们首先定义网络中的超参数，比如经验池的大小，两个网络的学习率等等:
+'''
+class Actor(object):
+    def __init__(self, sess, action_dim, action_bound, learning_rate, replacement):
+        self.sess = sess
+        self.a_dim = action_dim
+        self.action_bound = action_bound
+        self.lr = learning_rate
+        self.replacement = replacement
+        self.t_replace_counter = 0
+
+        with tf.variable_scope('Actor'):
+            # input s, output a
+            self.a = self._build_net(S, scope='eval_net', trainable=True)
+
+            # input s_, output a, get a_ for critic
+            self.a_ = self._build_net(S_, scope='target_net', trainable=False)
+
+        self.e_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='Actor/eval_net')
+        self.t_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='Actor/target_net')
+
+        if self.replacement['name'] == 'hard':
+            self.t_replace_counter = 0
+            self.hard_replace = [tf.assign(t, e) for t, e in zip(self.t_params, self.e_params)]
+        else:
+            self.soft_replace = [tf.assign(t, (1 - self.replacement['tau']) * t + self.replacement['tau'] * e)
+                                 for t, e in zip(self.t_params, self.e_params)]
+
+    def _build_net(self, s, scope, trainable):
+        with tf.variable_scope(scope):
+            init_w = tf.random_normal_initializer(0., 0.3)
+            init_b = tf.constant_initializer(0.1)
+            net = tf.layers.dense(s, 30, activation=tf.nn.relu,
+                                  kernel_initializer=init_w, bias_initializer=init_b, name='l1',
+                                  trainable=trainable)
+            with tf.variable_scope('a'):
+                actions = tf.layers.dense(net, self.a_dim, activation=tf.nn.tanh, kernel_initializer=init_w,
+                                          bias_initializer=init_b, name='a', trainable=trainable)
+                scaled_a = tf.multiply(actions, self.action_bound, name='scaled_a')  # Scale output to -action_bound to action_bound
+        return scaled_a
+
+    def learn(self, s):   # batch update
+        self.sess.run(self.train_op, feed_dict={S: s})
+
+        if self.replacement['name'] == 'soft':
+            self.sess.run(self.soft_replace)
+        else:
+            if self.t_replace_counter % self.replacement['rep_iter_a'] == 0:
+                self.sess.run(self.hard_replace)
+            self.t_replace_counter += 1
+
+    def choose_action(self, s):
+        s = s[np.newaxis, :]    # single state
+        return self.sess.run(self.a, feed_dict={S: s})[0]  # single action
+
+    def add_grad_to_graph(self, a_grads):
+        with tf.variable_scope('policy_grads'):
+            # ys = policy;
+            # xs = policy's parameters;
+            # self.a_grads = the gradients of the policy to get more Q
+            # tf.gradients will calculate dys/dxs with a initial gradients for ys, so this is dq/da * da/dparams
+            self.policy_grads = tf.gradients(ys=self.a, xs=self.e_params, grad_ys=a_grads)
+
+        with tf.variable_scope('A_train'):
+            opt = tf.train.AdamOptimizer(-self.lr)  # (- learning rate) for ascent policy
+            self.train_op = opt.apply_gradients(zip(self.policy_grads, self.e_params))
+
+
+###############################  Critic  ####################################
+
+class Critic(object):
+    def __init__(self, sess, state_dim, action_dim, learning_rate, gamma, replacement, a, a_):
+        self.sess = sess
+        self.s_dim = state_dim
+        self.a_dim = action_dim
+        self.lr = learning_rate
+        self.gamma = gamma
+        self.replacement = replacement
+
+        with tf.variable_scope('Critic'):
+            # Input (s, a), output q
+            self.a = a
+            self.q = self._build_net(S, self.a, 'eval_net', trainable=True)
+
+            # Input (s_, a_), output q_ for q_target
+            self.q_ = self._build_net(S_, a_, 'target_net', trainable=False)    # target_q is based on a_ from Actor's target_net
+
+            self.e_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='Critic/eval_net')
+            self.t_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='Critic/target_net')
+
+        with tf.variable_scope('target_q'):
+            self.target_q = R + self.gamma * self.q_
+
+        with tf.variable_scope('TD_error'):
+            self.loss = tf.reduce_mean(tf.squared_difference(self.target_q, self.q))
+
+        with tf.variable_scope('C_train'):
+            self.train_op = tf.train.AdamOptimizer(self.lr).minimize(self.loss)
+
+        with tf.variable_scope('a_grad'):
+            self.a_grads = tf.gradients(self.q, a)[0]   # tensor of gradients of each sample (None, a_dim)
+
+        if self.replacement['name'] == 'hard':
+            self.t_replace_counter = 0
+            self.hard_replacement = [tf.assign(t, e) for t, e in zip(self.t_params, self.e_params)]
+        else:
+            self.soft_replacement = [tf.assign(t, (1 - self.replacement['tau']) * t + self.replacement['tau'] * e)
+                                     for t, e in zip(self.t_params, self.e_params)]
+
+    def _build_net(self, s, a, scope, trainable):
+        with tf.variable_scope(scope):
+            init_w = tf.random_normal_initializer(0., 0.1)
+            init_b = tf.constant_initializer(0.1)
+
+            with tf.variable_scope('l1'):
+                n_l1 = 30
+                w1_s = tf.get_variable('w1_s', [self.s_dim, n_l1], initializer=init_w, trainable=trainable)
+                w1_a = tf.get_variable('w1_a', [self.a_dim, n_l1], initializer=init_w, trainable=trainable)
+                b1 = tf.get_variable('b1', [1, n_l1], initializer=init_b, trainable=trainable)
+                net = tf.nn.relu(tf.matmul(s, w1_s) + tf.matmul(a, w1_a) + b1)
+
+            with tf.variable_scope('q'):
+                q = tf.layers.dense(net, 1, kernel_initializer=init_w, bias_initializer=init_b, trainable=trainable)   # Q(s,a)
+        return q
+
+    def learn(self, s, a, r, s_):
+        self.sess.run(self.train_op, feed_dict={S: s, self.a: a, R: r, S_: s_})
+        if self.replacement['name'] == 'soft':
+            self.sess.run(self.soft_replacement)
+        else:
+            if self.t_replace_counter % self.replacement['rep_iter_c'] == 0:
+                self.sess.run(self.hard_replacement)
+            self.t_replace_counter += 1
+
+
+#####################  Memory  ####################
+
+class Memory(object):
+    def __init__(self, capacity, dims):
+        self.capacity = capacity
+        self.data = np.zeros((capacity, dims))
+        self.pointer = 0
+
+    def store_transition(self, s, a, r, s_):
+        transition = np.hstack((s, a, [r], s_))
+        index = self.pointer % self.capacity  # replace the old memory with new memory
+        self.data[index, :] = transition
+        self.pointer += 1
+
+    def sample(self, n):
+        assert self.pointer >= self.capacity, 'Memory has not been fulfilled'
+        indices = np.random.choice(self.capacity, size=n)
+        return self.data[indices, :]
+
+
+env = gym.make(ENV_NAME)
+env = env.unwrapped
+env.seed(1)
+
+state_dim = env.observation_space.shape[0]
+action_dim = env.action_space.shape[0]
+action_bound = env.action_space.high
+
+# all placeholder for tf
+with tf.name_scope('S'):
+    S = tf.placeholder(tf.float32, shape=[None, state_dim], name='s')
+with tf.name_scope('R'):
+    R = tf.placeholder(tf.float32, [None, 1], name='r')
+with tf.name_scope('S_'):
+    S_ = tf.placeholder(tf.float32, shape=[None, state_dim], name='s_')
+
+
+sess = tf.Session()
+
+# Create actor and critic.
+# They are actually connected to each other, details can be seen in tensorboard or in this picture:
+actor = Actor(sess, action_dim, action_bound, LR_A, REPLACEMENT)
+critic = Critic(sess, state_dim, action_dim, LR_C, GAMMA, REPLACEMENT, actor.a, actor.a_)
+actor.add_grad_to_graph(critic.a_grads)
+
+sess.run(tf.global_variables_initializer())
+
+M = Memory(MEMORY_CAPACITY, dims=2 * state_dim + action_dim + 1)
+
+if OUTPUT_GRAPH:
+    tf.summary.FileWriter("logs/", sess.graph)
+
+var = 3  # control exploration
+
+for i in range(MAX_EPISODES):
+    s = env.reset()
+    ep_reward = 0
+
+    for j in range(MAX_EP_STEPS):
+
+        if RENDER:
+            env.render()
+
+        # Add exploration noise
+        a = actor.choose_action(s)
+        a = np.clip(np.random.normal(a, var), -2, 2)    # add randomness to action selection for exploration
+        s_, r, done, info = env.step(a)
+
+        M.store_transition(s, a, r / 10, s_)
+
+        if M.pointer > MEMORY_CAPACITY:
+            var *= .9995    # decay the action randomness
+            b_M = M.sample(BATCH_SIZE)
+            b_s = b_M[:, :state_dim]
+            b_a = b_M[:, state_dim: state_dim + action_dim]
+            b_r = b_M[:, -state_dim - 1: -state_dim]
+            b_s_ = b_M[:, -state_dim:]
+
+            critic.learn(b_s, b_a, b_r, b_s_)
+            actor.learn(b_s)
+
+        s = s_
+        ep_reward += r
+
+        if j == MAX_EP_STEPS-1:
+            print('Episode:', i, ' Reward: %i' % int(ep_reward), 'Explore: %.2f' % var, )
+            if ep_reward > -300:
+                RENDER = True
+            break
+
+"""
+Using:
+tensorflow 1.0
+gym 0.8.0
+"""
+
+import tensorflow as tf
+import numpy as np
+import gym
+
+#####################  hyper parameters  ####################
+
+MAX_EPISODES = 200
+MAX_EP_STEPS = 200
+LR_A = 0.001    # learning rate for actor
+LR_C = 0.002    # learning rate for critic
+GAMMA = 0.9     # reward discount
+TAU = 0.01      # soft replacement
+MEMORY_CAPACITY = 10000
+BATCH_SIZE = 32
+
+RENDER = False
+ENV_NAME = 'Pendulum-v0'
+
+###############################  DDPG  ####################################
+'''
+定义超参数
+我们首先定义网络中的超参数，比如经验池的大小，两个网络的学习率等等:
+总结：
+Critic的状态估计网络的训练还是基于现实的Q值和估计的Q值的平方损失，
+估计的Q值根据当前的状态S和动作估计网络输出的动作A输入状态估计网络得到，而现实的Q值根据现实的奖励R，
+以及将下一时刻的状态S'和动作现实网络得到的动作A' 输入到状态现实网络 而得到的Q值的折现值加和得到(这里运用的是贝尔曼方程)。
+
+'''
+class DDPG(object):
+    def __init__(self, a_dim, s_dim, a_bound,):
+        self.memory = np.zeros((MEMORY_CAPACITY, s_dim * 2 + a_dim + 1), dtype=np.float32)
+        self.pointer = 0
+        self.sess = tf.Session()
+        self.a_replace_counter, self.c_replace_counter = 0, 0
+
+        self.a_dim, self.s_dim, self.a_bound = a_dim, s_dim, a_bound,
+
+        '''
+        定义网络输入
+        我们需要定义的placeholder包括当前的状态S，下一时刻的状态S',以及对应的奖励R，而动作A由Actor得到，因此不需要再定义：
+        '''
+        self.S = tf.placeholder(tf.float32, [None, s_dim], 's')
+        self.S_ = tf.placeholder(tf.float32, [None, s_dim], 's_')
+        self.R = tf.placeholder(tf.float32, [None, 1], 'r')
+
+        with tf.variable_scope('Actor'):
+            self.a = self._build_a(self.S, scope='eval', trainable=True)
+            a_ = self._build_a(self.S_, scope='target', trainable=False)
+        with tf.variable_scope('Critic'):
+            # assign self.a = a in memory when calculating q for td_error,
+            # otherwise the self.a is from Actor when updating Actor
+            q = self._build_c(self.S, self.a, scope='eval', trainable=True)
+            q_ = self._build_c(self.S_, a_, scope='target', trainable=False)
+
+        # networks parameters
+        '''
+        soft模式参数更新
+        可以看到，我们这里进行的是soft模式的参数更新，每次在原来target-net参数的基础上，改变一丢丢，增加一点点eval-net的参数信息。
+        '''
+        self.ae_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='Actor/eval')
+        self.at_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='Actor/target')
+        self.ce_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='Critic/eval')
+        self.ct_params = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='Critic/target')
+
+        # target net replacement
+        self.soft_replace = [[tf.assign(ta, (1 - TAU) * ta + TAU * ea), tf.assign(tc, (1 - TAU) * tc + TAU * ec)]
+                             for ta, ea, tc, ec in zip(self.at_params, self.ae_params, self.ct_params, self.ce_params)]
+
+        q_target = self.R + GAMMA * q_
+        # in the feed_dic for the td_error, the self.a should change to actions in memory
+        '''
+        定义两个网络的损失
+        关于两个网络的损失，我们之前已经详细介绍过了，这里只是对刚才思路的一个代码实现。
+        '''
+        td_error = tf.losses.mean_squared_error(labels=q_target, predictions=q)
+        self.ctrain = tf.train.AdamOptimizer(LR_C).minimize(td_error, var_list=self.ce_params)
+
+        a_loss = - tf.reduce_mean(q)    # maximize the q
+        self.atrain = tf.train.AdamOptimizer(LR_A).minimize(a_loss, var_list=self.ae_params)
+
+        self.sess.run(tf.global_variables_initializer())
+
+    def choose_action(self, s):
+        return self.sess.run(self.a, {self.S: s[np.newaxis, :]})[0]
+    '''
+    学习
+我们首先要从经验池中取出一个batch的数据，然后训练我们的Actor和Critic
+    '''
+    def learn(self):
+        # soft target replacement
+        self.sess.run(self.soft_replace)
+
+        indices = np.random.choice(MEMORY_CAPACITY, size=BATCH_SIZE)
+        bt = self.memory[indices, :]
+        bs = bt[:, :self.s_dim]
+        ba = bt[:, self.s_dim: self.s_dim + self.a_dim]
+        br = bt[:, -self.s_dim - 1: -self.s_dim]
+        bs_ = bt[:, -self.s_dim:]
+
+        self.sess.run(self.atrain, {self.S: bs})
+        self.sess.run(self.ctrain, {self.S: bs, self.a: ba, self.R: br, self.S_: bs_})
+    '''
+    存储经验
+    '''
+    def store_transition(self, s, a, r, s_):
+        transition = np.hstack((s, a, [r], s_))
+        index = self.pointer % MEMORY_CAPACITY  # replace the old memory with new memory
+        self.memory[index, :] = transition
+        self.pointer += 1
+    '''
+    构建两个网络
+    两个网络都是两层全链接的神经网络，Actor输出一个具体的动作，而Critic网络输出一个具体的Q值
+    '''
+    def _build_a(self, s, scope, trainable):
+        with tf.variable_scope(scope):
+            net = tf.layers.dense(s, 30, activation=tf.nn.relu, name='l1', trainable=trainable)
+            a = tf.layers.dense(net, self.a_dim, activation=tf.nn.tanh, name='a', trainable=trainable)
+            return tf.multiply(a, self.a_bound, name='scaled_a')
+
+    def _build_c(self, s, a, scope, trainable):
+        with tf.variable_scope(scope):
+            n_l1 = 30
+            w1_s = tf.get_variable('w1_s', [self.s_dim, n_l1], trainable=trainable)
+            w1_a = tf.get_variable('w1_a', [self.a_dim, n_l1], trainable=trainable)
+            b1 = tf.get_variable('b1', [1, n_l1], trainable=trainable)
+            net = tf.nn.relu(tf.matmul(s, w1_s) + tf.matmul(a, w1_a) + b1)
+            return tf.layers.dense(net, 1, trainable=trainable)  # Q(s,a)
+
+###############################  training  ####################################
+
+env = gym.make(ENV_NAME)
+env = env.unwrapped
+env.seed(1)
+
+s_dim = env.observation_space.shape[0]
+a_dim = env.action_space.shape[0]
+a_bound = env.action_space.high
+
+ddpg = DDPG(a_dim, s_dim, a_bound)
+
+var = 3  # control exploration
+for i in range(MAX_EPISODES):
+    s = env.reset()
+    ep_reward = 0
+    for j in range(MAX_EP_STEPS):
+        if RENDER:
+            env.render()
+
+        # Add exploration noise
+        a = ddpg.choose_action(s)
+        a = np.clip(np.random.normal(a, var), -2, 2)    # add randomness to action selection for exploration
+        s_, r, done, info = env.step(a)
+
+        ddpg.store_transition(s, a, r / 10, s_)
+
+        if ddpg.pointer > MEMORY_CAPACITY:
+            var *= .9995    # decay the action randomness
+            ddpg.learn()
+
+        s = s_
+        ep_reward += r
+        if j == MAX_EP_STEPS-1:
+            print('Episode:', i, ' Reward: %i' % int(ep_reward), 'Explore: %.2f' % var, )
+            if ep_reward > -300:RENDER = True
