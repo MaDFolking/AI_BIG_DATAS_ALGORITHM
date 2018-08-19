@@ -1,4 +1,10 @@
 DQN:  https://blog.csdn.net/u013236946/article/details/72871858
+DQN改进(1): Double DQN          https://www.jianshu.com/p/fae51b5fe000
+DQN改进(2):Prioritised replay   https://www.jianshu.com/p/db14fdc67d2c
+DQN改进(3) : Dueling Network    https://www.jianshu.com/p/b421c85796a2
+DDPG : https://www.jianshu.com/p/6fe18d0d8822
+MADDPG : https://www.jianshu.com/p/4e4e35d80137
+
 DDQN: https://blog.csdn.net/u013236946/article/details/73161586
 DDPG、NAF : https://blog.csdn.net/u013236946/article/details/73243310
 
