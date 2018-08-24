@@ -1,0 +1,532 @@
+'''
+这里需要用大量统计学方式去探索，如果各位电脑给力，可以用可视化去探索，这样更容易看到噪点和离群点。但由于本人电脑配置不高。
+所以用其他技巧来探索数据。
+'''
+'''
+桑坦德集团希望确定每个潜在客户的交易价值。这是桑坦德需要采取的第一步，以使他们的服务个性化。
+这个数据集后面会告诉我们40个重要的时间特征，但其他特征需要我们自己探索，总共4993个特征全部是加密的。
+'''
+
+import warnings
+import numpy as np
+import pandas as pd
+import lightgbm as lgb
+from sklearn.model_selection import  train_test_split
+
+from sklearn.decomposition import PCA
+from sklearn.decomposition import TruncatedSVD
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import StandardScaler
+
+'''
+忽略警告
+'''
+warnings.filterwarnings("ignore")
+
+PATH = ''                    # 里面填写自己的存储数据路径
+
+'''
+step1:数据集准备
+作为第一步，加载所需的数据集。还分离出目标变量，并将其从原始数据集中删除。
+这一步是这样完成的，整个数据文件可以直接用于分解。
+'''
+train = pd.read_csv(path+'train.csv')
+target = train['target']
+train.drop(['target','ID'],axis = 1,inplace = True)
+print("行数: {},列数: {}\n 数据的前五行: {}\n 数据的详细部分信息: {}\n".format(train.shape[0],train.shape[1],train.head(),train.describe()))
+
+'''
+结果:
+数据集中有4459行和4992个特征，这意味着该数据集包含比行数更多的列。规范数据集，使每个值都在同一范围内。
+我们首先想到的SVM中的SVR算法，但你要记住，SVR是最后维度大的时候才用，而我们处理之后具体多少维度不得而知。
+而且这是个大量稀疏矩阵，最后肯定是要密集计算，而且没有类别数据，所以最后很有可能构造的是一个维度不太多的数据集。
+'''
+
+'''
+step2: 标准化处理,train.values是转化为numpy.array
+'''
+stand_train = StandardScaler().fit_transform(train.values)
+
+'''
+step3: 特征统计
+计算特征的基本统计，如均值、方差、标准偏差,协方差,峰度(离群高低，查看是否过拟合),偏度(噪点高低,查看是否欠你和)
+有助于理解特征。在这一部分中，我们将计算关于这些特征的以下细节。
+'''
+from scipy.stats import skew, kurtosis
+feature_df = train.describe().T                                                                     #我们转至下，让我们要查看的指标当做列。
+feature_df = feature_df.reset_index().rename(columns = {"index":"columns"})                         #转至后重新设定下用户这个列，设置为columns
+feature_df['distinct_vals'] = feature_df['columns'].apply(lambda x:len(train[x].value_counts()))    #这个可以理解为频率
+feature_df['the_var'] = feature_df['columns'].apply(lambda x:np.var(train[x]))                      #方差
+feature_df['the_std'] = feature_df['columns'].apply(lambda x:np.std(train[x]))                      #标准差
+feature_df['the_skew'] = feature_df['columns'].apply(lambda x:train[x].skew)                        #偏度
+feature_df['the_kur'] = feature_df['columns'].apply(lambda x:train[x].kurtosis)                     #峰度
+feature_df['the_cor'] = feature_df['columns'].apply(lambda x:np.mean(train[x]))                     #均值
+feature_df['the_corr'] = feature_df['columns'].apply(lambda x:np.corrcoef(target,train[x])[0][1])   #每个用户它针对目标值的相似度
+print(feature_df.head())
+print(type(feature_df))
+
+'''
+我们没法做到可视化，由于内存原因，所以用排序方式观察特征的性质。
+'''
+print(feature_df.sort_values('the_var',ascending = True).loc[:10,'columns'])
+print(feature_df.sort_values('distinct_vals',ascending = True).loc[:10,'columns'])
+print(feature_df.sort_values('the_std',ascending = True).loc[:10,'columns'])
+#print(feature_df.sort_values('the_skew',ascending = True).loc[:10,'columns'])
+#print(feature_df.sort_values('the_kur',ascending = True).loc[:10,'columns'])
+print(feature_df.sort_values('the_cor',ascending = True).loc[:10,'columns'])
+print(feature_df.sort_values('the_corr',ascending = True).loc[:10,'columns'])
+
+'''
+解析:
+变量方差
+方差定义数据如何跨越平均值。通过取一个变量的平均值的每一个值的差平方来计算。
+统计直觉之一是，如果特征方差很小，那么特征将对模型贡献更少。然而，我不盲目地追随这一点，
+因为大部分的深度学习和提升模式对这些问题都很有帮助。但是，方差可以给出可丢弃的特征的概念。
+至少具有零方差的特征可以被舍弃，因为它们本质上是恒定的特征。
+（再次，这些特征在单独考虑时可能并不重要，但在行聚合特征中可能有用）
+'''
+
+'''
+step4:处理特征性强弱的特征。
+这里不同类型业务会有不同方案，推荐，广告，销量，NLP这些业务请看我大项目里的草稿代码解析。
+我们这里主要针对这次银行业务做分析。
+'''
+
+print(len(feature_df[feature_df['the_var'].astype(float)==0.0]))       #统计方差为0的，也就是弱特征。
+feature_df = feature_df.sort_values('the_var',ascending=True)
+feature_df['the_var'] = (feature_df['the_var']-feature_df['the_var'].min())/(feature_df['the_var'].max()-feature_df['the_var'].min())
+print(feature_df['the_var'])
+# plt.scatter(x = feature_df['columns'],y = feature_df['the_var'])
+# plt.show()
+
+'''
+step4总结:
+由于数据太大，自己电脑很难显示，我就用数据统计说明。
+我们可以看到大量的变量具有小于0.01的变量，较少的变量具有大于0.01的方差。
+与目标变量相关
+皮尔森相关系数是测量两个连续变量之间线性强弱，越大线性关系越强。
+线性关系:正比例函数是线性关系的特例，反比例不是线性关系，可以理解为正相关的一一对应关系。y = ax+b这种。(a,b是常数)
+记住必须是一一对应，开方函数这种不是。所以y = ax+b(a是变量就不是一一对应，就不是线性关系。)
+另一个对列有帮助的统计测试是特征与目标变量的相关性。高相关的特征对于模型来说是好的，
+相反的可能不是真的。让我们看看什么是分布与目标变量在这个数据集。
+'''
+
+'''
+trace1 = go.Histogram(x=feature_df[feature_df['column_var'] <= 0.01]['column_var'], opacity=0.45, marker=dict(color="red"))
+layout = dict(height=400, title='Distribution of Variable Variance <= 0.01', legend=dict(orientation="h"));
+fig = go.Figure(data=[trace1], layout=layout);
+iplot(fig)
+
+trace1 = go.Histogram(x=feature_df[feature_df['column_var'] > 0.01]['column_var'], opacity=0.45, marker=dict(color="red"))
+layout = dict(height=400, title='Distribution of Variable Variance > 0.01', legend=dict(orientation="h"));
+fig = go.Figure(data=[trace1], layout=layout);
+iplot(fig)
+
+trace1 = go.Histogram(x=feature_df['target_corr'], opacity=0.45, marker=dict(color="green"))
+layout = dict(height=400, title='Distribution of correlation with target', legend=dict(orientation="h"));
+fig = go.Figure(data=[trace1], layout=layout);
+iplot(fig);
+'''
+
+'''
+我们可以看到，大多数变量与目标变量不是高度相关的，并且大多数变量与目标具有极低的相关性。
+因此，利用基本统计方法可以获得具有统计学意义的特征的方法之一。同样可以用来挑选重要的特征和丢弃其他的特征。
+'''
+
+'''
+step5:分解为特征向量和特征值
+在线性代数中，线性变换的特征向量是一个非零向量，当应用线性变换时，它仅由标量因子改变。
+如果T是从F空间上的向量空间V到自身的线性变换，V是V中的向量而不是零向量，则V是T的特征向量，如果T（V）是V的标量倍数。
+T（V）＝1V
+其中，α是一个标量值，称为与特征向量V相关的特征根或特征根。在分解方面，特征向量是任何数据集的主要分量。
+让我们想象个体和累积方差由特征向量解释。
+'''
+
+'''
+特征值与特征向量:
+1、矩阵基础
+
+矩阵是一个表示二维空间的数组，矩阵可以看做是一个变换。在线性代数中，矩阵可以把一个向量变换到另一个位置，'
+或者说从一个坐标系变换到另一个坐标系。矩阵的“基”，实际就是变换时所用的坐标系。而所谓的相似矩阵，就是同样的变换，
+只不过使用了不同的坐标系。线性代数中的相似矩阵实际上就是要使这些相似的矩阵有一个好看的外表，而不改变其变换的功用。
+
+2、矩阵的特征方程式
+
+   　　　　AX = Xλ
+
+方程左边就是把向量x变到另一个位置；右边是把向量x作了一个拉伸;
+
+任意给定一个矩阵A，并不是对所有的向量x它都能拉长（缩短）。凡是能被矩阵A拉长（缩短）的向量就称为矩阵A的特征向量（Eigenvector）；
+拉长（缩短）的量就是这个特征向量对应的特征值（Eigenvalue）
+
+对于实对称矩阵来说，不同特征值对应的特征向量必定正交;我们也可以说，一个变换矩阵的所有特征向量组成了这个变换矩阵的一组基;
+
+3、在层次分析法中（AHP） 最大特征根法确定权重
+特征根在一定程度上反映了 成对比较矩阵（正互反阵）的总体特征。
+所有的特征向量的集合构成了矩阵的基，特征向量是基，特征值反应矩阵在各个方向上的值，特征值的模则代表矩阵在每个基上的投影长度。
+不同的特征向量就是矩阵不同的特点，特征值就是这些特点的强弱。
+'''
+
+mean_vec = np.mean(stand_train,axis = 0)
+cov_matrix = np.cov(stand_train.T)
+'''
+np.linalg:矩阵和矢量积
+np.linalg.eig:返回正方形阵列的特征值和右特征向量。
+特征值:可以理解为该特征向量的变化率，特征向量:就是该特征的向量。特征值可以为正/负。
+AX = Xλ   X为特征向量，A是矩阵， λ就相当于特征值
+'''
+eig_vals,eig_vecs = np.linalg.eig(cov_matrix)
+#让我们的特征值与右特征向量成为一个元组列表格式。
+eig_pairs = [(np.abs(eig_vals[i]),eig_vecs[:,i]) for i in range(len(eig_vals))]
+
+
+'''
+step6:PCA
+主成分分析是寻找高维数据集的大部分信息向量的技术。
+换言之，PCA从包含大量特征的数据集中提取组件的重要变量。提取的重要特征的目标是从数据集捕获最大可能的信息。
+第一主成分是具有最大方差的数据集特征的线性组合。它决定了数据中最高可变性的方向。
+如果分量不相关，则它们的方向应该是正交的。这表明相关的B/W成分为零。所有后续主成分遵循类似的概念，
+即它们捕获剩余的变化而不与先前的分量相关。
+'''
+
+'''
+(1)找到正确的元件数量
+我们从特征向量的累积频率图中观察到，(频率也是个很重要特征)
+大约 1000 个变量可以给出90%个解释的数据集的方差。
+我们可以使用具有N个分量的PCA，并且获得与所解释的方差的阈值相匹配的正确数字。
+'''
+def _get_number_components(model,threshold):
+    '''
+    explained_variance_ratio_:每个所选组件解释的差异百分比。也就是特征差异性，默认方差为1.我们这里设置0.85
+    具体做法是做个循环，然后找到差异大于阈值的即可，这样就找到一些强相关性。这之前要fit_transform
+    '''
+    component_variance = model.explained_variance_ratio_
+    explained_variance = 0.0
+    components  = 0
+
+    for var in component_variance:
+        explained_variance += var
+        components += 1
+        if (explained_variance >= threshold):
+            break
+
+    return components
+
+pca = PCA()
+train_pca = pca.fit_transform(stand_train)
+components = _get_number_components(pca,threshold=0.85)
+print(components)
+print("PCA:",pca[:,1])
+'''
+因此，对于阈值＝0.85，我们可以选择993个分量。这些组件将解释数据集的方差的大约85%。
+'''
+
+'''
+小知识：这里介绍下各种PCA相关知识。
+4.3.1 Kernel PCA -> 内核PCA： 去燥，压缩。
+KernelPCA是PCA的扩展，它通过使用核来实现非线性维数约简。它有许多应用，包括去噪、压缩和结构化预测（核依赖估计）。
+
+4.3.2Incremental PCA -> 增量PCA： 增加记忆功能。
+增量PCA的工作原理类似于PCA，但根据输入数据的大小，增量PCA更具有记忆效率。这种技术允许部分计算几乎完全匹配PCA的结果，
+同时以小批量的方式处理数据。
+
+4.3.3Sparse PCA -> 稀疏PCA： 针对稀疏矩阵。
+稀疏PCA发现稀疏分量的集合，可以优化重建数据。稀疏度是可调参数。
+
+4.3.4Mini Batch Sparse PCA: - > 小批量稀疏PCA： 速度快
+小批量稀疏PCA类似于稀疏PCA，但是它通过从数据中获取小批次来计算组件。它更快，但不准确。
+
+5。Truncated SVD 截断奇异值分解 ->针对稀疏矩阵。
+奇异值分解或奇异值分解是将矩阵分解成其组成部分的矩阵分解方法，以使某些后续矩阵计算更简单。
+截断奇异值分解（SVD）是SVD的变体，它也被用于二元性约简。与PCA相反，该估计器在计算奇异值分解之前不以数据为中心。
+这意味着它可以很好地与稀疏矩阵有效地工作。
+
+这些PCA用法都跟PCA一样
+pca = TruncatedSVD(30)
+pca.fit_transform(train)
+'''
+
+svd_pca = TruncatedSVD(n_components = components)
+svd_pca.fit_transform(stand_train)
+
+'''
+我们可以观察到PCA和截断SVD的结果几乎是相似的。这是因为PCA是（截断）SVD在中心数据（通过每个特征平均减法）。
+如果数据已经居中，这两个类将做同样的操作，我们可以在图中观察到。TruncatedSVD是非常有用的大型稀疏数据集，不能集中在不使用太多的内存。
+'''
+
+'''
+step6"独立分量分析
+工业中它主要用来从混合数据中提取出原始的独立信号。
+这个算法我理解并不一定很透彻，只是看了个大神用它做数据探索的步骤之一。
+
+我的理解是:
+将很多有噪音的数据提取出它的原始没有噪音的数据，简单说就是去燥后将各类独立的特征分离出来。类似聚合作用。
+而独立分量分析将包含多变量特征的数据集分离为最大独立的加性子分量。通常，ICA不用于二元性减少，而是用于分离各个组件。
+
+'''
+from sklearn.decomposition import FastICA
+obj_ica = FastICA(n_components=components)
+obj_ica.fit_transform(stand_train)
+'''
+plot_3_components(X_ica, 'ICA - First three components')
+plot_2_components(X_ica, 'ICA - First two components')
+'''
+
+'''
+Factor Analysis:(潜在变量到观察到的变量的变换。) 潜在变量是观察到的变量构建的模型预测新的模型。
+因子分析（FA）
+一个带有高斯潜变量的简单线性生成模型。
+假设观察结果是由较低维潜在因子和增加的高斯噪声的线性变换引起的。在不失一般性的情况下，
+因子根据具有零均值和单位协方差的高斯分布。噪声也是零均值并且具有任意对角线协方差矩阵。
+如果我们进一步限制模型，通过假设高斯噪声是均匀的（所有对角线条目是相同的）我们将获得 PPCA。
+FactorAnalysis 使用期望最大化（EM）执行所谓的加载矩阵的最大似然估计，即 潜在变量到观察到的变量的变换。
+
+潜变量:
+潜变量，与可观察变量相对，是不直接观察但是通过观察到的其他变量推断（通过数学模型）的变量（直接测量）。
+旨在用潜在变量解释观察变量的数学模型称为潜变量模型。
+
+高斯混合模型就是用高斯概率密度函数（正态分布曲线）精确地量化事物，
+它是一个将事物分解为若干的基于高斯概率密度函数（正态分布曲线）形成的模型。
+
+高斯模型就是用高斯概率密度函数（正态分布曲线）精确地量化事物，
+将一个事物分解为若干的基于高斯概率密度函数（正态分布曲线）形成的模型。
+'''
+from sklearn.decomposition import FactorAnalysis
+obj_fa = FactorAnalysis(n_components = 30)
+X_fa = obj_fa.fit_transform(stand_train)
+
+'''
+8。非负矩阵分解 -> 降维，源分离或主题提取。
+NNMF是用于寻找两个非负矩阵（W，H）的技术，其乘积近似于非负矩阵X。
+'''
+from sklearn.decomposition import NMF
+obj = NMF(n_components = 2)
+X_nmf = obj.fit_transform(train)
+
+'''
+9.通过高斯随机投影降低维数
+随机矩阵的分量是从N（0,1 / n_个分量）中提取的。
+'''
+from sklearn.random_projection import GaussianRandomProjection
+obj_grp = GaussianRandomProjection(n_components = 30, eps=0.1)
+X_grp = obj_grp.fit(stand_train)
+
+'''
+10.跟PCA相似的，这个我在其他地方写过。
+通过稀疏随机投影减少维数
+from sklearn.random_projection import SparseRandomProjection
+稀疏随机矩阵是密集随机投影矩阵的替代方案，其保证了类似的嵌入质量，同时具有更高的存储器效率并且允许更快地计算投影数据。
+有时候做特征构造时，可以用它降维到比较小的维度再拼接原始维度，但具体效果还是要看结果而定
+obj_srp = SparseRandomProjection(n_components = 30, eps=0.1)
+X_srp = obj_srp.fit_transform(standardized_train)
+'''
+
+'''
+11。 TSNE -> 针对非线性数据集分解，同时也是针对高维度数据。映射到2/3个维度。
+
+进一步将数据集分解成两个组件：T-SNE
+
+T-SNE在2008被引入作为使用非线性关系的数据集分解的方法。
+（T-SNE）T分布随机邻居嵌入是一种用于探索高维数据的非线性降维算法。它将多维数据映射到适合人类观察的两个或多个维度。
+T-SNE是基于邻域图上随机游动的概率分布来寻找数据内的结构。目标是在高维空间中获取一组点，
+并在低维空间（通常是2D平面）中找到这些点的表示。将其应用于截断的SVD组件，并进一步将数据分解为两个组件。
+
+tsne_model = TSNE(n_components=2, verbose=1, random_state=42, n_iter=500)
+tsne_results = tsne_model.fit_transform(X_svd)
+traceTSNE = go.Scatter(
+    x = tsne_results[:,0],
+    y = tsne_results[:,1],
+    name = target,
+     hoveron = target,
+    mode = 'markers',
+    text = target,
+    showlegend = True,
+    marker = dict(
+        size = 8,
+        color = '#c94ff2',
+        showscale = False,
+        line = dict(
+            width = 2,
+            color = 'rgb(255, 255, 255)'
+        ),
+        opacity = 0.8
+    )
+)
+data = [traceTSNE]
+
+layout = dict(title = 'TSNE (T-Distributed Stochastic Neighbour Embedding)',
+              hovermode= 'closest',
+              yaxis = dict(zeroline = False),
+              xaxis = dict(zeroline = False),
+              showlegend= False,
+
+             )
+
+fig = dict(data=data, layout=layout)
+iplot(fig)
+'''
+
+
+'''
+12。具有分解特征的基线模型
+让我们使用分解的特征创建基线模型。
+将30个维度分别增加到我们的训练集中，然后下面进行测试。针对我们上述中的降维模型.
+这里大概解释下基线模型。
+基线模型是在算法选择前的工作，我们的基线为rmse，还有点用accuracy,就是个评判标准。
+base line主要用零规则算法。
+对于分类问题,一个规则是预测训练集中常见的类的取值，训练集有90个类为0，的实例，10个类为1的实例。
+那么输出值都预测为0. 此时基线精度为90/100.
+回归问题需要预测非离散型值。一个默认的好的预测方法是预测数据的集中趋势（central tendency）。
+这可以是平均值或中值。使用训练集观察到的因变量的平均值是一个很不错的默认方法
+我们这里是主要针对方差。
+
+'''
+def _add_decomposition(df,decomp,ncomp,flag):
+    for i in range(1,ncomp+1):
+        df[flag+"_"+str(i)] = decomp[:,i - 1]
+_add_decomposition(train, pca, 30, 'pca')
+_add_decomposition(train, svd_pca, 30, 'svd')
+#_add_decomposition(train, ica, 30, 'ica')
+_add_decomposition(train, X_fa, 30, 'fa')
+_add_decomposition(train, X_grp, 30, 'grp')
+#_add_decomposition(train, X_srp, 30, 'srp')
+
+'''
+13.准备数据集-创建训练，测试分割并获取特征名称
+'''
+all_features = [x for x in train.columns if x not in ["ID","target"]]
+all_features = [x for x in all_features if "_" not in x]
+decomposed_features = [x for x in train.columns if "_" in x]
+target_log = np.log1p(target.values)
+train_x,val_x,train_y,val_y = train_test_split(train,target_log,test_size=0.20,random_state=2018)
+
+params = {'learning_rate': 0.01,
+          'max_depth': 16,
+          'boosting': 'gbdt',
+          'objective': 'regression',
+          'metric': 'rmse',
+          'is_training_metric': True,
+          'num_leaves': 144,
+          'feature_fraction': 0.9,
+          'bagging_fraction': 0.7,
+          'bagging_freq': 5,
+          'seed':2018}
+
+'''
+下面是训练所有特征，看看结果
+'''
+train_X = lgb.Dataset(train_x[all_features], label=train_y)
+val_X = lgb.Dataset(val_x[all_features], label=val_y)
+model1 = lgb.train(params, train_X, 1000, [val_X], verbose_eval=100, early_stopping_rounds=100)
+
+'''
+[100]	valid_0's rmse: 1.53257
+[200]	valid_0's rmse: 1.45682
+[300]	valid_0's rmse: 1.43489
+[400]	valid_0's rmse: 1.42552
+[500]	valid_0's rmse: 1.42333
+[600]	valid_0's rmse: 1.42429
+[700]	valid_0's rmse: 1.42361
+Early stopping, best iteration is:
+[650]	valid_0's rmse: 1.42304
+'''
+
+'''
+
+Lets now train another model which uses only decomposed features
+现在让我们训练另一个只使用分解特征的模型。也就是用了这些降维后提取的维度看看效果。我们分别尝试上述中降维后的维度特效
+对比来看。毕竟这几种稀疏矩阵降维我们也不知道用哪个好。
+'''
+train_X = lgb.Dataset(train_x[decomposed_features], label=train_y)
+val_X = lgb.Dataset(val_x[decomposed_features], label=val_y)
+model2 = lgb.train(params, train_X, 3000, [val_X], verbose_eval=100, early_stopping_rounds=100)
+
+'''
+[100]	valid_0's rmse: 1.51033
+[200]	valid_0's rmse: 1.43794
+[300]	valid_0's rmse: 1.42177
+[400]	valid_0's rmse: 1.41842
+Early stopping, best iteration is:
+[361]	valid_0's rmse: 1.4175
+'''
+
+'''
+让我们使用模型中的所有特性，但是让我们使用随机森林来选择重要的特征。这里用到所有特征+降维后特征的拼接。
+'''
+
+complete_features = all_features + decomposed_features
+model = RandomForestRegressor(n_jobs=-1, random_state=2018)
+model.fit(train[complete_features], target)
+importances = model.feature_importances_
+
+importances_df = pd.DataFrame({'importance': importances, 'feature': complete_features})
+importances_df = importances_df.sort_values(by=['importance'], ascending=[False])
+important_features = importances_df[:750]['feature'].values
+
+train_X = lgb.Dataset(train_x[important_features], label=train_y)
+val_X = lgb.Dataset(val_x[important_features], label=val_y)
+model3 = lgb.train(params, train_X, 3000, [val_X], verbose_eval=100, early_stopping_rounds=100)
+'''
+最后看下面答案，这种方式最好。
+'''
+
+'''
+[100]	valid_0's rmse: 1.50861
+[200]	valid_0's rmse: 1.43577
+[300]	valid_0's rmse: 1.41614
+[400]	valid_0's rmse: 1.41114
+[500]	valid_0's rmse: 1.40898
+[600]	valid_0's rmse: 1.40882
+[700]	valid_0's rmse: 1.40943
+Early stopping, best iteration is:
+[656]	valid_0's rmse: 1.40759
+'''
+
+'''
+预测
+'''
+
+test = pd.read_csv(path+"test.csv")
+testid = test.ID.values
+test = test.drop('ID', axis = 1)
+
+
+'''
+获取测试数据的分解分量
+'''
+
+standardized_test = StandardScaler().fit_transform(test[all_features].values)
+tsX_pca = pca.transform(standardized_test)
+tsX_svd = svd_pca.transform(standardized_test)
+tsX_ica = obj_ica.transform(standardized_test)
+tsX_fa  = obj_fa.transform(standardized_test)
+tsX_grp = obj_grp.transform(standardized_test)
+#tsX_srp = obj_srp.transform(standardized_test)
+
+'''
+基准线加入测试数据
+'''
+_add_decomposition(test, tsX_pca, 30, 'pca')
+_add_decomposition(test, tsX_svd, 30, 'svd')
+_add_decomposition(test, tsX_ica, 30, 'ica')
+_add_decomposition(test, tsX_fa, 30, 'fa')
+_add_decomposition(test, tsX_grp, 30, 'grp')
+#_add_decomposition(test, tsX_srp, 30, 'srp')
+
+pred = np.expm1(model3.predict(test[important_features], num_iteration=model3.best_iteration))
+sub = pd.DataFrame()
+sub['ID'] = testid
+sub['target'] = pred
+sub.to_csv('submission.csv', index=False)
+sub.head()
+
+
+
+
+
+
+
+
+
+
+
