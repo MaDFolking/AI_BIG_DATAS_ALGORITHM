@@ -1,0 +1,28 @@
+'''
+前期做完数据探索后，分析出几个降维处理后，我们后续可以进行聚类操作，但这步我放在了第三步，第二步，我们先大概了解下特征性强弱，这种数据集，我的建议用
+随机森林树形结构去特征提取效果要强于稳定性随机选择(Lasso提取特征)。因为线性算法是一一对应关系，不适合除了离散型稀疏高维度数据(我们已经探索过了)。
+所以我们这次不适合用线性+树形同时拟合。 所以我最终选择是三个树形+一个Lasso 配合stacking融合。但这些是后话了。
+'''
+
+import warnings
+import numpy as np
+import pandas as pd
+import xgboost as xgb
+import seaborn as sns
+import lightgbm as lgb
+import matplotlib.pyplot as plt
+
+from sklearn import model_selection
+from sklearn.decomposition import PCA
+from mpl_toolkits.mplot3d import Axes3D
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import GradientBoostingRegressor
+
+'''
+PS:这次评估指标是:均方根对数误差。  也就是RMSPLE 这个很重要，不要忽略。
+'''
+
+PATH = ''      #存储数据的路径
+train_df = pd.read_csv(PATH + 'train.csv')
+test_df = pd.read_csv(PATH + 'test.csv')
