@@ -1,4 +1,283 @@
+
+
+
+import gc
+import random
+import warnings
+import numpy as np
+import pandas as pd
+import lightgbm as lgb
+
+
+from sklearn.cluster import KMeans
+from sklearn import model_selection
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import normalize
+
+random.seed(2018)
+warnings.filterwarnings('ignore')
+
+
+PATH = ''                                       # 存储数据的路径
+train = pd.read_csv(PATH + 'train.csv')
+test = pd.read_csv(PATH + 'test.csv')
+
+num_train_data = len(train)
+num_train_feature = train.shape[1]
+
+num_test_data = len(test)
+num_test_feature = test.shape[1]
+
+print("训练集的数据量为:{} , 特征数为: {} , 测试集数据量为:{} , 特征数为:{}".format(num_train_data, num_train_feature,
+                                                             num_test_data, num_test_feature))
+
 '''
-在数据探索和特征探索后，我们针对这种高维度一般是PCA后再聚类，然后根据类别再制定新的方案。
+因为是银行业务，所以0就没意义，统计不为0的数据,如果有不为0的数据，我们显示特征，并排序。
+'''
+# print("训练集不为0的特征数为: {}".format(train.columns[train.isnull().sum() != 0].size))
+# if (train.columns[train.isnull().sum() != 0].size):
+#     print("训练集不为0的特征为: {}".format(list(train.columns[train.isnull().sum() != 0])))
+#     train[train.columns[train.isnull().sum() != 0]].isnull().sum().sort_values(ascending=False)
+#
+# print("测试集不为0的特征数为: {}".format(test.columns[test.isnull().sum() != 0].size))
+# if (test.columns[test.isnull().sum() != 0].size):
+#     print("测试集不为0的特征为: {}".format(list(test.columns[test.isnull().sum() != 0])))
+#     test[test.columns[test.isnull().sum() != 0]].isnull().sum().sort_values(ascending=False)
+
+X_train = train.drop(["ID", "target"], axis=1)
+y_train = np.log1p(train["target"].values)
+
+X_test = test.drop(["ID"], axis=1)
+
+'''
+去除弱特征性，也就是方差/标准差为0的。
+'''
+colsToRemove = []
+for col in X_train.columns:
+    if X_train[col].std() == 0:
+        colsToRemove.append(col)
+
+X_train.drop(colsToRemove, axis=1, inplace=True)
+X_test.drop(colsToRemove, axis=1, inplace=True)
+
+print("方差为0的列为：",colsToRemove)
+print("删除方差为0后的维度为: ", X_train.shape, " ", X_test.shape)
+
+columns = X_train.columns
+
+'''
+删除线性相同的特征，也就是相同数值的。
+'''
+# diffcols = []
+# for i in range(len(columns) - 1):
+#     vals = X_train[columns[i]].values
+#     for j in range(i + 1, len(columns)):
+#         if np.array_equal(vals, X_train[columns[j]]):
+#             diffcols.append(columns[j])
+#
+# print("线性相同的特征为:", diffcols)
+# X_train.drop(diffcols, axis=1, inplace=True)
+# X_test.drop(diffcols, axis=1, inplace=True)
+X_train.drop(['d60ddde1b', 'acc5b709d', 'f333a5f60', 'f8d75792f', '912836770', 'f333a5f60'],axis = 1,inplace = True)
+X_test.drop(['d60ddde1b', 'acc5b709d', 'f333a5f60', 'f8d75792f', '912836770', 'f333a5f60'],axis = 1,inplace = True)
+
+'''
+['d60ddde1b', 'acc5b709d', 'f333a5f60', 'f8d75792f', '912836770', 'f333a5f60']
+'''
+print("删除线性相同特征后的维度为: ", X_train.shape, " ", X_test.shape)
+
+'''
+删除相同列
+'''
+def drop_sparse(train, test):
+    flist = [x for x in train.columns if not x in ['ID','target']]
+    for f in flist:
+        if len(np.unique(train[f]))<2:
+            train.drop(f, axis=1, inplace=True)
+            test.drop(f, axis=1, inplace=True)
+    return train, test
+
+X_train, X_test = drop_sparse(X_train, X_test)
+print("删除相同列特征后的维度为: ", X_train.shape, " ", X_test.shape)
+
+'''
+因为是稀疏矩阵，我们尝试增加特殊维度，比如和为0的列。
+'''
+def add_SumZeros(train, test, features):
+    flist = [x for x in train.columns if not x in ['ID','target']]
+    if 'SumZeros' in features:
+        train.insert(1, 'SumZeros', (train[flist] == 0).astype(int).sum(axis=1))
+        test.insert(1, 'SumZeros', (test[flist] == 0).astype(int).sum(axis=1))
+    flist = [x for x in train.columns if not x in ['ID','target']]
+
+    return train, test
+
+X_train, X_test = add_SumZeros(X_train, X_test, ['SumZeros'])
+
+print("增加和为0的列的维度为: ", X_train.shape, " ", X_test.shape)
+
+'''
+相反，尝试增加非0的总数的列。
+'''
+def add_SumValues(train, test, features):
+    flist = [x for x in train.columns if not x in ['ID','target']]
+    if 'SumValues' in features:
+        train.insert(1, 'SumValues', (train[flist] != 0).astype(int).sum(axis=1))
+        test.insert(1, 'SumValues', (test[flist] != 0).astype(int).sum(axis=1))
+    flist = [x for x in train.columns if not x in ['ID','target']]
+
+    return train, test
+
+X_train, X_test = add_SumValues(X_train, X_test, ['SumValues'])
+
+print("增加和为非0的列的维度为: ", X_train.shape, " ", X_test.shape)
+
+'''
+尝试增加一些特殊值,注意，一定是在原特征后增加
+'''
+def add_OtherAgg(train, test, features,target):
+    flist = [x for x in train.columns if not x in ['ID', 'target', 'SumZeros', 'SumValues']]
+    if 'OtherAgg' in features:
+        train['Mean'] = train[flist].mean(axis=1)
+        train['Median'] = train[flist].median(axis=1)
+        train['Mode'] = train[flist].mode(axis=1)
+        train['Max'] = train[flist].max(axis=1)
+        train['Var'] = train[flist].var(axis=1)
+        train['Std'] = train[flist].std(axis=1)
+        train['Skew'] = train[flist].apply(lambda x: train[x].skew)
+        train['Kur'] = train[flist].apply(lambda x: train[x].kurtosis)
+        train['Cor'] = train[flist].apply(lambda x: np.mean(train[x]))
+        train['Corr'] = train[flist].apply(lambda x: np.corrcoef(target, train[x])[0][1])
+
+        test['Mean'] = test[flist].mean(axis=1)
+        test['Median'] = test[flist].median(axis=1)
+        test['Mode'] = test[flist].mode(axis=1)
+        test['Max'] = test[flist].max(axis=1)
+        test['Var'] = test[flist].var(axis=1)
+        test['Std'] = test[flist].std(axis=1)
+        test['Skew'] = test[flist].apply(lambda x: train[x].skew)
+        test['Kur'] = test[flist].apply(lambda x: train[x].kurtosis)
+        test['Cor'] = test[flist].apply(lambda x: np.mean(train[x]))
+        test['Corr'] = test[flist].apply(lambda x: np.corrcoef(target, train[x])[0][1])
+
+    flist = [x for x in train.columns if not x in ['ID', 'target', 'SumZeros', 'SumValues']]
+    print(flist)
+    return train, test
+
+X_train, X_test = add_OtherAgg(X_train, X_test, ['OtherAgg'],y_train)
+
+print("增加列后的维度为:",X_train.shape," ",X_test.shape)
+
+'''
+K-means聚类
+'''
+flist = [x for x in X_train.columns if not x in ['ID','target']]
+
+flist_kmeans = []
+for ncl in range(2,11):
+    cls = KMeans(n_clusters=ncl)
+    cls.fit_predict(X_train[flist].values)
+    X_train['kmeans_cluster_'+str(ncl)] = cls.predict(X_train[flist].values)
+    X_test['kmeans_cluster_'+str(ncl)] = cls.predict(X_test[flist].values)
+    flist_kmeans.append('kmeans_cluster_'+str(ncl))
+print(flist_kmeans)
+
+gc.collect()
+print("Train set size: {}".format(X_train.shape))
+print("Test set size: {}".format(X_test.shape))
+
+flist = [x for x in X_train.columns if not x in ['ID','target']]
+
+'''
+PCA降维
+'''
+n_components = 20
+flist_pca = []
+pca = PCA(n_components=n_components)
+x_train_projected = pca.fit_transform(normalize(X_train[flist], axis=0))
+x_test_projected = pca.transform(normalize(X_test[flist], axis=0))
+for npca in range(0, n_components):
+    X_train.insert(1, 'PCA_'+str(npca+1), x_train_projected[:, npca])
+    X_test.insert(1, 'PCA_'+str(npca+1), x_test_projected[:, npca])
+    flist_pca.append('PCA_'+str(npca+1))
+print(flist_pca)
+
+gc.collect()
+print("Train set size: {}".format(X_train.shape))
+print("Test set size: {}".format(X_test.shape))
+
+X_train.head(n=10)
+
+X_test.head(n=10)
+
+
+def run_lgb(train_X, train_y, val_X, val_y, test_X):
+    params = {
+        "objective": "regression",
+        "metric": "rmse",
+        "num_leaves": 30,
+        "learning_rate": 0.01,
+        "bagging_fraction": 0.7,
+        "feature_fraction": 0.7,
+        "bagging_frequency": 5,
+        "bagging_seed": 2018,
+        "verbosity": -1
+    }
+
+    lgtrain = lgb.Dataset(train_X, label=train_y)
+    lgval = lgb.Dataset(val_X, label=val_y)
+    evals_result = {}
+    model = lgb.train(params, lgtrain, 1000, valid_sets=[lgtrain, lgval], early_stopping_rounds=100,
+                      verbose_eval=200, evals_result=evals_result)
+
+    pred_test_y = model.predict(test_X, num_iteration=model.best_iteration)
+    return pred_test_y, model, evals_result
+
+# Training LGB
+seeds = [42, 2018]
+pred_test_full_seed = 0
+for seed in seeds:
+    kf = model_selection.KFold(n_splits=5, shuffle=True, random_state=seed)
+    pred_test_full = 0
+    for dev_index, val_index in kf.split(X_train):
+        dev_X, val_X = X_train.loc[dev_index,:], X_train.loc[val_index,:]
+        dev_y, val_y = y_train[dev_index], y_train[val_index]
+        pred_test, model, evals_result = run_lgb(dev_X, dev_y, val_X, val_y, X_test)
+        pred_test_full += pred_test
+    pred_test_full /= 5.
+    pred_test_full = np.expm1(pred_test_full)
+    pred_test_full_seed += pred_test_full
+    print("Seed {} completed....".format(seed))
+pred_test_full_seed /= np.float(len(seeds))
+
+print("LightGBM Training Completed...")
+
+# feature importance
+print("Features Importance...")
+gain = model.feature_importance('gain')
+featureimp = pd.DataFrame({'feature':model.feature_name(),
+                   'split':model.feature_importance('split'),
+                   'gain':100 * gain / gain.sum()}).sort_values('gain', ascending=False)
+print(featureimp[:15])
+
+sub = pd.read_csv('../input/sample_submission.csv')
+sub["target"] = pred_test_full_seed
+
+print(sub.head())
+sub.to_csv('sub_lgb_s_k_p_5seeds_v2.csv', index=False)
+
+'''
+在这场比赛中，零点看起来很重要。对具有更多零的数字与行的行进行值的总和可以帮助模型更好地理解趋势。
 '''
 
+'''
+大家好，
+
+我是骗子的新手。有人可以解释如何添加额外的功能PCA_1..PCA_20和kmeans_cluster_1..kmeans_cluster_10以及各种聚合列有用吗？我理解单独应用PCA和kmeans来解决问题，但在这种情况下，它们作为功能本身添加。
+
+这是解决这些问题的已知技术吗？我们如何知道哪些功能可以添加到哪种问题？
+'''
+
+'''
+使用PCA，ICA和其他技术减少维度可能会导致信息丢失。通过缩小维度并生成新要素并将其附加到原始数据集，我们会在较低维度中添加更多可能存在的信息。
+'''
