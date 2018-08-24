@@ -8,10 +8,11 @@ import numpy as np
 import pandas as pd
 import lightgbm as lgb
 
-
+import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn import model_selection
 from sklearn.decomposition import PCA
+from mpl_toolkits.mplot3d import Axes3D
 from sklearn.preprocessing import normalize
 
 random.seed(2018)
@@ -20,6 +21,9 @@ warnings.filterwarnings('ignore')
 
 PATH = ''                                       # 存储数据的路径
 train = pd.read_csv(PATH + 'train.csv')
+X_train = train.drop(["ID", "target"], axis=1)
+y_train = np.log1p(train["target"].values)
+flist = [x for x in X_train.columns if not x in ['ID','target']]
 test = pd.read_csv(PATH + 'test.csv')
 
 num_train_data = len(train)
@@ -44,8 +48,6 @@ print("训练集的数据量为:{} , 特征数为: {} , 测试集数据量为:{}
 #     print("测试集不为0的特征为: {}".format(list(test.columns[test.isnull().sum() != 0])))
 #     test[test.columns[test.isnull().sum() != 0]].isnull().sum().sort_values(ascending=False)
 
-X_train = train.drop(["ID", "target"], axis=1)
-y_train = np.log1p(train["target"].values)
 
 X_test = test.drop(["ID"], axis=1)
 
@@ -131,140 +133,86 @@ def add_SumValues(train, test, features):
 X_train, X_test = add_SumValues(X_train, X_test, ['SumValues'])
 
 print("增加和为非0的列的维度为: ", X_train.shape, " ", X_test.shape)
+#
+# '''
+# K-means聚类
+# '''
+#
+#
+#
+# flist_kmeans = []
+# for ncl in range(2,11):
+#     cls = KMeans(n_clusters=ncl)
+#     y_pred = cls.fit_predict(X_train[flist])
+#     flist_kmeans.append('kmeans_cluster_'+str(ncl))
+# print(flist_kmeans)
+#
+# gc.collect()
+# print("Train set size: {}".format(X_train.shape))
+# print("Test set size: {}".format(X_test.shape))
+#
+# flist = [x for x in X_train.columns if not x in ['ID','target']]
+#
+# '''
+# PCA降维
+# '''
+# n_components = 20
+# flist_pca = []
+# pca = PCA(n_components=n_components)
+# x_train_projected = pca.fit_transform(normalize(X_train[flist], axis=0))
+# x_test_projected = pca.transform(normalize(X_test[flist], axis=0))
+# for npca in range(0, n_components):
+#     X_train.insert(1, 'PCA_'+str(npca+1), x_train_projected[:, npca])
+#     X_test.insert(1, 'PCA_'+str(npca+1), x_test_projected[:, npca])
+#     flist_pca.append('PCA_'+str(npca+1))
+#     print(pca.components_)
+#     print(pca.explained_variance_)
+#
+# print(flist_pca)
+#
+# gc.collect()
+# print("Train set size: {}".format(X_train.shape))
+# print("Test set size: {}".format(X_test.shape))
+#
+# X_train.head(n=10)
+#
+# X_test.head(n=10)
 
 '''
-尝试增加一些特殊值,注意，一定是在原特征后增加
+最后，我们看看综合起来的效果
 '''
-def add_OtherAgg(train, test, features,target):
-    flist = [x for x in train.columns if not x in ['ID', 'target', 'SumZeros', 'SumValues']]
-    if 'OtherAgg' in features:
-        train['Mean'] = train[flist].mean(axis=1)
-        train['Median'] = train[flist].median(axis=1)
-        train['Mode'] = train[flist].mode(axis=1)
-        train['Max'] = train[flist].max(axis=1)
-        train['Var'] = train[flist].var(axis=1)
-        train['Std'] = train[flist].std(axis=1)
-        train['Skew'] = train[flist].apply(lambda x: train[x].skew)
-        train['Kur'] = train[flist].apply(lambda x: train[x].kurtosis)
-        train['Cor'] = train[flist].apply(lambda x: np.mean(train[x]))
-        train['Corr'] = train[flist].apply(lambda x: np.corrcoef(target, train[x])[0][1])
 
-        test['Mean'] = test[flist].mean(axis=1)
-        test['Median'] = test[flist].median(axis=1)
-        test['Mode'] = test[flist].mode(axis=1)
-        test['Max'] = test[flist].max(axis=1)
-        test['Var'] = test[flist].var(axis=1)
-        test['Std'] = test[flist].std(axis=1)
-        test['Skew'] = test[flist].apply(lambda x: train[x].skew)
-        test['Kur'] = test[flist].apply(lambda x: train[x].kurtosis)
-        test['Cor'] = test[flist].apply(lambda x: np.mean(train[x]))
-        test['Corr'] = test[flist].apply(lambda x: np.corrcoef(target, train[x])[0][1])
 
-    flist = [x for x in train.columns if not x in ['ID', 'target', 'SumZeros', 'SumValues']]
-    print(flist)
-    return train, test
+# def modiData(data):
+#     x1 = []
+#     x2=[]
+#     for i in range(0,len(data+1)):
+#         x1.append(data[i][0])
+#         x2.append(data[i][1])
+#     x1=np.array(x1)
+#     x2=np.array(x2)
+#     #重塑数据
+#     X=np.array(list(zip(x1,x2))).reshape(len(x1),2)
+#     return X
+#绘制样式
+def drawKmodel(XData,t):
+    plt.figure(figsize=(10,10))
+    colors = ['g','r','y','b']
+    markers = ['o','s','d','h']
+    kmeans_model = KMeans(n_clusters=t).fit(XData[flist])
+    for i,l in enumerate(kmeans_model.labels_):
+        plt.plot(XData[i][0],XData[i][1],color=colors[l],marker=markers[l],ls='None')
+        plt.title('%s Countries K-Means'%(len(XData)))
 
-X_train, X_test = add_OtherAgg(X_train, X_test, ['OtherAgg'],y_train)
-
-print("增加列后的维度为:",X_train.shape," ",X_test.shape)
-
-'''
-K-means聚类
-'''
-flist = [x for x in X_train.columns if not x in ['ID','target']]
-
-flist_kmeans = []
-for ncl in range(2,11):
-    cls = KMeans(n_clusters=ncl)
-    cls.fit_predict(X_train[flist].values)
-    X_train['kmeans_cluster_'+str(ncl)] = cls.predict(X_train[flist].values)
-    X_test['kmeans_cluster_'+str(ncl)] = cls.predict(X_test[flist].values)
-    flist_kmeans.append('kmeans_cluster_'+str(ncl))
-print(flist_kmeans)
-
-gc.collect()
-print("Train set size: {}".format(X_train.shape))
-print("Test set size: {}".format(X_test.shape))
-
-flist = [x for x in X_train.columns if not x in ['ID','target']]
-
-'''
-PCA降维
-'''
 n_components = 20
 flist_pca = []
 pca = PCA(n_components=n_components)
 x_train_projected = pca.fit_transform(normalize(X_train[flist], axis=0))
-x_test_projected = pca.transform(normalize(X_test[flist], axis=0))
-for npca in range(0, n_components):
-    X_train.insert(1, 'PCA_'+str(npca+1), x_train_projected[:, npca])
-    X_test.insert(1, 'PCA_'+str(npca+1), x_test_projected[:, npca])
-    flist_pca.append('PCA_'+str(npca+1))
-print(flist_pca)
 
-gc.collect()
-print("Train set size: {}".format(X_train.shape))
-print("Test set size: {}".format(X_test.shape))
-
-X_train.head(n=10)
-
-X_test.head(n=10)
+drawKmodel(x_train_projected,4)
 
 
-def run_lgb(train_X, train_y, val_X, val_y, test_X):
-    params = {
-        "objective": "regression",
-        "metric": "rmse",
-        "num_leaves": 30,
-        "learning_rate": 0.01,
-        "bagging_fraction": 0.7,
-        "feature_fraction": 0.7,
-        "bagging_frequency": 5,
-        "bagging_seed": 2018,
-        "verbosity": -1
-    }
 
-    lgtrain = lgb.Dataset(train_X, label=train_y)
-    lgval = lgb.Dataset(val_X, label=val_y)
-    evals_result = {}
-    model = lgb.train(params, lgtrain, 1000, valid_sets=[lgtrain, lgval], early_stopping_rounds=100,
-                      verbose_eval=200, evals_result=evals_result)
-
-    pred_test_y = model.predict(test_X, num_iteration=model.best_iteration)
-    return pred_test_y, model, evals_result
-
-# Training LGB
-seeds = [42, 2018]
-pred_test_full_seed = 0
-for seed in seeds:
-    kf = model_selection.KFold(n_splits=5, shuffle=True, random_state=seed)
-    pred_test_full = 0
-    for dev_index, val_index in kf.split(X_train):
-        dev_X, val_X = X_train.loc[dev_index,:], X_train.loc[val_index,:]
-        dev_y, val_y = y_train[dev_index], y_train[val_index]
-        pred_test, model, evals_result = run_lgb(dev_X, dev_y, val_X, val_y, X_test)
-        pred_test_full += pred_test
-    pred_test_full /= 5.
-    pred_test_full = np.expm1(pred_test_full)
-    pred_test_full_seed += pred_test_full
-    print("Seed {} completed....".format(seed))
-pred_test_full_seed /= np.float(len(seeds))
-
-print("LightGBM Training Completed...")
-
-# feature importance
-print("Features Importance...")
-gain = model.feature_importance('gain')
-featureimp = pd.DataFrame({'feature':model.feature_name(),
-                   'split':model.feature_importance('split'),
-                   'gain':100 * gain / gain.sum()}).sort_values('gain', ascending=False)
-print(featureimp[:15])
-
-sub = pd.read_csv('../input/sample_submission.csv')
-sub["target"] = pred_test_full_seed
-
-print(sub.head())
-sub.to_csv('sub_lgb_s_k_p_5seeds_v2.csv', index=False)
 
 '''
 在这场比赛中，零点看起来很重要。对具有更多零的数字与行的行进行值的总和可以帮助模型更好地理解趋势。
