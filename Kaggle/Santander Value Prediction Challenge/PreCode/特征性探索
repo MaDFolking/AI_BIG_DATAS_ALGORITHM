@@ -19,10 +19,340 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import GradientBoostingRegressor
 
+
+
+import numpy as np
+import pandas as pd
+import xgboost as xgb
+import seaborn as sns
+import lightgbm as lgb
+import matplotlib.pyplot as plt
+
+from sklearn.decomposition import PCA
+from mpl_toolkits.mplot3d import Axes3D
+from sklearn.linear_model import RandomizedLasso
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
+
 '''
-PS:这次评估指标是:均方根对数误差。  也就是RMSPLE 这个很重要，不要忽略。
+PS:这次评估指标是:均方根对数误差。  也就是RMSPLE 这个很重要，不要忽略。也就是开log再误差根号平方，所以后续我们做特征构造时，很多地方会用
+log,平滑我们的数据，使其更显正态分布的情况。
+注意：这里我们取的都是很强的特征，并求出其相关性，最后用PCA映射继续观察。 但不代表我们最后只取这些特征，因为还有一些特征也会对样本产生关键性。
+甚至用取平均值补充部分地方都可以，所以一切都是观察数据，做到心里有数，为最后的时刻做准备。
+'''
+'''
+在做特征性强弱时，先做点数据预处理，比如方差为0，线性相同，数值为0的这些特征或者样本都可以删除掉。
 '''
 
-PATH = ''      #存储数据的路径
-train_df = pd.read_csv(PATH + 'train.csv')
-test_df = pd.read_csv(PATH + 'test.csv')
+PATH = ''                                       # 存储数据的路径
+train = pd.read_csv(PATH + 'train.csv')
+test = pd.read_csv(PATH + 'test.csv')
+
+num_train_data = len(train)
+num_train_feature = train.shape[1]
+
+num_test_data = len(test)
+num_test_feature = test.shape[1]
+
+print("训练集的数据量为:{} , 特征数为: {} , 测试集数据量为:{} , 特征数为:{}".format(num_train_data, num_train_feature,
+                                                             num_test_data, num_test_feature))
+
+'''
+因为是银行业务，所以0就没意义，统计不为0的数据,如果有不为0的数据，我们显示特征，并排序。
+'''
+# print("训练集不为0的特征数为: {}".format(train.columns[train.isnull().sum() != 0].size))
+# if (train.columns[train.isnull().sum() != 0].size):
+#     print("训练集不为0的特征为: {}".format(list(train.columns[train.isnull().sum() != 0])))
+#     train[train.columns[train.isnull().sum() != 0]].isnull().sum().sort_values(ascending=False)
+#
+# print("测试集不为0的特征数为: {}".format(test.columns[test.isnull().sum() != 0].size))
+# if (test.columns[test.isnull().sum() != 0].size):
+#     print("测试集不为0的特征为: {}".format(list(test.columns[test.isnull().sum() != 0])))
+#     test[test.columns[test.isnull().sum() != 0]].isnull().sum().sort_values(ascending=False)
+
+X_train = train.drop(["ID", "target"], axis=1)
+y_train = np.log1p(train["target"].values)
+
+X_test = test.drop(["ID"], axis=1)
+
+'''
+去除弱特征性，也就是方差/标准差为0的。
+'''
+colsToRemove = []
+for col in X_train.columns:
+    if X_train[col].std() == 0:
+        colsToRemove.append(col)
+
+X_train.drop(colsToRemove, axis=1, inplace=True)
+X_test.drop(colsToRemove, axis=1, inplace=True)
+
+print("方差为0的列为：",colsToRemove)
+print("删除方差为0后的维度为: ", X_train.shape, " ", X_test.shape)
+
+columns = X_train.columns
+
+'''
+删除线性相同的特征，也就是相同数值的。
+'''
+# diffcols = []
+# for i in range(len(columns) - 1):
+#     vals = X_train[columns[i]].values
+#     for j in range(i + 1, len(columns)):
+#         if np.array_equal(vals, X_train[columns[j]]):
+#             diffcols.append(columns[j])
+#
+# print("线性相同的特征为:", diffcols)
+# X_train.drop(diffcols, axis=1, inplace=True)
+# X_test.drop(diffcols, axis=1, inplace=True)
+X_train.drop(['d60ddde1b', 'acc5b709d', 'f333a5f60', 'f8d75792f', '912836770', 'f333a5f60'],axis = 1,inplace = True)
+X_test.drop(['d60ddde1b', 'acc5b709d', 'f333a5f60', 'f8d75792f', '912836770', 'f333a5f60'],axis = 1,inplace = True)
+
+'''
+['d60ddde1b', 'acc5b709d', 'f333a5f60', 'f8d75792f', '912836770', 'f333a5f60']
+'''
+print("删除线性相同特征后的维度为: ", X_train.shape, " ", X_test.shape)
+
+'''
+gbdt显示特征强弱
+'''
+clf_gb = GradientBoostingRegressor(random_state=42)
+clf_gb.fit(X_train, y_train)
+print(clf_gb)
+
+feat_importances = pd.Series(clf_gb.feature_importances_, index=X_train.columns)
+'''
+先取前100特征查看
+'''
+# feat_importances_100 = feat_importances.nlargest(100)
+# plt.figure(figsize=(16, 15))
+# feat_importances_100.plot(kind='barh')
+# plt.gca().invert_yaxis()
+# plt.show()
+
+'''
+再看看前25特征
+'''
+feat_importances_gb = pd.Series(clf_gb.feature_importances_, index=X_train.columns)
+feat_importances_gb = feat_importances_gb.nlargest(25)
+plt.figure(figsize=(16, 8))
+feat_importances_gb.plot(kind='barh')
+plt.gca().invert_yaxis()
+plt.show()
+
+print("GBDT提取特征前10为: ", pd.Series(clf_gb.feature_importances_, index=X_train.columns).nlargest(10))
+
+'''
+随机森林显示特征强弱
+'''
+clf_rf = RandomForestRegressor(random_state=42)
+clf_rf.fit(X_train, y_train)
+print(clf_rf)
+
+feat_importances_rf = pd.Series(clf_rf.feature_importances_, index=X_train.columns)
+feat_importances_rf = feat_importances_rf.nlargest(25)
+plt.figure(figsize=(16, 8))
+feat_importances_rf.plot(kind='barh')
+plt.gca().invert_yaxis()
+plt.show()
+
+print("随机森林提取特征前10为: ", pd.Series(clf_rf.feature_importances_, index=X_train.columns).nlargest(10))
+
+'''
+XGB显示特征强弱
+'''
+clf_xgb = xgb.XGBRegressor(random_state=42)
+clf_xgb.fit(X_train, y_train)
+print(clf_xgb)
+
+feat_importances_xgb = pd.Series(clf_xgb.feature_importances_, index=X_train.columns)
+feat_importances_xgb = feat_importances_xgb.nlargest(25)
+plt.figure(figsize=(16, 8))
+feat_importances_xgb.plot(kind='barh')
+plt.gca().invert_yaxis()
+plt.show()
+
+print("XGB提取特征前10为: ", pd.Series(clf_xgb.feature_importances_, index=X_train.columns).nlargest(10))
+
+'''
+LGB显示特征强弱
+'''
+clf_lgb = lgb.LGBMRegressor(seed=42)
+clf_lgb.fit(X_train, y_train)
+print(clf_xgb)
+
+feat_importances_lgb = pd.Series(clf_lgb.feature_importances_, index=X_train.columns)
+feat_importances_lgb = feat_importances_lgb.nlargest(25)
+plt.figure(figsize=(16, 8))
+feat_importances_lgb.plot(kind='barh')
+plt.gca().invert_yaxis()
+plt.show()
+
+print("LGB提取特征前10为: ", pd.Series(clf_lgb.feature_importances_, index=X_train.columns).nlargest(10))
+
+plt.figure()
+fig, ax = plt.subplots(1, 4)
+feat_importances_gb.plot(kind='barh', ax=ax[0])
+feat_importances_rf.plot(kind='barh', ax=ax[1])
+feat_importances_xgb.plot(kind='barh', ax=ax[2])
+feat_importances_lgb.plot(kind='barh', ax=ax[3])
+ax[0].invert_yaxis()
+ax[1].invert_yaxis()
+ax[2].invert_yaxis()
+ax[3].invert_yaxis()
+plt.show()
+
+s1 = pd.Series(clf_gb.feature_importances_,  index=X_train.columns).nlargest(10).index
+s2 = pd.Series(clf_rf.feature_importances_,  index=X_train.columns).nlargest(10).index
+s3 = pd.Series(clf_xgb.feature_importances_, index=X_train.columns).nlargest(10).index
+s4 = pd.Series(clf_lgb.feature_importances_, index=X_train.columns).nlargest(10).index
+
+common_features1 = pd.Series(list(set(s1).intersection(set(s2)))).values
+common_features2 = pd.Series(list(set(s3).intersection(set(s3)))).values
+common_features3 = pd.Series(list(set(common_features1).intersection(set(common_features2)))).values
+
+print("树形共同特征:", common_features3)
+'''
+'58e2e02e6' 'eeb9cd3aa' '15ace8c9f' 'f190486d6' '9fd594eec'
+'''
+
+'''
+线性特征提取
+'''
+# print("线性特征提取开始...")
+# NUM = 25
+# randomLasso = RandomizedLasso()
+# randomLasso.fit(X_train, y_train)
+# features = randomLasso.scores_
+# score = X_train.columns
+# print(features)
+# print(sorted(zip(map(lambda x: round(x, 4), features), score), reverse=True))
+# featureList = sorted(zip(map(lambda x: round(x, 4), features), score), reverse=True)
+# featureList = [i[1] for i in featureList][:NUM]
+# print(featureList)
+# featureList = pd.Series(featureList)
+#
+# plt.figure(figsize=(16, 8))
+# featureList.plot(kind='barh')
+# plt.gca().invert_yaxis()
+# plt.show()
+#
+# print("线性特征前25为：", featureList)
+'''
+线性前40特征为:
+['9fd594eec', 'f190486d6', '6eef030c1', '96b6bd42b', '555f18bd3',
+'15ace8c9f', '58e2e02e6', '58232a6fb', 'eeb9cd3aa', '20aa07010',
+'1702b5bf0', '9d5c7cb94', 'f74e8f13d', 'ddea5dc65', '26fc93eb7',
+'ba4ceabc5', 'f1851d155', '6d2ece683', '5bc7ab64f', '1c71183bb',
+'b30e932ba', 'ad207f7bb', 'd4c1de0e2', 'f3cf9341c', '4ecc3f505',
+'963a49cdc', 'ea4887e6b', 'd7d314edc', '70feb1494', 'f1e0ada11',
+'4edc3388d', '150dc0956', 'db3839ab0', '024c577b9', 'f14b57b8f',
+'9c42bff81', '174edf08a', 'cfc1ce276', '0e1f6696a', '8e4d0fe45']
+'''
+
+'''
+下面是比较共同特征的相关性。
+'''
+df_plot = pd.DataFrame(X_train, columns=common_features3)
+corr = df_plot.corr()
+
+mask = np.zeros_like(corr, dtype=np.bool)
+mask[np.triu_indices_from(mask)] = True
+
+f, ax = plt.subplots(figsize=(16, 16))
+
+cmap = sns.diverging_palette(220, 10, as_cmap=True)
+
+sns.heatmap(corr, mask=mask, cmap=cmap, vmax=.3, center=0,
+            square=True, linewidths=.5, cbar_kws={"shrink": .5})
+plt.title("Correlation HeatMap", fontsize=15)
+plt.show()
+
+'''
+相关性强的特征：1：eeb9cd3aa 和  9fd594eec
+                2：15ace8c9f 和  9fd594eec
+                3：f190486d6 和  9fd594eec
+                4：eeb9cd3aa 和  15ace8c9f  这个不是那么强，可以待定。
+我这里是取了共同特征，总共才5个，其实这样不好，前面数据探索阶段我们知道，有993个特征都有特征性。
+当然有一些是个别客户只有几个业务，这种业务到底是否重要，我们还需要待定。
+我们正式做项目时，取100和1000来做实验。
+'''
+
+'''
+PCA映射到3维空间，构成立体图形，再更细致观察特征的相关性。
+'''
+X_train_cpy = X_train.copy()
+pca = PCA(n_components=3)
+X_train_cpy = pca.fit_transform(X_train_cpy)
+
+print(pca.components_)
+
+print(pca.explained_variance_)
+
+colors = np.random.random((4459, 3))
+
+fig = plt.figure(1, figsize=(8, 6))
+ax = Axes3D(fig, elev=-150, azim=110)
+
+ax.scatter(X_train_cpy[:, 0], X_train_cpy[:, 1], X_train_cpy[:, 2], c=colors,
+           cmap=plt.cm.Set1, edgecolor=colors, alpha=0.5, s=40)
+ax.set_title("First three PCA directions")
+ax.set_xlabel("1st eigenvector")
+ax.w_xaxis.set_ticklabels([])
+ax.set_ylabel("2nd eigenvector")
+ax.w_yaxis.set_ticklabels([])
+ax.set_zlabel("3rd eigenvector")
+ax.w_zaxis.set_ticklabels([])
+
+plt.show()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
+
+
+
