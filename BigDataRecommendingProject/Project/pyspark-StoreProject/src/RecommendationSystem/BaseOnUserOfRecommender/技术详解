@@ -12,4 +12,80 @@
 再次，要初始化用户和事件的行坐标，其实这个如果是pandas就不用了，因为pandas默认就有了。
 
 最后，如果你的项目中，需要构建评分矩阵，就要用dafaultdict来初始化字典类型的评分矩阵。
-因为评分矩阵中是一一对应关系，所以不能存在key不存在的情况，防止出错，所以用defaultdict(set)。"
+因为评分矩阵中是一一对应关系，所以不能存在key不存在的情况，防止出错，所以用defaultdict(set)。
+
+在最后赋值时，
+self.User.add(col[0]) self.Events.add(col[1])即可
+但一定要记住，每行的事件对应一个循环的用户。每行的用户对应一个循环的事件。
+所以是self.UserOfEvents[col[0]].add(col[1])  self.EventsOfUser[col[1]].add(col[0]) 这种格式。
+
+构建矩阵时：import scipy.sparse as ss 利用这个可以按照行列来构建：ss.dok_matrix(len(self.user),len(self.events))
+初始化坐标可以利用enumerate(self.user) 把相应的i一一赋值即可。
+
+构建评分矩阵时，事件-用户/用户-事件 他们的坐标就是利用我们初始化的坐标。
+而我们的评分结果就是用兴趣的分-不敢兴趣的分，这个评分要根据具体业务而定。
+所以如下:
+i = self.userIndex[col[0]]  //我们之前用enumerate 让每个userIndex的键也就是用户ID 赋值给索引值i
+j = self.eventIndex[col[1]]
+self.矩阵[i,j] = self.train[col[3]] - self.train[col[4]] 
+
+关于scipy.sparse矩阵的保存，用 import scipy.io as sio 的 sio.mmwrite
+最后是更新相似度矩阵运算，我们知道，相似度计算至少有2个，也就是一个组合排列。
+python中能表示组合排列的函数是itertools.combinations(user,2) 这种格式，可以用在俩俩组合，所以代码如下：
+for event in self.event_unique:
+          user = self.userForEvent[event]
+          if len(user) > 2:
+              self.uniqueUserPairs.update(itertools.combinations(user,2))
+ 
+(2)构建用户/事件的相似度矩阵。
+俩者基本差不多，所以放一起讲：
+基于上面的基类和数据处理，
+初始化用户矩阵(行用户索引的key的长度，也就是用户id数，列是我们用户表的列-1，这个 1 是ID，我们不想要的)
+初始化用户相似度矩阵(行:用户数，列:用户数)
+用户矩阵依次将user表里经过数据处理后的内容放入即可。最后正则化：
+self.userMatrix = normalize(self.userMatrix, norm='l1', axis=0, copy=False)
+sio.mmwrite('User_Matrix', self.userMatrix)
+
+相似度计算：
+for u1, u2 in self.programEntities.uniqueUserPairs:     #依照上次的更新矩阵来更新
+    i = self.programEntities.userIndex[u1]
+    j = self.programEntities.userIndex[u2]
+    if (i, j) not in self.userSimilarMatrix:  #计算完相似度的就不存在矩阵中。
+        # 根据我们构建的矩阵，取行和列，然后用sim的ssd.correlation来计算相似度 这是皮尔逊相似度，常用于用户。
+        # 在事件中，我们还有事件信息的相似度，那个是内容文本的，用ssd.cosine 也就是余弦相似度。
+        user_sim = sim(self.userMatrix.getrow(i).todense(), self.userMatrix.getrow(j).todense())
+        self.userSimilarMatrix[i, j] = user_sim
+        self.userSimilarMatrix[j, i] = user_sim
+sio.mmwrite('User_Sim_Matrix', self.userMatrix)
+
+(3)其他矩阵
+构建用户社交评分矩阵：每行朋友总数/用户数 即可。
+构建活跃度矩阵：我们用yes的也就是最喜欢的人数-no的人数
+
+(4)特征工程
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
