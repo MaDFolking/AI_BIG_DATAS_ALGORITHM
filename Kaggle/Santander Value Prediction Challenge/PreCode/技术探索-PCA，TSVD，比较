@@ -1,0 +1,200 @@
+'''
+在官网中，PCA和SVD本质相似，但是针对高维度稀疏矩阵，建议SVD比较多。我在粗略做特征时，发现俩者差不多，这里我们探索下俩者的本质。
+'''
+
+import numpy as np
+from sklearn.decomposition import TruncatedSVD
+from scipy.sparse import csr_matrix
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+
+row = np.array([0, 0, 1, 2, 2, 2])
+col = np.array([0, 2, 2, 0, 1, 2])
+data = np.array([1, 2, 3, 4, 5, 6])
+data = csr_matrix((data, (row, col)), shape=(10, 10)).toarray()
+print(data)
+
+pca = PCA(n_components=5)
+pca.fit_transform(data)
+print("pca: ....")
+print(pca.explained_variance_ratio_)
+
+tsvd = TruncatedSVD(n_components=5)
+tsvd.fit_transform(data)
+print("tsvd: ....")
+print(tsvd.explained_variance_ratio_)
+
+srp = SparseRandomProjection(n_components=5)
+srp.fit(data)
+srp.transform(data)
+print("srp...")
+print(srp.density_)
+
+row = np.array([0, 0, 1, 2, 2, 2, 4])
+col = np.array([0, 2, 2, 0, 1, 2, 4])
+data = np.array([1, 2, 3, 4, 5, 6, 10])
+'''
+row:横坐标 col 纵坐标 data是我们的值
+'''
+data = csr_matrix((data, (row, col)), shape=(15, 15)).toarray()
+print(data)
+
+
+pca = PCA(n_components=7)
+pca.fit_transform(data)
+print("pca: ....")
+print(pca.explained_variance_ratio_)
+
+tsvd = TruncatedSVD(n_components=7)
+tsvd.fit_transform(data)
+print("tsvd: ....")
+print(tsvd.explained_variance_ratio_)
+
+srp = SparseRandomProjection(n_components=5)
+srp.fit(data)
+srp.transform(data)
+print("srp...")
+print(srp.density_)
+
+
+'''
+结果得到PCA会给列增加更多的噪音（功能）; 而tSVD可以相应地处理那些非零值。可能因为这个官网建议稀疏矩阵使用TSVD
+百度查了下，在数学中有“等级”概念，试着计算两个矩阵的等级，
+在第一种情况下，排名接近3，因此tsvd将具有3 * 3非空条目。
+在第二种情况下，排名接近4（10,4,4），因此tsvd将有4 * 4非空条目。
+但是，我想消除所有0个条目可能会更好。
+'''
+
+'''
+总结：
+（1）Sparse Random Projection：稀疏随机投影：
+假设我们有数据x∈Rn， 而我们通过一种方法f(x)将其降维成y∈Rk， 那么， 将为前后任意两点a,b之间的距离有不等式保证：
+(1−ϵ)∥a−b∥2≤∥f(a)−f(b)∥2≤(1+ϵ)∥a−b∥2
+对于随机映射来说， 只要注意到下面几点就行了：
+1.不定式中的精度仅仅受制于维数、数据大小等因素， 与将为方法无关。
+2.在维数差不是很大时， 总可以保证一个相对较高的精度， 不论用什么方法。
+3.到这里一切就很明显了， 既然精度有上界， 那我们也就不必担心轴的选取，那么最简单的方法自然就是随机挑选了，
+这也就产生的Random Projection这一方法。
+Random Projection
+简单来说,Random Projection流程就是
+选择影射矩阵R∈RK×N。
+用随机数填充影射矩阵。 可以选择uniform或者gaussian。
+归一化每一个新的轴（影射矩阵中的每一行）。
+对数据降维y=RX。
+上个小节里面的JL-lemma保证的降维的效果不会太差。
+从直观上来看看。
+首先假设我们有数据X={x|fi(θ)+σ}， 其中θ是一组参数， σ则是高斯噪声。 回想PCA方法， 我们很自然的认为所有的特征都是正交的， 
+我们既没有考虑它是不是有多个中心， 也没有考虑是不是有特殊结构， 然而对于实际数据， 很多时候并不是这样。 
+比如我们把取f(θ)=Si(θi)N(A,σi)∈R3， 其中Si∈SO(3)， 这样我们得到的数据可能会像×或者∗一样， 显然用PCA并不能得到好的结果。
+在这种情况下， 考虑在非常高维度的空间， 可以想象random projection这种撞大运的方法总会选到一些超平面能够接近数据的特征，
+同时也能够想象如果目标维数过低， 那么命中的概率就会大大降低。
+所以Sparse Random Projection 比PCA更适合处理超大维度的稀疏矩阵.时间很短，但效果可能不如TSVD
+
+(2)TSVD(截断奇异值分解, TruncatedSVD,PCA的一种实现)
+截断奇异值分解（Truncated singular value decomposition，TSVD）是一种矩阵因式分解（factorization）技术，将矩阵 M 分解成 U ， Σ 和
+V 。它与PCA很像，
+只是SVD分解是在数据矩阵上进行，而PCA是在数据的协方差矩阵上进行。通常，SVD用于发现矩阵的主成份。对于病态矩阵，目前主要的处理办法有预调节矩阵方法、
+区域分解法、正则化方法等，截断奇异值分解技术TSVD就是一种正则化方法，它牺牲部分精度换去解的稳定性，使得结果具有更高的泛化能力。
+对于原始数据矩阵A(N*M) ，N代表样本个数，M代表维度，对其进行SVD分解：
+A=UΣVT,Σ=diag(δ1,δ2,…,δn)=⎡⎣⎢⎢⎢⎢⎢⎢⎢⎢δ100..00δ20..000δ3..0............000..δn⎤⎦⎥⎥⎥⎥⎥⎥⎥⎥
+上式中的δ就是数据的奇异值，且δ1>δ2>δ3…，通常如果A非常病态，delta的后面就越趋向于0，δ1δn就是数据的病态程度，越大说明病态程度越高，
+无用的特征越多，通常会截取前p个最大的奇异值，相应的U截取前p列，V截取前p列，这样A依然是N*M的矩阵，用这样的计算出来的A代替原始的A，
+就会比原始的A更稳定。
+TSVD与一般SVD不同的是它可以产生一个指定维度的分解矩阵。例如，有一个 n×n 矩阵，通过SVD分解后仍然是一个 n×n 矩阵，而TSVD可以生成指定维度的矩阵。
+这样就可以实现降维了。
+
+(3)
+3.t-SNE(t-分布邻域嵌入算法)
+流形学习方法(Manifold Learning)，简称流形学习,可以将流形学习方法分为线性的和非线性的两种，线性的流形学习方法如我们熟知的主成份分析（PCA），非线性的流形学习方法如等距映射（Isomap）、拉普拉斯特征映射（Laplacian eigenmaps，LE）、局部线性嵌入(Locally-linear embedding，LLE)。
+这里写图片描述 
+t-SNE详细介绍：http://lvdmaaten.github.io/tsne/
+
+from sklearn import manifold
+#降维
+tsne = manifold.TSNE(n_components=2, init='pca', random_state=0)
+start_time = time.time()
+X_tsne = tsne.fit_transform(X)
+#绘图
+plot_embedding(X_tsne,
+               "t-SNE embedding of the digits (time: %.3fs)" % (time.time() - start_time))
+plt.show()
+#这个非线性变换降维过后，仅仅2维的特征，就可以将原始数据的不同类别，在平面上很好地划分开。
+#不过t-SNE也有它的缺点，一般说来，相对于线性变换的降维，它需要更多的计算时间。
+
+因为原理不同，导致，tsne 保留下的属性信息，更具代表性，也即最能体现样本间的差异；
+TSNE 运行极慢，PCA 则相对较快；
+因此更为一般的处理，尤其在展示（可视化）高维数据时，常常先用 PCA 进行降维，再使用 tsne：
+
+data_pca = PCA(n_components=50).fit_transform(data)
+data_pca_tsne = TSNE(n_components=2).fit_transform(data_pca)
+
+PCA:主成分分析（Principal Component Analysis）是一种常用的降维算法，可通过线性组合的方法将多个特征综合为少数特征，
+且综合后的特征相互独立，又可以表示原始特征的大部分信息。
+
+'''
+
+'''
+In[1]:
+import numpy as np
+from scipy.linalg import svd
+D = np.array([[1, 2], [1, 3], [1, 4]])
+D
+1
+2
+3
+4
+5
+Out[1]:
+array([[1, 2],
+       [1, 3],
+       [1, 4]])
+1
+2
+3
+4
+In[2]:
+U, S, V = svd(D, full_matrices=False)
+#我们可以根据SVD的定义，用 UU ， SS 和 VV 还原矩阵 DD 
+U.shape, S.shape, V.shape
+1
+2
+3
+4
+Out[2]:
+((3, 2), (2, 1), (2, 2))
+1
+2
+In[3]:
+np.dot(U.dot(np.diag(S)), V)#还原
+1
+2
+Out[3]:
+array([[ 1.,  2.],
+       [ 1.,  3.],
+       [ 1.,  4.]])
+1
+2
+3
+4
+TruncatedSVD返回的矩阵是 U 和 S 的点积。如果我们想模拟TSVD，我们就去掉最新奇异值和对于 U 的列向量。例如，我们想要一个主成份，可以这样：
+In[4]:
+new_S = S[0]
+new_U = U[:, 0]
+new_U.dot(new_S)
+1
+2
+3
+4
+Out[4]:
+array([-2.20719466, -3.16170819, -4.11622173])
+1
+2
+TruncatedSVD有个“陷阱”。随着随机数生成器状态的变化，TruncatedSVD连续地拟合会改变输出的符合。
+为了避免这个问题，建议只用TruncatedSVD拟合一次，然后用其他变换。这正是管线命令的另一个用处。
+实现：
+from sklearn import decomposition
+X_pca = decomposition.TruncatedSVD(n_components=2).fit_transform(X)
+start_time = time.time()
+plot_embedding(X_pca,"Principal Components projection of the digits (time: %.3fs)" % (time.time() - start_time))
+plt.show()
+'''
