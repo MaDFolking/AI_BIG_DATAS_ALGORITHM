@@ -30,7 +30,7 @@ step1:数据集准备
 作为第一步，加载所需的数据集。还分离出目标变量，并将其从原始数据集中删除。
 这一步是这样完成的，整个数据文件可以直接用于分解。
 '''
-train = pd.read_csv(path+'train.csv')
+train = pd.read_csv(PATH+'train.csv')
 target = train['target']
 train.drop(['target','ID'],axis = 1,inplace = True)
 print("行数: {},列数: {}\n 数据的前五行: {}\n 数据的详细部分信息: {}\n".format(train.shape[0],train.shape[1],train.head(),train.describe()))
