@@ -1,0 +1,44 @@
+'''
+在官网中，PCA和SVD本质相似，但是针对高维度稀疏矩阵，建议SVD比较多。我在粗略做特征时，发现俩者差不多，这里我们探索下俩者的本质。
+'''
+
+import numpy as np
+from sklearn.decomposition import TruncatedSVD
+from scipy.sparse import csr_matrix
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+
+'''
+https://www.kaggle.com/longlongfeng/the-difference-between-pca-tsvd-experiment
+'''
+row = np.array([0, 0, 1, 2, 2, 2])
+col = np.array([0, 2, 2, 0, 1, 2])
+data = np.array([1, 2, 3, 4, 5, 6])
+data = csr_matrix((data, (row, col)), shape=(10, 10)).toarray()
+print(data)
+
+pca = PCA(n_components=5)
+pca.fit_transform(data)
+
+tsvd = TruncatedSVD(n_components=5)
+tsvd.fit_transform(data)
+
+row = np.array([0, 0, 1, 2, 2, 2, 4])
+col = np.array([0, 2, 2, 0, 1, 2, 4])
+data = np.array([1, 2, 3, 4, 5, 6, 10])
+data = csr_matrix((data, (row, col)), shape=(10, 10)).toarray()
+print(data)
+
+pca = PCA(n_components=5)
+pca.fit_transform(data)
+
+tsvd = TruncatedSVD(n_components=5)
+tsvd.fit_transform(data)
+
+'''
+结果得到PCA会给列增加更多的噪音（功能）; 而tSVD可以相应地处理那些非零值。可能因为这个官网建议稀疏矩阵使用TSVD
+百度查了下，在数学中有“等级”概念，试着计算两个矩阵的等级，
+在第一种情况下，排名接近3，因此tsvd将具有3 * 3非空条目。
+在第二种情况下，排名接近4（10,4,4），因此tsvd将有4 * 4非空条目。
+但是，我想消除所有0个条目可能会更好。
+'''
