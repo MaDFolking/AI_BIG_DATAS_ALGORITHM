@@ -1,0 +1,163 @@
+PCA简介：PCA把原先的n个特征用数目更少的m个特征取代，新的m个特征一要保证最大化样本方差，二保证相互独立的。
+新特征是旧特征的线性组合，提供一个新的框架来解释结果。所以从简介来看，它能使其线性函数之间特征性更强且独立。
+简单说就是：数据为多相关性强的，多维度特征，适合用PCA,将其相关性离散，每次都重新设置基向量。离散后，方便我们聚类分析，或者特征拼接。
+每次主成分分析时，都保证 cov(y1,y2)=0
+
+一.适合的数据。
+1.维度比较多时。
+2.变量之间存在比较高的相关性，可以通过corr查看。说明数据有冗余或者重叠，此时是用PCA的前提条件。
+  具体可以corr 转化为一个二维矩阵，做个循环，如果大于0.5的比较多，这个数据集就是适合做PCA降维。
+
+我们的目的：对于这么多相关性强的，我们如果做特征拼接，必然会发生维度爆炸，但假如特征一与特征二为强相关，特征二与特征三也为强相关，我们就没必要
+合并特征一盒特征二，如何区分这个，就是PCA的作用。
+
+二.目的
+降维，是强相关的特征变得不太相关，这样适合我们下步的聚类，或者特征拼接，但一定程度上，会影响损失，大部分情况用来做分析用。
+
+三.计算步骤
+1.m样本,n维特征，先标准化。也就是减去变量的均值，再除以方差，我在数据处理做了类似步骤。
+2,求出协方差/相关系数矩阵，最好是相关系数，因为相关系数带有标准化了。
+3.求出矩阵的特征值和特征向量。
+4.Y = aT * X Y 是k*1维 即为降维到k维后的数据，此步算出每个样本的主成分得分；
+5.可将每个样本的主成分得分画散点图及聚类，或将主成分得分看成新的因变量，对其做线性回归等。
+
+四.主成分应用
+在主成分分析中，我们首先应保证所提取的前几个主成分的累计贡献率达到一个较高的水平，其次对这些被提取的主成分都能够给出符合实际背景和意义的解释。
+但是主成分的解释其含义一般多少带有点模糊性，不像原始变量的含义那么清楚、确切，这是变量降维过程中不得不付出的代价。因此，
+提取的主成分个数m通常应明显小于原始变量个数p（除非p本身较小），否则主成分维数降低的“利”，可能抵不过主成分含义不如原始变量清楚的“弊”。 
+在一些应用中，这些主成分本身就是分析的目的，此时我们需要给前几个主成分一个符合实际背景和意义的解释，以明白其大致的含义。 
+在更多的另一些应用中，主成分只是要达到目的的一个中间结果（或步骤），而非目的本身。例如，将主成分用于聚类（主成分聚类）、
+回归（主成分回归）、评估正态性、寻找异常值，以及通过方差接近于零的主成分发现原始变量间的多重共线性关系等，此时的主成分可不必给出解释。
+
+五.为什么维度变小，还可以反应数据特点。
+1..PCA理论基础:方差最大理论
+寻找主成分的正交旋转 
+将二维，降至一维 
+• a二维经过投影，变为一维； 
+• b要尽可能保留原始信息。直观的感受就是投影之后尽量分散，点分布差异相对较大，没有相关性。（相反的极端情况是投影后聚成一团，变量间的差别小
+，蕴含的信息就少了）所以样本间有变化，才有更多信息，变化就是差异； 
+• c如何体现差异呢？，可量化的方差。这就需要找一个方向使得投影后它们在投影方向上的方差尽可能达到最大，即在此方向上所含的有关原始信息样品间的
+差异信息是最多的； 
+• d降维在线性空间中就是基变换，换一种说法就是，找到一组新的基向量，在此向量空间上进行投影。在图中原本的基向量是（0，1），（1,0），现
+在基向量换成在横贯1,3象限的那条，为什么不选横贯2，4象限的呢，思考②条。
+
+
+2.方差最大和协方差的关系
+   要解释方差最大和主成分的关系需要从方差和协方差的关系入手：
+
+  设对原始数据标准化，减去对应变量的均值，再除以其方差，每个样本对应P个变量，设x=(x1,x2,⋯，xp)′为P维随机变量,u=E(x),∑=V(x)，
+  找其线性组合，即综合变量，进行线性变换：
+
+⎧⎩⎨⎪⎪⎪⎪⎪⎪⎪⎪y1=y2=yp=a11x1+a21x2+⋯+a1pxpa12x1+a22x2+⋯+a2pxp⋮a1px1+a2px2+⋯+appxp=a′1x=a′2x⋮=a′px
+  首先，我们试图用综合变量y1来代表原始的P个变量,为使y1,在 x1,x2,⋯，xn的一切线性组合中最大限度的保留这组变量的信息，
+  应使其方差最大化。在a′1a1=1的约束下，寻找a1，使得 
+V(y1)=a′1∑a1, 
+达到最大,就称为第一主成分。协方差矩阵 : 
+∑=V(x)
+
+为对称的，进行对称矩阵的谱分解，分解后的对角矩阵元素λi，ti都有着特殊的含义，即特征值和对应的特征向量。 
+谱分解： 
+∑=TΛTT=(t1,t2,⋯,tp)⎛⎝⎜⎜λ10⋯⋱⋯0λp ⎞⎠⎟⎟ ⎛⎝⎜⎜⎜⎜⎜⎜⎜⎜t′1t′2⋮t′p⎞⎠⎟⎟⎟⎟⎟⎟⎟⎟=∑i=1pλit1t′1
+3. 解释方差最大和主成分的关系：
+设 
+λ1>λ2>λp≥0
+
+由于 
+V(y1)=a′1∑a1=∑i=1pλia′1tit′ia1=∑i=1pλi(a′1ti)2
+
+≤λ1∑i=1p(a′1ti)2=λ1∑i=1pa′1tit′ia1
+
+=λ1a′1TTTa1=λ1a′1a1=λ1
+
+  计算要知道，T为正交矩阵。t为特征向量，T’T为1；a’t是一个数，不是向量；a’a已经设定为1，本人第一次看好多遍无果，想到前面一句
+  后才顺利的推导上面的式子。
+  直接验证，当取a1=t1时,有t′1∑t1=t′1(λ1t1)=λ1,即此时y1=t′1x,具有最大方差值λ1。 
+   如果第一主成分信息不够多，还不足以代表原始的p个变量，则需要再考虑第二主成y2，为了使与y2所含的信息与y1不重叠，要求第一主成分
+   与第二主成分不相关 ，cov(y1,y2)=0。这里的重叠是指线性关系上的，如果有重叠则说明还有进一步降维的空间。 
+  第二主成分的推理于第一主成分类似，可得到y2=t′2x，具有方差值λ2。 
+推理点拨：考虑到不同特征值的特征向量正交，相乘为0，推理亦是会畅通。
+
+4、 贡献率和累计贡献率概念：
+  从上面的推导，我们也可以发现特征值和主成分方差的关系，总方差中属于第i主成分yi的比例为
+λi∑i=1pλi
+称为主成分yi的贡献率。累计贡献率就是多个主成分贡献率的加和啦。
+5、主成分取多少个呢？
+  可人为指定固定个数，但是往往取相对于变量个数p较小的m个,使得累计贡献达到一个较高的百分比（80%——90%），此时y1,y2,y2……，ym可以来
+  代替x1,x2,x3……xp,从而达到降为的目的，而信息的损失却不多。
+
+6、几何意义
+  通过第三部分的计算过程，假设我们得到所有的主成分： 
+y1,y2,y3,⋯，yp,ai为特征向量.在“方差最大和协方差的关系”小节内容中的的线性变换，是一个正交变换。 
+  主成分几何意义是将原由(x1,x2,x3……xp)′构成的原p维RP空间的坐标轴作一正交旋转，，一组正交单位向量(t1,t2,⋯,tp)表明了p个新坐
+  标轴的方向，这些新的坐标轴彼此仍保持正交，yi是在ti上的投影值，λi反映了在t1上投影点的分散程度。
+  
+六.代码实现：
+2.1 导入模块
+# -*- coding: utf-8 -*-
+# @Time    : 2017/8/2 14:18
+# @Author  : LinYimeng
+# @Site    : 
+# @File    : sklearnPCA.py
+# @Software: PyCharm Community Edition
+from sklearn.decomposition import PCA
+from sklearn import preprocessing  ##标准化使用
+import pandas as pd
+import numpy as np
+
+10
+2.2数据准备，同法1一样，需要将数据转化为 array
+def ready_pca(train,test):
+###pca程序1 ，准备程序
+    #选出自变量
+    trainX =train.ix[:,['暴风影音', '乐视网', '爱奇艺', '腾讯视频', '爱音乐', '唱吧', '有杀气童话', '金山电池医生']].fillna(0)
+    ##如果最后一列为因变量，选取所有自变量则可以
+    ##trainX = train.ix[:,:len(train.T)]    #包头不包尾部因变量
+    testX =test.ix[:,['暴风影音', '乐视网', '爱奇艺', '腾讯视频', '爱音乐', '唱吧', '有杀气童话', '金山电池医生']].fillna(0)
+    trainX  = preprocessing.scale(trainX ) #标准化
+    testX  = preprocessing.scale(testX )   #标准化
+    colume = list(trainX.columns)
+    trainX1 = np.array(trainX)
+    testX1 = np.array(testX)
+    return trainX1,testX1,colume
+
+2,3 主成份
+def pca_train(trainX1,testX1,colume):
+#pca 程序2，主程序
+    pca=PCA(copy=True, n_components=3, whiten=False)
+    ##  n_components ，如果带入参数为整数，则参数为选取的主成份的个数；如果带入参数为小于1大于0的小数，则按照选取的主成份的个数
+    ## 当whiten，True（默认为假）时，将将component_矢量乘以n_samples的平方根，然后除以奇异值，以确保具有单位分量方差的
+    不相关输出。将从变换的信号（组的相对方差尺度）中消除一些信息，但有时可以通过使其数据符合一些硬连线的假设，来提高下游估计量的预测精度。
+    ## copy : bool (default True)，如果False，传递给fit的数据将被覆盖并运行适合（X）.transform（X）将不会产生预
+    期结果，请改用fit_transform（X）。
+    pca.fit(trainX1)                                 #### 将trainX1传入定义好的pca模型
+    components = pca.components_                     ####选取的特征向量对应的系数array
+    pacTrainX = pca.transform(trainX1)               #####将trainX1在构造好的pca模型上进行映射
+    pcaTestX = pca.transform(testX1)                 ####test主成份
+    ratio = pca.explained_variance_ratio_            ####选取的主成份分别对应的方差解释率                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                差占比
+    sum_rati0 = reduce(lambda x,y:x+y,ratio)         ####选取主成份的解释方差
+
+    print('pacTrainX，pca.fit',pca)
+    print('pcaTestX,ratio',ratio)
+    print('sum_rati0',sum_rati0)
+    defen_train = pd.DataFrame(pacTrainX,columns = colume)
+    components_train = pd.DataFrame(components,columns = colume)
+    defen_test = pd.DataFrame(pcaTestX ,columns = colume)
+    return pacTrainX,pcaTestX,defen_train,components_train,ratio,sum_rati0,defen_test
+
+2.4 对生成主成份的数据进行线性预测
+def Linear(pacTrainX,trainy，pcaTestX):
+    pca_svc = LinearSVC()
+    pca_svc.fit(defen_train,trainy)
+    pca_y_predict= pca_svc.predict(defen_test )
+    return pca_y_predict
+
+“`python 
+if name == “main“: 
+train = pd.read_csv(“F:\wo\train.csv”) 
+test = pd.read_csv(“F:\wo\test.csv”)
+
+jiangwei_train1,jiangwei_test1,pca334_colume=ready_pca(train,test)
+defen_train,components_train,ratio,sum_rati0,defen_test=pca_train(jiangwei_train1,jiangwei_test1)
+defen_train.to_csv("F:\\wo\\defen_train.csv")
+defen_train.to_csv("F:\\wo\\defen_test.csv")
+components_train.to_csv("F:\\wo\\components_train.csv")
