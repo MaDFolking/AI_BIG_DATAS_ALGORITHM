@@ -128,8 +128,12 @@ TSNE 运行极慢，PCA 则相对较快；
 data_pca = PCA(n_components=50).fit_transform(data)
 data_pca_tsne = TSNE(n_components=2).fit_transform(data_pca)
 
-PCA:主成分分析（Principal Component Analysis）是一种常用的降维算法，可通过线性组合的方法将多个特征综合为少数特征，
+PCA:
+https://blog.csdn.net/m0_37788308/article/details/78115209
+主成分分析（Principal Component Analysis）是一种常用的降维算法，可通过线性组合的方法将多个特征综合为少数特征，
 且综合后的特征相互独立，又可以表示原始特征的大部分信息。
+一般观察变量的相关系数矩阵，一般来说相关系数矩阵中多数元素绝对值大于0.5，非常适合做主成分分析，但也不是说小于的就不可以用这种方法。
+所以它适合做相关系大部分比较大数据，不适合稀疏。
 
 '''
 
