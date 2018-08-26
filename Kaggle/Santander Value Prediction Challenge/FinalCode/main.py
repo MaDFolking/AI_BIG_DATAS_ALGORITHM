@@ -12,7 +12,7 @@ from utils import load_data,xgb_params,fit_xgb_params,CV,rf_params,rmse_cv,Featu
 def main():
     X_train, X_test, y_train, X_Id = load_data()
 
-    FeatureXgbHandle(X_train,y_train)
+    FeatureXgbHandle(X_train,y_train)                                                   # XGB提取
     pipe = make_pipeline(
                 (DataHandle()),                                                         # 数据处理
                 (FeatureExtraction()),                                                  # 特征提取
@@ -27,9 +27,8 @@ def main():
     X_test  = pipe.fit_transform(X_test)
 
     '''
-    初始化模型，由于我设计的LGB模型效果不好，可能是哪些格式写错，我直接调用官方的LGB处理。
+    初始化模型，由于我设计的LGB模型效果不好,我直接调用官方的LGB处理。
     '''
-
     xgb_model = XGBClassifyCV(xgb_params = xgb_params,fit_xgb_params = fit_xgb_params,cv = CV)
     rf_model  = RandomForestClassifyCV(rf_params=rf_params,cv = CV)
     lgb_model = lgb.LGBMRegressor(objective='regression',num_leaves=78,
@@ -40,6 +39,7 @@ def main():
     xgb_model.fit(X_train,y_train)
     rf_model.fit(X_train,y_train)
     lgb_model.fit(X_train,y_train)
+    
     print("XGB 的 rmse集合为 :{}".format(xgb_model.cv_scores_))
     print("XGB 的 最佳rmse为 :{}".format(xgb_model.cv_score_))
 
@@ -52,11 +52,9 @@ def main():
     构建模型融合
     '''
     model_total = AveragingModels(models=(xgb_model,rf_model,lgb_model),weights = (0.525,0.075,0.35))
-    '''
-    模型融合开始拟合
-    '''
     model_total.fit(X_train, y_train)
     pre_end = np.expm1(model_total.predict(X_test))
+    
     '''
     保存结果
     '''
