@@ -54,7 +54,6 @@ class FeatureExtraction(BaseEstimator, TransformerMixin, RegressorMixin):
         print(X.shape)
         try:
             self.X_new = pd.read_csv(PATH + 'feature_importance_tree_end.csv')
-
             return self
         except :
             self.X_new = None
@@ -71,9 +70,6 @@ class FeatureExtraction(BaseEstimator, TransformerMixin, RegressorMixin):
     def transform(self, X):
         if self.X_new is not None:
             columns = self.X_new.columns
-            print(len(columns))
-            print("222")
-            print(X[columns].shape)
             return X[columns]
         else:
             common_feature1 = pd.Series(list(set(self.feature_importance[0]).intersection(set(self.feature_importance[1])))).values
@@ -97,7 +93,6 @@ class FeatureMining(BaseEstimator, TransformerMixin, RegressorMixin):
 
     def fit(self, X, y=None):
         print("特征挖掘开始...")
-
         X.fillna(0,inplace = True)
         corr = X.corr().values
         len_columns = len(X.columns)
@@ -132,7 +127,6 @@ class FeatureCreate(BaseEstimator, TransformerMixin, RegressorMixin):
 
     def fit(self, X, y=None):
         print("特征构造开始...")
-        print(X.shape)
         return self
 
     def transform(self, X):
