@@ -66,3 +66,97 @@ def str_stem(s):
         return s
     else:
         return "null"
+        
+2.商品数据过滤表
+(1)class FastTokenizer():
+    _default_word_chars = \
+        u"-&" \
+        u"0123456789" \
+        u"ABCDEFGHIJKLMNOPQRSTUVWXYZ" \
+        u"abcdefghijklmnopqrstuvwxyz" \
+        u"ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞß" \
+        u"àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ" \
+        u"ĀāĂăĄąĆćĈĉĊċČčĎďĐđĒēĔĕĖėĘęĚěĜĝĞğ" \
+        u"ĠġĢģĤĥĦħĨĩĪīĬĭĮįİıĲĳĴĵĶķĸĹĺĻļĽľĿŀŁł" \
+        u"ńŅņŇňŉŊŋŌōŎŏŐőŒœŔŕŖŗŘřŚśŜŝŞşŠšŢţŤťŦŧ" \
+        u"ŨũŪūŬŭŮůŰűŲųŴŵŶŷŸŹźŻżŽžſ" \
+        u"ΑΒΓΔΕΖΗΘΙΚΛΜΝΟΠΡΣΤΥΦΧΨΩΪΫ" \
+        u"άέήίΰαβγδεζηθικλμνξοπρςστυφχψω"
+
+    _default_word_chars_set = set(_default_word_chars)
+
+    _default_white_space_set = set(['\t', '\n', ' '])
+
+    def __call__(self, text: str):
+        tokens = []
+        for ch in text:
+            if len(tokens) == 0:
+                tokens.append(ch)
+                continue
+            if self._merge_with_prev(tokens, ch):
+                tokens[-1] = tokens[-1] + ch
+            else:
+                tokens.append(ch)
+        return tokens
+
+    def _merge_with_prev(self, tokens, ch):
+        return (ch in self._default_word_chars_set and tokens[-1][-1] in self._default_word_chars_set) or \
+               (ch in self._default_white_space_set and tokens[-1][-1] in self._default_white_space_set)
+               
+ TOKEN_PATTERN = (
+            r'(?u)('
+            r'"|'  # for inches
+            r'\&|'  # & (e.g. in H&M)
+            r'!+|'  # !
+            r'\.\d+\b|'  # .25
+            r'\b\d+\/\d+\b|'  # 1/2
+            r'\b\d+\.?\d*\%|'  # 100.1%
+            r'\b\d+\.?\d*\b|'  # 0.25
+            r'[\:\;\%][\)\(]|'  # TODO more smilies
+            r'[' + ''.join([
+        '•', '❤', '✨', '$', '❌', '♡', '☆', '✔', '⭐',
+        '✅', '⚡', '‼', '—', '▪', '❗', '■', '●', '➡',
+        '⛔', '♦', '〰', '×', '⚠', '°', '♥', '★', '®', '·', '☺', '–', '➖',
+        '✴', '❣', '⚫', '✳', '➕', '™', 'ᴇ', '》', '✖', '▫', '¤',
+        '⬆', '⃣', 'ᴀ', '❇', 'ᴏ', '《', '☞', '❄', '»', 'ô', '❎', 'ɴ', '⭕', 'ᴛ',
+        '◇', 'ɪ', '½', 'ʀ', '❥', '⚜', '⋆', '⏺', '❕', 'ꕥ', '：', '◆', '✽',
+        '…', '☑', '︎', '═', '▶', '⬇', 'ʟ', '！', '✈', '�', '☀', 'ғ',
+    ]) + ']|'  # various symbols
+         r'\b\w+\b'  # word
+         r')')
+
+    # TODO - check gain, maybe remove them?
+    REPL_PATTERNS = [
+        (r'\b(\d+)([a-z]+)\b', r'\1 \2'),  # 16gb -> 16 gb
+        (r'\b([a-z]+)(\d+)\b', r'\1 \2'),  # gtx780 -> gtx 780
+        (r'!!+', r'!!'),  # !!!! -> !!
+    ]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
