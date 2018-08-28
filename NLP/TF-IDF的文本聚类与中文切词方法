@@ -1,0 +1,47 @@
+
+# 切词
+jieba.load_userdict(useword)#加载自定义词典
+        i = 0
+        for row in data:
+            words = psg.cut(row.strip())
+            nword = []
+            for w in words:
+                if len(w.word) > 1 and not w.word.isdigit():  #去数字
+                    nword.append(w.word)
+            nword = list(set(nword) - set(stopword))#去停用词
+            for nw in nword:
+                file.write((nw) + " ")
+            file.write(("\n"))
+            i += 1
+        file.close()
+        
+ # 紧接着计算 TF-IDF：
+ #计算权重
+        corpus = []
+        for line in open(filewrite, 'r',encoding='utf-8').readlines():  
+            corpus.append(line.strip())
+        #将文本中的词语转换为词频矩阵 矩阵元素a[i][j] 表示j词在i类文本下的词频
+        vectorizer = TfidfVectorizer(sublinear_tf=True, max_df=0.5)
+        #统计每个词语的tf-idf权值
+        transformer = TfidfTransformer()
+        # 第一个fit_transform是计算tf-idf 第二个fit_transform是将文本转为词频矩阵
+        tfidf = transformer.fit_transform(vectorizer.fit_transform(corpus))
+        # 获取词袋模型中的所有词语
+        word = vectorizer.get_feature_names()
+        # 将tf-idf矩阵抽取出来，元素w[i][j]表示j词在i类文本中的tf-idf权重
+        weight = tfidf.toarray()
+        print ('Features length: ' + str(len(word)))
+        
+ 最后进行 K-means 聚类操作：
+
+    #聚类
+    ndarray = np.empty([numClass, len(word)], dtype=np.int64)
+    ni = 0
+    for ic in initC:
+        ndarray[ni:] = (weight[ic])
+        # print (weight[ic])
+        ni += 1
+    from sklearn.cluster import KMeans
+    clf = KMeans(n_clusters=numClass, max_iter=10000, init="k-means++", tol=1e-6) 
+    
+  
