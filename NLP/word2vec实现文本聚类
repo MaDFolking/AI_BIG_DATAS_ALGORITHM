@@ -1,0 +1,82 @@
+利用 Word2Vec 进行 K-means，核心代码：
+
+        #训练skip-gram模型
+        model = Word2Vec(LineSentence(inp), size=200, window=10, min_count=3, workers=multiprocessing.cpu_count(),
+                         sg=1,iter=10, negative=20)
+        # 保存模型
+        model.save(outp1)
+        model.wv.save_word2vec_format(outp2, binary=False)
+        model_dm = gensim.models.KeyedVectors.load_word2vec_format(outfile2, binary=False)#加载模型
+        list1 = []
+        with open(infile2, 'r', encoding='utf-8')as bf:#读分词后的文件
+            list1 = [b.strip().split(' ') for b in bf]
+
+        # 利用函数获得每个文本中所有词向量的平均值来表征该特征向量。
+        def buildWordVector(text, size):
+            vec = np.zeros(200).reshape((1, size))
+            count = 0
+            for word in text:
+                # print(word)
+                try:
+                    vec += model_dm[word].reshape((1, 200))
+                    count += 1
+                except KeyError:
+                    continue
+            if count != 0:
+                vec /= count
+            return vec
+
+        #获取需要所有文档的词向量，并且标准化出来
+        test_vecs = np.concatenate([buildWordVector(bl, 200) for bl in list1])
+        test_vecs = scale(test_vecs)
+        # print(test_vecs)
+    #聚类
+        ndarray = np.empty([numClass, 200], dtype=np.int64)
+        ni = 0
+        for ic in initC:
+            ndarray[ni:] = (test_vecs[ic])
+            # print (test_vecs[ic])
+            ni += 1
+        print('Start Kmeans:')
+        from sklearn.cluster import KMeans
+        clf = KMeans(n_clusters=numClass, max_iter=10000, init="k-means++", tol=1e-6)  # init="random"
+        s = clf.fit(test_vecs)
+        
+     聚类的可视化，首先要降维，然后在进行聚类结果的可视化：
+
+    from sklearn.decomposition import PCA
+    pca = PCA(n_components=2)  # 输出两维
+    newData = pca.fit_transform(weight)  # 载入N维
+
+    plt.figure(2)
+    Lab = [[] for i in range(numClass)]
+    index = 0
+    for labi in result:
+        Lab[labi].append(index)
+        index += 1
+    color = ['oy', 'ob', 'og', 'cs', 'ms', 'bs', 'ks', 'ys', 'yv', 'mv', 'bv', 'kv', 'gv', 'y^', 'm^', 'b^', 'k^',
+             'g^'] * 3 
+    for i in range(numClass):
+        print(len(Lab[i]), Lab[i])
+        x1 = []
+        y1 = []
+        for ind1 in newData[Lab[i]]:
+            # print ind1
+            try:
+                y1.append(ind1[1])
+                x1.append(ind1[0])
+            except:
+                pass
+        plt.plot(x1, y1, color[i])
+
+    # 初始中心点
+    x1 = []
+    y1 = []
+    for ind1 in clf.cluster_centers_:
+        try:
+            y1.append(ind1[1])
+            x1.append(ind1[0])
+        except:
+            pass
+    plt.plot(x1, y1, "rv")
+    plt.show()
