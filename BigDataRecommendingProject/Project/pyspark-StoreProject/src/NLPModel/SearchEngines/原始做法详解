@@ -1,0 +1,298 @@
+这里我把最开始的做法和代码都一一列出来，基本是用传统的做法。
+
+一.数据解析:
+(1)评论文件:该数据源中有用户对搜索词是否准确的评价文本。如果准确:3分。
+不准确:1分。relevance就是评论的相似度评分。
+还有一些在俩者之间，表示相似度。
+
+举例：搜索 AA battery 返回 a pack of size AA batteries 就是对的，返回3.
+(2)产品介绍: 比如AA bettery,产品介绍就是具体介绍这个是什么。
+
+二.数据预处理
+1.分词，提取词干，设定停止词，查看俩者关键词的个数，提取属性的特征数据。
+nltk.download('stopwords')
+stop = stopwords.words('english')
+stem = SnowballStemmer('english').stem
+def Stemming(sent):
+    if sent is None:
+        raise ValueError('输入值不能为空!')
+    if type(sent) == str:
+        sent = sent.lower()
+        return " ".join([stem(i) for i in word_tokenize(sent) if i not in stop])
+    else:
+        return None
+
+def str_common_word(str1,str2):
+    if str1 is None or str2 is None:
+        raise ValueError('输入值不能为空!')
+    return sum(int(str2.find(i) >= 0) for i in str1.split())
+
+def parse_attribute(attributes,name):
+    if attributes is None or name is None:
+        raise ValueError('输入数据不能为空!')
+    feature = dict()
+    attributes['about_material'] = attributes['name'].str.lower().str.contains(name)
+    for i in attributes[attributes['about_material']].iterrows():
+        r = i[1]
+        product = r['product_uid']
+        value = r['value']
+        feature.setdefault(product, '')
+        feature[product] = feature[product] + ' ' + str(value)
+    all_material = pd.DataFrame.from_dict(feature, orient='index')
+    all_material = all_material.reset_index()
+    all_material.columns = ['product_uid', name]
+    print('{}特征维度为: {}'.format(name,all_material.shape))
+    return all_material
+    
+ 2.创建语料库，这个函数我后来取消了，因为我用创建特征的做法来完成的本项目。
+ 具体做法如下:
+ '''
+搜索我们创建的语料库，并转化为简单的单词计算量
+是为了内存friendly。面对大量corpus数据时，你直接存成一个list，会使得整个运行变得很慢。
+所以我们搞成这样，一次只输出一组。利用迭代的思想去做大的数据集
+'''
+class Corpus(object):
+    def __init__(self,all_df,dic):
+        assert all_df is not None and dic is not None
+        self.all_df = all_df
+        self.dic = dic
+    def __iter__(self):
+        for i in self.all_df['text_all'].values:
+            yield self.dic.doc2bow(list(tokenize(i,errors = 'ignore')))
+            
+三.特征工程 TF-IDF法创建相似度特征
+1.特征拼接
+all_df['text_all'] = all_df['product_title']+'.'+all_df['product_description']+'.'
+all_df['all_feature'] =all_df['product_title']+'.'+all_df['product_description']+'.'+all_df['search_term']+'.'+all_df['material']+'.'+all_df['color']+'.' \
+                       +all_df['size']+'.'+all_df['function']+'.'+all_df['type']
+                       
+2.特征构造+TF-IDF法创造相似度矩阵。 大概是套模板，然后构造一些相似性矩阵权重的特征。
+具体做法如下：
+我们将主要文本内容分次拼接进行尝试.其实正规项目应该把train,test分开了，这里不用这么麻烦了。而且正规项目也不会先合并。
+特征拼接后，开始创造单词字典，我们接下来是通过相似度的计算，创造出更好的特征，使其结果更加准确。
+这里我们用gensim.Tokenize可以用各家或者各种方法，就是把长长的string变成list of tokens。
+包括NLTK，SKLEARN都有自家的解决方案。直接用str自带的split()方法，也是一种tokenize。
+只要记住，你这里用什么，那么之后你的文本处理都得用什么。
+tokenize:将长句子拆分成小句子。
+Dictionary: 可选的STR迭代算法，可选用于初始化映射和收集语料库统计的文档。
+最后得到语料后，计算相似度，将比较的俩个文本都扩展成全部的矩阵大小，使其矩阵大小一样，就可以计算了。
+在此，我们需要创造俩个内部函数，进行相似度计算。
+
+代码：
+from gensim.utils import tokenize
+from gensim.corpora.dictionary import Dictionary
+from gensim.models.tfidfmodel import TfidfModel
+from gensim.similarities import MatrixSimilarity
+def feature_splicing_tf_idf(all_df):
+    if all_df is None:
+        raise ValueError("输入数据不能为空!")
+    print(all_df[:5])
+    dic = Corpus(all_df,Dictionary)
+    print(dic)
+
+    tfIdf = TfidfModel(dic)
+    dictionary = Dictionary(list(tokenize(x, errors='ignore')) for x in all_df['text_all'].values)
+
+    def to_tfIdf(text):
+        res = tfIdf[dictionary.doc2bow(list(tokenize(text, errors='ignore')))]
+        return res
+
+    '''
+    sim的输出是一个list,所以我们最后转为float
+    '''
+    def cos_sim(text1,text2):
+        tfIdf1 = to_tfIdf(text1)
+        tfIdf2 = to_tfIdf(text2)
+        index = MatrixSimilarity((tfIdf1),num_features=len(dictionary))
+        sim = index[tfIdf2]
+        return float(sim[0])
+
+    '''
+    特征创造，通过文本相似度,我们创造产品描述与产品名称，产品搜索与产品名称，然后产品名称和搜索分别上面合并的各个属性都做拼接
+    feature_list = ['brand','material', 'color', 'size', 'function', 'type']
+    '''
+    all_df['search_title'] = all_df.apply(lambda x:cos_sim(all_df['search_term'],all_df['product_title']),axis = 1)
+    all_df['desc_title'] = all_df.apply(lambda x:cos_sim(all_df['product_title'],all_df['product_description']),axis = 1)
+    all_df['brand_search'] = all_df.apply(lambda x: cos_sim(all_df['brand'], all_df['search_term']), axis=1)
+    all_df['brand_title'] = all_df.apply(lambda x: cos_sim(all_df['brand'], all_df['product_title']), axis=1)
+    all_df['material_search'] = all_df.apply(lambda x:cos_sim(all_df['material'],all_df['search_term']),axis = 1)
+    all_df['material_title'] = all_df.apply(lambda x:cos_sim(all_df['material'],all_df['product_title']),axis = 1)
+    all_df['color_search'] = all_df.apply(lambda x:cos_sim(all_df['color'],all_df['search_term']),axis = 1)
+    all_df['color_title'] = all_df.apply(lambda x:cos_sim(all_df['color'],all_df['product_title']),axis = 1)
+    all_df['size_search'] = all_df.apply(lambda x:cos_sim(all_df['size'],all_df['search_term']),axis = 1)
+    all_df['size_title'] = all_df.apply(lambda x:cos_sim(all_df['size'],all_df['product_title']),axis = 1)
+    all_df['function_search'] = all_df.apply(lambda x:cos_sim(all_df['function'],all_df['search_term']),axis = 1)
+    all_df['function_title'] = all_df.apply(lambda x:cos_sim(all_df['function'],all_df['product_title']),axis = 1)
+    all_df['type_search'] = all_df.apply(lambda x:cos_sim(all_df['type'],all_df['search_term']),axis = 1)
+    all_df['type_title'] = all_df.apply(lambda x:cos_sim(all_df['type'],all_df['product_title']),axis = 1)
+
+    return all_df
+
+
+四.特征构造，Word2vec法构造相似度矩阵
+
+在工业中，可能用到迁移学习:在另一个地方用非常大非常完备的语料库做好w2v的training，
+再跑到这个任务上来直接输出vector。具体可以参照官网上谷歌新闻语料的一个大大的w2v模型。可下载，以后用。
+我们这里，用个轻量级的解决方案，那就是直接在我们的文本上学习。（跟tfidf玩法差不多）
+然而，w2v和tfidf有个很大的不同。对于tfidf而言，只需要知道一整段text中包含了哪些word元素就行了。其他都不用care。
+但是w2v要考虑到句子层级的split，以及语境前后的考虑。
+所以，刚刚tfidf的corpus不能直接被这里使用。在这里，我们需要把句子/文字都给分类好。
+这里，我们再玩儿一个NLP的杀器：NLTK。
+
+代码：
+import nltk
+from scipy import spatial
+from nltk.tokenize import word_tokenize
+from gensim.models.word2vec import Word2Vec
+def feature_splicing_word2vec(all_df):
+    if all_df is None:
+        raise ValueError('输入值不能为空!')
+    tokenizer = nltk.data.load('tokenizers/punkt/english.pickle')
+    print(tokenizer.tokenize(all_df['all_texts'].values[0]))
+    '''
+    tokenizer.tokenize 给定文本，返回该文本中的句子列表。
+    '''
+    sentences = [tokenizer.tokenize(x) for x in all_df['text_all'].values]
+    print(len(sentences))
+    '''
+    直使用NLTK推荐单词记录器进行尝试 : word_tokenize:
+    '''
+    w2v_corpus = [word_tokenize(x) for x in sentences]
+    '''
+    开始创建word2vec模型
+    这时候，每个单词都可以像查找字典一样，读出他们的w2v坐标了
+    '''
+    model = Word2Vec(w2v_corpus,size = 300,window = 5,min_count = 5,workers = 4)
+    print(model['right'])
+    '''
+    跟TFiDF一样，我们可以把textual的column都转化为w2v坐标
+    这里不一样的是，TFiDF是针对每个句子都可以有的，而w2v是针对每个单词的。
+    所以我们要有个综合考虑的idea：
+    平均化一个句子的w2v向量，算作整个text的平均vector：
+    我们写一个方法来实现：
+    先拿到全部的vocabulary
+    '''
+    vocab = model.vocabulary
+    def get_vector(text):
+        res = np.zeros([128])
+        count = 0
+        for i in word_tokenize(text):
+            if i in vocab:
+                res += model[i]
+                count+=1
+        return res/count
+
+    '''
+    平均化向量后,开始计算相似度，用scipy的 spatial
+    加个try防止我们的vector都是0
+    '''
+    def cos_sim_w2v(text1,text2):
+        try:
+            w2v1 = get_vector(text1)
+            w2v2 = get_vector(text2)
+            sim = 1-spatial.distance.cosine(w2v1,w2v2)
+            return float(sim)
+        except:
+            return float(0)
+
+    '''
+    特征创造
+    '''
+    all_df['search_title'] = all_df.apply(lambda x:cos_sim_w2v(all_df['search_term'],all_df['product_title']),axis = 1)
+    all_df['desc_title'] = all_df.apply(lambda x:cos_sim_w2v(all_df['product_title'],all_df['product_description']),axis = 1)
+    all_df['brand_search'] = all_df.apply(lambda x: cos_sim_w2v(all_df['brand'], all_df['search_term']), axis=1)
+    all_df['brand_title'] = all_df.apply(lambda x: cos_sim_w2v(all_df['brand'], all_df['product_title']), axis=1)
+    all_df['material_search'] = all_df.apply(lambda x:cos_sim_w2v(all_df['material'],all_df['search_term']),axis = 1)
+    all_df['material_title'] = all_df.apply(lambda x:cos_sim_w2v(all_df['material'],all_df['product_title']),axis = 1)
+    all_df['color_search'] = all_df.apply(lambda x:cos_sim_w2v(all_df['color'],all_df['search_term']),axis = 1)
+    all_df['color_title'] = all_df.apply(lambda x:cos_sim_w2v(all_df['color'],all_df['product_title']),axis = 1)
+    all_df['size_search'] = all_df.apply(lambda x:cos_sim_w2v(all_df['size'],all_df['search_term']),axis = 1)
+    all_df['size_title'] = all_df.apply(lambda x:cos_sim_w2v(all_df['size'],all_df['product_title']),axis = 1)
+    all_df['function_search'] = all_df.apply(lambda x:cos_sim_w2v(all_df['function'],all_df['search_term']),axis = 1)
+    all_df['function_title'] = all_df.apply(lambda x:cos_sim_w2v(all_df['function'],all_df['product_title']),axis = 1)
+    all_df['type_search'] = all_df.apply(lambda x:cos_sim_w2v(all_df['type'],all_df['search_term']),axis = 1)
+    all_df['type_title'] = all_df.apply(lambda x:cos_sim_w2v(all_df['type'],all_df['product_title']),axis = 1)
+
+    return all_df
+    
+ 五.特征工程-深度学习做法
+ step7:特征拼接与创造:深度学习黑盒机制--CNN(这里因为不存在前后语义关系，我认为用LSTM没有太大意义)
+numpy的pad:防止CNN卷积时丢失边缘信息或输出维度Height,Width缩小。
+具体看: https://www.cnblogs.com/hezhiyao/p/8177541.html
+这里我们沿着最大长度补充，这样防止溢出。
+['material', 'color', 'size', 'function', 'type']
+'''
+def deep_learning_feature(all_df):
+    if all_df is None:
+        raise ValueError('输入值不能为空!')
+    all_df['bag'] = all_df['product_title'].str.pad(all_df['product_title'].str.len().max(), side='right') + ' ' + \
+                    all_df['product_description'].str.pad(all_df['product_description'].str.len().max(),side='right') + ' ' + \
+                    all_df['brand'].str.pad(all_df['brand'].str.len().max(), side='right') + ' ' + \
+                    all_df['material'].str.pad(all_df['material'].str.len().max(), side='right') + ' ' + \
+                    all_df['color'].str.pad(all_df['color'].str.len().max(), side='right') +' '+ \
+                    all_df['size'].std.pad(all_df['size'].str.len().max(),side='right')+' '+ \
+                    all_df['function'].std.pad(all_df['function'].std.len().max(),side = 'type')
+ 
+
+
+六.最后XGB处理并把XGB不能处理的特征处理掉。
+
+# 我们把不能被 机器学习模型 处理的column给drop掉
+df_all = df_all.drop(['search_term','product_title','product_description','all_texts'],axis=1)
+
+# 分离后，也要drop掉不能处理的。
+X_train = df_train.drop(['id','relevance'],axis=1).values
+X_test = df_test.drop(['id','relevance'],axis=1).values
+
+import matplotlib.pyplot as plt
+from sklearn.model_selection import cross_val_score
+def xgb_function(X_train,X_test,y_train,id_test):
+    if X_train is None or X_test is None or y_train is None:
+        raise ValueError("输入值不能为空!")
+    tree_param = [3,5,7,9,11,13,15]
+    test_score_tree = []
+    for i in tree_param:
+        xgb_model = xgb.XGBRegressor(max_depth=i)
+        test_score = np.sqrt(-cross_val_score(xgb_model, X_train, y_train, cv=5, scoring='neg_mean_squared_error'))
+        test_score_tree.append(np.mean(test_score))
+    plt.plot(tree_param, test_score_tree)
+    plt.show()
+    estimators_param = [100,500,1000,1500,2000,3000]
+    test_score_estimators = []
+    for i in estimators_param:
+        xgb_model = xgb.XGBRegressor(n_estimators=i)
+        test_score = np.sqrt(-cross_val_score(xgb_model,X_train,y_train,cv = 5,scoring = 'neg_mean_squared_error'))
+        test_score_estimators.append(np.mean(test_score))
+    plt.plot(estimators_param,test_score_estimators)
+    plt.show()
+    xgb_model =  xgb.XGBRegressor(learning_rate=0.25, silent=False, objective="reg:linear", nthread=-1, gamma=0,n_estimators=1000,
+                                  min_child_weight=1, max_delta_step=0,max_depth=13,
+                                  subsample=0.9, colsample_bytree=0.8, colsample_bylevel=0.7, reg_alpha=1e-2, reg_lambda=10.128)
+    xgb_model.fit(X_train,y_train)
+    xgb_predict = xgb_model.predict(X_test)
+    xgb_predict = np.asarray(xgb_predict)                       #转化为numpy的数组
+    '''
+    因为根据业务描述，最低位1.0分，最高为3.0分
+    '''
+    xgb_predict[xgb_predict>3.0] = 3.0
+    xgb_predict[xgb_predict<1.0] = 1.0
+    pd.DataFrame({"id": id_test, "relevance": xgb_predict}).to_csv('submission.csv', index=False)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                            
