@@ -32,7 +32,7 @@ if __name__ == '__main__':
         ('union', FeatureUnion(
             # transformer_list 要应用于数据的变换器对象的列表。每个元组的前半部分是变换器的名称。 下面四个管道开始处理四个特征，都用tf计算相似性，再用tsvd进行矩阵降维。
             transformer_list=[
-                # 删除XGB处理不了的特征。
+                # 删除XGB处理不了的特征。下面基本都是单特征处理，构建矩阵，这样会是个只有1的稀疏矩阵，用tsvd降维即可。
                 ('cst', cust_regression_vals()), 
                 ('txt1',
                  pipeline.Pipeline([('s1', cust_txt_col(key='search_term')), ('tfidf1', tfidf), ('tsvd1', tsvd)])),
