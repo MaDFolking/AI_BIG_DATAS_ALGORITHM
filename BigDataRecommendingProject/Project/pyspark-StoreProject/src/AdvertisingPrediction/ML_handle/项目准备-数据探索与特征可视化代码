@@ -1,0 +1,146 @@
+'''
+无论什么数据挖掘项目，前期的探索与特征性可视化是不可缺少的，一般来说，需要衡量方差 标准差 偏度 峰度 来控制其离群点，噪点，特征性强弱的特征，特征与
+特征之间是否存在强相关。但本次项目由于只有24维，我不在前期工作中处理特征性问题，自然，也先不用PCA,TSVD处理。
+'''
+
+'''
+本次项目中，探索阶段都要根据点击率来衡量，所以需要做到如下:
+在linear模型中我们想要知道哪些特征重要。
+通常可能苹果手机不会去看这种低价格广告，同理800块安卓手机不会看宝马广告。
+所以按照手机类型分组，来计算各个类型的点击率。
+data.groupby('device_type',{'CTR':gl.aggregate.MEAN('click')})
+也就是不同手机类型下，点击率的大小。让自己心里有个数。
+假设当不同手机下，你的点击率差距非常大，就说明这个手机型号特征是个好特征。
+所以再做个标准差和方差，偏度和峰度。然后了解下不同类型手机的点击率差距。查找出特征对点击率的差距。注意，一定要对这个组做方差/偏度/峰度。
+如果不同类型点击率差距大，那么说明这个字段一定有用。
+同理，对其他也做类似事情。
+我们之所以用这个笨方法是因为不知道数据，数据是经过脱敏处理的。尤其是C1~C21类别不清楚。
+方差记住是最后结果求方差。
+而在企业中项目，我们也可能有一些潜在的特征需要挖掘，所以我认为这样做，是必要的。
+
+注意:我这个是拆分后的数据集，如果内存不够，可以看我主程序是如何拆分数据。
+'''
+#整体描述
+print(train.describe())
+#查看数据类型
+print(train.dtypes)
+#查看数值特征的主要特征:偏差，方差，峰度,
+#train = train.columns[train.dtypes!='category']
+train_num = train.describe().T
+train_num = train_num .reset_index().rename(columns = {'index':'columns'})
+train_num['distinct_vals'] = train_num['columns'].apply(lambda x: len(train[x].value_counts()))                     # 这个可以理解为频率
+train_num['the_var'] = train_num['columns'].apply(lambda x: np.var(train[x]))                                       # 方差
+train_num['the_std'] = train_num['columns'].apply(lambda x: np.std(train[x]))                                       # 标准差
+train_num['the_skew'] = train_num['columns'].apply(lambda x: train[x].skew)                                         # 偏度
+train_num['the_kur'] = train_num['columns'].apply(lambda x: train[x].kurtosis)                                      # 峰度
+train_num['the_cor'] = train_num['columns'].apply(lambda x: np.mean(train[x]))                                      # 均值
+#train_num['the_corr'] = train_num['columns'].apply(lambda x: np.corrcoef(target, train[x])[0][1])                  # 每个用户它针对目标值的相似度
+print(train_num)
+
+'''
+统计弱特征,结果没弱特征，比较弱的是 device_type banner_pos device_conn_type 比较强的是 C20 C14 C17 C19 C21 C16 C15 hour 说明客户的点击跟时间影响很大，
+所以我们下面要分离hour.将它精确到每小时统计一次。
+'''
+print(len(train_num[train_num['the_var'].astype(float) == 0.0]))  # 统计方差为0的，也就是弱特征。
+feature_df = train_num.sort_values('the_var', ascending=True)
+feature_df['the_var'] = (feature_df['the_var'] - feature_df['the_var'].min()) / (feature_df['the_var'].max() - feature_df['the_var'].min())
+print(feature_df)
+
+
+'''
+查看特征向量和特征值
+'''
+train_num = train.columns[train.dtypes!='category']
+train_num = train.drop('click',axis = 1)
+stand_train = StandardScaler().fit_transform(train_num.values)
+mean_vec = np.mean(stand_train,axis = 0)
+cov_mar = np.cov(stand_train.T)
+eig_vals, eig_vecs = np.linalg.eig(cov_mar)
+eig_pairs = [(np.abs(eig_vals[i]), eig_vecs[:, i]) for i in range(len(eig_vals))]
+print(eig_pairs)
+'''
+由显示结果得到:
+device_type，device_conn_type,C15，C16，C19 峰度比较大，也就是离群点比较多。但第一个是手机型号正常，后三个也可能是类别型，所以我们后面做特征性处理。
+C14,C17,C20 方差比较大，也做特征性强弱处理。同样，我们也找一些重要的类别型数据进行查看。
+'''
+
+list_feature = ['site_id','site_domain','site_category','app_id','app_domain','app_category','device_id','device_ip',
+                'device_model','device_type','device_conn_type','C15','C16','C19','C14','C17','C20']
+# 查看一些关键特征的特征性强弱和频率
+'''
+结论:我们每个中都取频率前三，但如果频率比较低的，我们会舍弃掉。。
+用于下个第一轮拼接扩展特征操作。
+site_id: 17d1b03f 1fbe01fe e151e245
+site_domain: f3845767 7e091613 7687a86e
+site_category: f028772b 28905ebd 3e814130
+app_id: ecad2386 9c13b419 685d1c4c e2fcccd2
+app_domain: 2347f47a  ae637522 5c5a694b
+app_category: 0f2161f8 f95efa07 8ded1f7a
+device_id: a99f214a
+device_ip:6b9769f2 9b1fe278 ceffea69
+device_model: 8a4875bd d787e91b 1f0bc64f
+device_type: 1 0 4
+device_conn_type: 0 2 3
+C14
+20596    6809
+18993    6770
+15701    4618
+
+C15
+320    95132
+300     3935
+216      912
+
+C16
+50     95620
+250     3427
+36       912
+
+C17
+1722    38456
+2161    13579
+2333    10734
+
+C18
+0    69496
+3    18133
+2    12163
+
+C19
+35     55796
+39     21930
+297     4034
+
+C20
+ -1         62161
+ 100084    11567
+ 100111     3997
+C21
+79     38456
+157    24313
+23      7005
+'''
+for i in list_feature:
+    print("{}特征维度的特征性查看:".format(i))
+    print("{}特征与点击率的均值的特征性为:".format(i),train.groupby(i)['click'].mean().sort_values(ascending=False))
+    print("{}特征与点击率的方差的特征性为:".format(i),train.groupby(i)['click'].std().sort_values(ascending=False))
+    print("{}特征与点击率的偏差的特征性为:".format(i),train.groupby(i)['click'].apply(kurtosis).sort_values(ascending=False))
+    print("{}特征与点击率的峰度的特征性为:".format(i),train.groupby(i)['click'].apply(skew).sort_values(ascending=False))
+    print("{}特征与点击率的频率的特征性为:".format(i),train[i].value_counts())
+    print("*"*50)
+
+#最后需要查看所有特征与点击率的频率，因为我们主计算就是这个,我们得出前三频率的数。
+for i in train.columns:
+    print("{}特征与点击率的频率的特征性为:".format(i), train[i].value_counts().head(10))
+print("*" * 50)
+
+'''
+最后计算特征性强弱，用平稳随机,也可以用那些树形计算特征性强弱，我在kaggle比赛中已经显示过了，这里不做介绍。
+'''
+randomLasso = RandomizedLasso()
+print(train.shape," ",target.shape)
+randomLasso.fit(train, target)
+features = randomLasso.scores_
+score = train.columns
+print(features)
+print(sorted(zip(map(lambda x:round(x,4),features),score),reverse = True))
