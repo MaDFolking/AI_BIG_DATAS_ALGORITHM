@@ -1,0 +1,448 @@
+一.首先，总结下大概流程和常用的特征提取方法。别忘了再写到笔记本里。
+1.流程:
+(1)将词分成各个block,进行特征工程处理。
+(2)转换成计算机可理解的数字。
+(3)最后进行回归/分类的机器学习操作。
+
+2.特征工程过程
+(1)分词(Tokenize)
+英文:
+根据空格用: tokens = nltk.word_tokenize(sentence) =>词列表
+直接用split处理，将字符串.split()成列表，用" ".join([])格式处理。
+
+中文:
+机器学习：HMM,CRF
+启发式:Heuristic ->利用词典对照表将这句话拆成各个单词放在列表里，类似贪婪算法。
+jieba:默认精准
+(1) 全模式: jieba.cut("我/来到/北京/清华/清华大学/华大/大学",cut_all = True) 所有可能性都分出。
+(2) 精确模式: jieba.cut("我/来到/北京/清华大学",cut_all = False) 
+(3) 新闻识别: 他来到了网易杭研大厦。 杭研不是单词，但能被这个Viterbi算法识别。
+(4) 搜索引擎模式: 类似全模式，但内容更多，把搜索组合都排列。 jieba.cut_for_search
+
+分词存在问题:
+(1)
+有很多乱七八糟的语法不合逻辑语言很多。
+比如骂人话，表情符号 @ 等。
+解决:
+用正则表达式处理。
+常用的中文正则表达式处理:
+“^a”：匹配所有a开始的字符串 
+“a$”：匹配所有a结尾的字符串 
+前面一般都加\
+1.小写字母就是表示匹配该类型的，大写字母就是小写字母的反向匹配。
+比如: \w :匹配大小写字母的 \W:匹配不是大小写字母的
+  \d: 匹配数字的  \D:匹配非数字的
+  \s:匹配特殊字符的 \S:匹配非特殊字符的
+
+2: ?  0或1
+   * 任意
+   +  1或多
+   
+3. d{2,4} 匹配2到4个数字的，也就是2，3，4个数字都可以。
+4.[abc] 我们自己设定字符abc进行匹配。 或者[a-zA-z]这样匹配a-z的大小写英文字符
+5.  .  点 除了换行符所有都匹配
+     .* 就是所有
+6.$ 以什么结束
+   ^以什么开始
+   以W开始以e结束的 ^We$
+
+7.(at) | (ve) 所有的at 和所有的ve都匹配出来。中间|是或。
+
+8.分组: (...).*\1 前面三个点表示前面三个字母，然后.*表示所有匹配，后面\1表示前面的三个字母会在后面中再重复出现一次，记住不一定是最后三个。
+
+常用的英文正则表达式处理:
+  s = re.sub(r"(\w)\.([A-Z])", r"\1 \2", s)
+
+        s = s.lower()
+        s = s.replace("  ", " ")
+        s = re.sub(r"([0-9]),([0-9])", r"\1\2", s)
+        s = s.replace(",", " ")
+        s = s.replace("$", " ")
+        s = s.replace("?", " ")
+        s = s.replace("-", " ")
+        s = s.replace("//", "/")
+        s = s.replace("..", ".")
+        s = s.replace(" / ", " ")
+        s = s.replace(" \\ ", " ")
+        s = s.replace(".", " . ")
+        s = re.sub(r"(^\.|/)", r"", s)
+        s = re.sub(r"(\.|/)$", r"", s)
+        s = re.sub(r"([0-9])([a-z])", r"\1 \2", s)
+        s = re.sub(r"([a-z])([0-9])", r"\1 \2", s)
+        s = s.replace(" x ", " xbi ")
+        s = re.sub(r"([a-z])( *)\.( *)([a-z])", r"\1 \4", s)
+        s = re.sub(r"([a-z])( *)/( *)([a-z])", r"\1 \4", s)
+        s = s.replace("*", " xbi ")
+        s = s.replace(" by ", " xbi ")
+        s = re.sub(r"([0-9])( *)\.( *)([0-9])", r"\1.\4", s)
+        s = re.sub(r"([0-9]+)( *)(inches|inch|in|')\.?", r"\1in. ", s)
+        s = re.sub(r"([0-9]+)( *)(foot|feet|ft|'')\.?", r"\1ft. ", s)
+        s = re.sub(r"([0-9]+)( *)(pounds|pound|lbs|lb)\.?", r"\1lb. ", s)
+        s = re.sub(r"([0-9]+)( *)(square|sq) ?\.?(feet|foot|ft)\.?", r"\1sq.ft. ", s)
+        s = re.sub(r"([0-9]+)( *)(cubic|cu) ?\.?(feet|foot|ft)\.?", r"\1cu.ft. ", s)
+        s = re.sub(r"([0-9]+)( *)(gallons|gallon|gal)\.?", r"\1gal. ", s)
+        s = re.sub(r"([0-9]+)( *)(ounces|ounce|oz)\.?", r"\1oz. ", s)
+        s = re.sub(r"([0-9]+)( *)(centimeters|cm)\.?", r"\1cm. ", s)
+        s = re.sub(r"([0-9]+)( *)(milimeters|mm)\.?", r"\1mm. ", s)
+        s = s.replace("°", " degrees ")
+        s = re.sub(r"([0-9]+)( *)(degrees|degree)\.?", r"\1deg. ", s)
+        s = s.replace(" v ", " volts ")
+        s = re.sub(r"([0-9]+)( *)(volts|volt)\.?", r"\1volt. ", s)
+        s = re.sub(r"([0-9]+)( *)(watts|watt)\.?", r"\1watt. ", s)
+        s = re.sub(r"([0-9]+)( *)(amperes|ampere|amps|amp)\.?", r"\1amp. ", s)
+        s = s.replace("  ", " ")
+        s = s.replace(" . ", " ")
+        
+(2)词性变化
+英文常见
+walk => walking => walked 不影响词性。
+
+解决方案:
+归一化
+a.Stemming：词干提取，把不影响词性的尾巴去掉。
+b.Lemmatization词形归: 把各种类型的词的变形,都归于一个形式。
+went归一=go
+are归一be
+
+中文可以用jieba进行词性标注。
+import jieba.posseg as pseg
+words = pseg.cut("我爱北京大学")
+for word,flag in words:
+  print('%s %s' %(word,flag))
+  
+英文词性标注
+import nltk
+sent = "I am going to Beijing tomorrow";
+tokens = nltk.word_tokenize(sent)
+taged_sent = nltk.pos_tag(tokens)
+print(taged_sent)
+  
+(2)jieba常用方法:(分词不说了，上面说完了)
+a.自定义词典
+jieba.load_userdict(filename) # filename为自定义词典的路径
+在这里定义词典，直接用jieba加载即可
+格式每行是词的值，词频 ，词性。 必须这个格式
+
+b.关键词提取(TF-IDF,Word2vec都有这个，也就是NLP的特征提取)
+关键词抽取并且进行词向量化之后，才好进行下一步的文本分析(特征提取)
+import jieba.analyse
+jieba.analyse.extract_tags(sentence,topK = 20,withWeight = False,allowPos())
+sentence 为待提取的文本
+topK为返回几个TF/IDF权重最大的关键词,默认值为20
+withWeight为是否一并返回关键词权重值，默认值为False
+allowPOS仅包含指定词性的词，默认值为空,即不筛选。
+举例:
+方法1：
+import jieba.analyse
+for x,w in jieba.analyse.extract_tags(s,withWeight = True);
+  print('%s %s' % (x,w))
+
+for x,w in jieba.analyse.textrank(s,withWeight = True)
+  print('%s %s' % (x,w))
+  
+c.并行分词
+jieba.enable_parallel(4) 四核。
+jieba.disable_parallel() 关闭
+
+3.项目流程总结
+
+三.文本流程
+1步: 将一个长句子，分割成几个小字符串。
+2步: 将一些没意义的词去掉，比如冠词，虚词等。
+3步: 将词语进行数字化形式表达。
+4步: 通过机器学习/深度学习处理进行分类。
+
+具体分析:
+1.获取一个列表的文字内容
+2.分词算法大部分用HMM或CRF 也有传统的启发式分词(就是一个个搜索)
+3.用Tokenize也就是分词技术进行分词，通常我们用jeba分词来分解中文。
+4.对于复杂的语句需要用正则表达式分词。
+5.对于词性复杂的问题，有以下俩种方案:
+(1)Stemming词干提取:简单说就是把不影响词性的inflection的小尾巴砍掉。
+walking = walk
+(2)Lemmatization词形归一: 把各种类型的词的变形，都归为⼀个形式
+went 归一成 go 
+are 归一成 be
+但有个缺点:但went为动词时，是go的过去式，名词是人名。
+6.所以需要用NLTK的 POS Tag来判断该单词的词性。
+7.然后是停止词，这类词都是理解文本意思的应用场景来说，岐义太多。
+8.最后生成word_list列表再进行机器学习处理。(SVM,RF,MLP,RNN,LSTM)
+
+二.文本常用函数以及相应的特征提取方法。
+jieba已经介绍完了，现在介绍其他常用函数。
+https://blog.csdn.net/kumoshu/article/details/79858748
+1.CountVectorizer:将文本转化为词频计数矩阵。
+
+如果您不提供先验词典并且不使用执行某种特征选择的分析器，则功能的数量将等于通过分析数据找到的词汇量。
+结果是生成一个稀疏矩阵， 等价于 scipy.sparse.csr_matrix
+encoding ：字符格式
+ngram_range：要提取的不同n-gram的n值范围的下边界和上边界。将使用n的所有值，使得min_n <= n <= max_n。
+n-gram你可以理解为通过一个范围的文字，来判断这个词的概率是多少。
+stop_words：停止词。
+
+CountVectorizer(ngram_range=(2,2))#2-gram序列 
+意思是2个词合成一个进行频率统计：[('and the', 0), ('is shining', 1), ('is sunning', 2), ('is sweet', 3)]
+count_vector = CountVectorizer(ngram_range=(2,2))#2-gram序列
+bag = count_vector.fit_transform(docs)
+print(sorted(count_vector.vocabulary_.items(),key=lambda x:x[1]))#2-gram序列生成的词汇表
+bag.toarray()
+
+
+下面三个函数，常用函数都跟这个一样。
+2.HashingVectorizer
+它将文本文档的集合转换为scipy.sparse矩阵，其中包含令牌出现计数（或二进制出现信息），
+如果norm ='l1'，则可能标准化为词频，如果norm ='l2'则投影在词距离
+此文本向量化程序实现使用散列技巧来查找字符串名称以进行整数索引映射。
+
+这种策略有几个优点：
+它是非常低的内存可扩展到大型数据集，因为不需要在内存中存储词汇词典
+它除了构造函数参数之外没有任何状态，所以它很快发生酸洗和解毒
+它可用于流式（部分拟合）或并行管道，因为在拟合期间没有计算状态。
+还有一些缺点（与使用具有内存词汇表的CountVectorizer相比）：
+
+没有办法计算逆变换（从特征索引到字符串特征名称），当试图内省哪些特征对模型最重要时，这可能是一个问题。
+可能存在冲突：不同的令牌可以映射到相同的特征索引。但是在实践中，如果n_features足够大（例如，文本分类问题为2 ** 18），这很少成为问题。
+没有IDF加权，因为这会使变压器有状态。
+
+3.TfidfTransformer:一个词在文档出现的太频繁,就需要用TF-IDF来表示。
+将计数矩阵转换为标准化的tf或tf-idf表示
+但，记住，这不是矩阵表示，只是标准化到tf-idf.一般用下面那个表示tf-idf
+
+4.TfidVectorizer:
+将原始文档集合转换为TF-IDF特征矩阵。
+相当于CountVectorizer，后跟TfidfTransformer。
+tfidf = TfidfVectorizer()
+np.set_printoptions(precision=2)
+tfidf.fit_transform(docs).toarray()
+
+5.常用提取特征方法.其实大部分还是词频和TF-IDF多。尤其是多文本基本就用TF-IDF。
+为什么用特征提取:
+仍然有9400多个词汇。而用这近万个词汇作为特征词的话，词向量所占用的空间以及运算的时间将会是个灾难。而且，某些词汇存在的意义对于文本分类十分小，
+如果其作为特征词的话，对于文本分类效果产生负面影响。因此，有必要在词向量构建前，进行特征选取，也就是特征词的选取。主要方法有以下五种。
+
+(1) 基于文档频率的特征提取法 
+文档频率(DF)是指出现在某个特征项的文档的频率。当特征项的文档频率大于设定的上界时或者小于设定的下界时，则会在特征项集中去除该特征项。
+
+(2) 基于特征项频率的特征提取方法 
+特征项频率(TF)是指特征项在文本几何中出现的频率。选择方法、存在问题与上述方法一致。
+
+(3) 基于逆文档频率的特征提取法 
+逆文档频率(TF-IDF)是指特征项频率与出现特征项的文档逆频率的乘积。 
+TF-IDF = TF * IDF = tf * (N/n) 
+其中tf为特征项频率，N为训练集文档数目，n为训练集中出现特征项w的文档数。
+
+(4)卡方统计量 
+χ2统计量表示特征项与类别的相关程度，χ2统计量值越大，则两者的相关程度越高。其计算公式如下：χ2(wi,Cd)=N∗(A∗D−C∗B)(A+C)∗(B+D)∗(A+B)∗(C+D) 
+一般通过选择特征项wi与某一类别Cd的最大值作为其χ2统计量。之后，通过设定阈值或者根据卡方统计量大小排序选择的方式进行特正项的选取。
+
+(5)互信息法 
+互信息值表示特征项与类别的共现程度，互信息值越大，则两者的共现概率越大。其计算公式如下： 
+I(wi,Cd)≈logA∗N(A+C)∗(A+B) 
+一般通过选择特征项wi与某一类别Cd的最大值作为其互信息值。之后，通过设定阈值或者根据互信息值大小排序选择的方式进行特正向的选取。
+
+总结：使用朴素贝叶斯分类器进行文本分类就能达到较好的分类效果，主要优化为特征选取与权重调整两个方面。本次只讨论了简要
+的分类器构造过程以及特征选取方法，对于权重调整也可以用到特征选取中提到的算法，从而提高分类器的准确率。而且，之后也可以利用
+深度学习中CNN卷积神经网络实现文本的分类，其性能准确性有待考证。
+  
+  
+ 四.NLTK常用方法
+ https://blog.csdn.net/u011630575/article/details/80158788
+ 
+ 五.word2vec常用方法
+常用方法：
+import gensim
+# 导入模型
+model = gensim.models.Word2Vec.load("wiki.zh.text.model")
+1
+2
+3
+4
+5
+6
+4. 模型使用
+可以参照官网上的指导迅速了解model的各种功能方法。
+
+4.0 获取词向量
+        print model[u'汽车']
+        type(model[u'汽车'])
+1
+2
+# 结果
+[  3.74845356e-01   1.86477005e+00   1.28353190e+00   8.04618478e-01 ... ]
+numpy.ndarray
+1
+2
+3
+4.1 计算一个词的最近似的词，倒排序
+result = model.most_similar(u'足球')
+for each in result:
+    print each[0] , each[1]
+1
+2
+3
+国际足球 0.556692957878
+足球运动 0.530436098576
+篮球 0.518306851387
+国家足球队 0.516140639782
+足球队 0.513238489628
+足球联赛 0.500901579857
+football 0.500162124634
+体育 0.499264538288
+足球比赛 0.488131582737
+冰球 0.48725092411
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+4.2 计算两词之间的余弦相似度
+word2vec一个很大的亮点：支持词语的加减运算。（实际中可能只有少数例子比较符合）
+
+>>> model.most_similar(positive=['woman', 'king'], negative=['man'])
+[('queen', 0.50882536), ...]
+1
+2
+sim1 = model.similarity(u'勇敢', u'战斗')
+sim2 = model.similarity(u'勇敢', u'胆小')
+sim3 = model.similarity(u'高兴', u'开心')
+sim4 = model.similarity(u'伤心', u'开心')
+print sim1 
+print sim2
+print sim3
+print sim4
+1
+2
+3
+4
+5
+6
+7
+8
+0.254622852224
+0.38974887559
+0.423695453969
+0.376244588456
+1
+2
+3
+4
+4.3 计算两个集合之间的余弦似度
+当出现某个词语不在这个训练集合中的时候，会报错！！！。
+
+list1 = [u'今天', u'我', u'很', u'开心']
+list2 = [u'空气',u'清新', u'善良', u'开心']
+list3 = [u'国家电网', u'再次', u'宣告', u'破产', u'重新']
+list_sim1 =  model.n_similarity(list1, list2)
+print list_sim1
+list_sim2 = model.n_similarity(list1, list3)
+print list_sim2
+1
+2
+3
+4
+5
+6
+7
+0.541874230659
+0.13056320154
+1
+2
+4.4 选出集合中不同类的词语
+list = [u'纽约', u'北京', u'上海', u'西安']
+print model.doesnt_match(list)
+list = [u'纽约', u'北京', u'上海', u'西瓜']
+print model.doesnt_match(list)
+1
+2
+3
+4
+纽约
+西瓜
+ 
+介绍：
+使用Gensim训练Word2vec十分方便，训练步骤如下：
+
+1.将语料库预处理：一行一个文档或句子，将文档或句子分词（以空格分割，英文可以不用分词，英文单词之间已经由空格分割，中文预料需要使用分词工具进行分词，常见的分词工具有StandNLP、ICTCLAS、Ansj、FudanNLP、HanLP、结巴分词等）；
+
+2.将原始的训练语料转化成一个sentence的迭代器，每一次迭代返回的sentence是一个word（utf8格式）的列表。可以使用Gensim中word2vec.py中的LineSentence()方法实现；
+
+3.将上面处理的结果输入Gensim内建的word2vec对象进行训练即可：
+
+from gensim.models import Word2Vec
+model = Word2Vec(LineSentence(inp), size=100, window=10, min_count=3,
+            workers=multiprocessing.cpu_count(), sg=1, iter=10, negative=20)
+具体的训练参数解释如下：
+class Word2Vec(utils.SaveLoad):
+    def __init__(
+            self, sentences=None, size=100, alpha=0.025, window=5, min_count=5,
+            max_vocab_size=None, sample=1e-3, seed=1, workers=3, min_alpha=0.0001,
+            sg=0, hs=0, negative=5, cbow_mean=1, hashfxn=hash, iter=5, null_word=0,
+            trim_rule=None, sorted_vocab=1, batch_words=MAX_WORDS_IN_BATCH):
+
+· sentences：可以是一个list，对于大语料集，建议使用BrownCorpus,Text8Corpus或lineSentence构建。
+· size：是指特征向量的维度，默认为100。
+
+· alpha: 是初始的学习速率，在训练过程中会线性地递减到min_alpha。
+
+· window：窗口大小，表示当前词与预测词在一个句子中的最大距离是多少。
+
+· min_count: 可以对字典做截断. 词频少于min_count次数的单词会被丢弃掉, 默认值为5。
+
+· max_vocab_size: 设置词向量构建期间的RAM限制，设置成None则没有限制。
+
+· sample: 高频词汇的随机降采样的配置阈值，默认为1e-3，范围是(0,1e-5)。
+
+· seed：用于随机数发生器。与初始化词向量有关。
+
+· workers：用于控制训练的并行数。
+
+· min_alpha：学习率的最小值。
+
+· sg： 用于设置训练算法，默认为0，对应CBOW算法；sg=1则采用skip-gram算法。
+
+· hs: 如果为1则会采用hierarchica·softmax技巧。如果设置为0（默认），则使用negative sampling。
+
+· negative: 如果>0,则会采用negativesampling，用于设置多少个noise words（一般是5-20）。
+
+· cbow_mean: 如果为0，则采用上下文词向量的和，如果为1（default）则采用均值，只有使用CBOW的时候才起作用。
+
+· hashfxn： hash函数来初始化权重，默认使用python的hash函数。
+
+· iter： 迭代次数，默认为5。
+
+· trim_rule： 用于设置词汇表的整理规则，指定那些单词要留下，哪些要被删除。可以设置为None（min_count会被使用）。
+
+· sorted_vocab： 如果为1（默认），则在分配word index 的时候会先对单词基于频率降序排序。
+
+· batch_words：每一批的传递给线程的单词的数量，默认为10000。
+
+
+一些参数的选择与对比：
+
+1.skip-gram （训练速度慢，对罕见字有效），CBOW（训练速度快）。一般选择Skip-gram模型；
+
+2.训练方法：Hierarchical Softmax（对罕见字有利），Negative Sampling（对常见字和低维向量有利）；
+
+3.欠采样频繁词可以提高结果的准确性和速度（1e-3~1e-5）
+
+4.Window大小：Skip-gram通常选择10左右，CBOW通常选择5左右。
+
+
+  
+  
+ 
+ 六.本次项目，常用的NLP特征工程和方法处理。
+  
+  
+  
+  
+  
+  
+  
+  
+  
