@@ -1,5 +1,6 @@
 项目源代码
-AdvertisingPrediction : CTR预估/推荐系统
+AdvertisingPrediction : CTR预估/推荐系统。这里我用了机器学习，深度学习，强化学习分别处理了离线处理，在线处理，但还没完成，所以没更新到简历上，我希望
+有机会能到公司学习，并完成这个项目
 ImageModule: 图像处理项目
 NLPModel: 基于文本的搜索引擎项目
 RecommendationSystem: 基于文本的推荐系统项目
