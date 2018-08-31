@@ -1,1 +1,8 @@
 MLP处理文本推荐项目
+feature_handle.py 是特征工程模块。
+main.py 是最后运行的模块。
+main_test.py 是数据处理模块。
+utils.py 是所有变量名，函数,类。
+util_model.py 是关于模型的函数,变量名,类。
+tf_dataset.py 是管道处理模型模块
+model.py 是模型
