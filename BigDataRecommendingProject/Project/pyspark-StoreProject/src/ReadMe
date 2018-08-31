@@ -1,6 +1,5 @@
 项目源代码
 AdvertisingPrediction : CTR预估/推荐系统
-BaseUserRecommendation: 基于用户历史行为的推荐系统
 ImageModule: 图像处理项目
 NLPModel: 基于文本的搜索引擎项目
 RecommendationSystem: 基于文本的推荐系统项目
