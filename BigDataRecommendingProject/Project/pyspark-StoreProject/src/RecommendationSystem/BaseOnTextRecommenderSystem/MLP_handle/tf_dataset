@@ -1,0 +1,203 @@
+
+import numpy as np
+
+from sklearn.pipeline import make_pipeline
+from sklearn.feature_extraction import DictVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
+from feature_handle import FeatureUnionMP, make_union_mp,ConcatTexts,PreprocessDataPJ,PreprocessDataKL,\
+    PandasSelector,FillEmpty,PandasToRecords,SparseMatrixOptimize,SanitizeSparseMatrix,FastTokenizer,ReportShape
+
+'''
+基于我们之前设置的feature处理，以及很多uitl包下的类，我们来用管道模式融合，生成处理后的文本词向量，最后被神经网络MLP调用。
+'''
+
+'''
+我们会依次用多线程机制，拼接处理特征，重写了make_union_mp 让他的返回值适合make_pipeline二不是Pipline。 这是个惊人的壮举!
+'''
+def prepare_vectorizer_1_tf(n_jobs=4):
+    print("第一组模型特征向量初始化开始...")
+    tokenizer = FastTokenizer()                                                             # 初始化FastTokenizer
+    vectorizer = make_pipeline(
+        FillEmpty(),                                                                        # 先去除nan值
+        PreprocessDataPJ(n_jobs=n_jobs),                                                    # 特征过滤特征过滤和转换。多线程处理
+        make_union_mp(
+            make_pipeline(
+                PandasSelector(columns=['name', 'item_description']),                       # 特征选择,拼接并选择特征,处理'name', 'item_description' 并返回DataFrame类型
+                ConcatTexts(columns=['name', 'item_description'],                           # 文本拼接
+                            use_separators=True),
+                PandasSelector(columns=['text_concat']),                                    # 特征选择,处理 text_concat 特征
+                CountVectorizer(ngram_range=(1, 1), binary=True,                            # 处理后最后词向量初始化
+                min_df=5, tokenizer=tokenizer, dtype=np.float32)
+            ),
+
+            make_pipeline(PandasSelector(columns=['desc_clean']),                           # 特征选择,拼接并选择特征,处理desc_clean，并返回DataFrame类型
+                          CountVectorizer(tokenizer=tokenizer,                              # 处理后最后词向量初始化，进行二值化处理
+                                          binary=True,
+                                          min_df=5,
+                                          ngram_range=(1, 1),
+                                          dtype=np.float32)),
+
+            make_pipeline(PandasSelector(columns=['name_clean']),                           # 特征选择,拼接并选择特征,处理'name_clean' 并返回DataFrame类型
+                          CountVectorizer(binary=True,                                      # 处理后最后词向量初始化,进行字符类型处理
+                                          analyzer='char_wb',
+                                          min_df=25,
+                                          ngram_range=(3, 3),
+                                          dtype=np.float32)),
+
+            make_pipeline(PandasSelector(columns=['name_clean']),                           # 特征选择,拼接并选择特征,处理'name_clean' 并返回DataFrame类型
+                          CountVectorizer(tokenizer=tokenizer,                              # 进行二值化处理
+                                          binary=True,
+                                          min_df=5,
+                                          ngram_range=(1, 1),
+                                          dtype=np.float32),
+                          SparseMatrixOptimize()),                                          # 这次二值化后，进行矩阵优化。
+
+            make_pipeline(PandasSelector(columns=['category_name_clean']),                  # 特征选择,拼接并选择特征,处理'category_name_clean' 并返回DataFrame类型
+                          CountVectorizer(tokenizer=tokenizer,
+                                          binary=True,
+                                          min_df=5,
+                                          dtype=np.float32)),
+
+            make_pipeline(PandasSelector(columns=['shipping', 'item_condition_id',          # 这个明天查官网，大概是自己构造特征处理，并形成字典，用字典的词向量处理。
+                                                  'brand_name_clean',
+                                                  'cat_1', 'cat_2', 'cat_3', 'no_cat']),
+                          PandasToRecords(),
+                          DictVectorizer(dtype=np.float32)),
+
+            n_jobs=n_jobs
+        ),
+        SparseMatrixOptimize(),                                                             # 处理后，再整体优化。
+        SanitizeSparseMatrix(),                                                             # 选取矩阵每行最大值
+        ReportShape()                                                                       # 打印log,最大值，最小值
+    )
+    print("第一组模型特征向量初始化结束...")
+    return vectorizer
+
+'''
+第二层处理词向量。
+TOKEN_PATTERN：初始化特殊字符
+与上面类似，我就不多解释了。
+'''
+def prepare_vectorizer_2_tf(n_jobs=4):
+    print("第二组模型特征向量初始化开始...")
+    TOKEN_PATTERN = (
+            r'(?u)('
+            r'"|'  # for inches
+            r'\&|'  # & (e.g. in H&M)
+            r'!+|'  # !
+            r'\.\d+\b|'  # .25
+            r'\b\d+\/\d+\b|'  # 1/2
+            r'\b\d+\.?\d*\%|'  # 100.1%
+            r'\b\d+\.?\d*\b|'  # 0.25
+            r'[\:\;\%][\)\(]|'  # TODO more smilies
+            r'[' + ''.join([
+        '•', '❤', '✨', '$', '❌', '♡', '☆', '✔', '⭐',
+        '✅', '⚡', '‼', '—', '▪', '❗', '■', '●', '➡',
+        '⛔', '♦', '〰', '×', '⚠', '°', '♥', '★', '®', '·', '☺', '–', '➖',
+        '✴', '❣', '⚫', '✳', '➕', '™', 'ᴇ', '》', '✖', '▫', '¤',
+        '⬆', '⃣', 'ᴀ', '❇', 'ᴏ', '《', '☞', '❄', '»', 'ô', '❎', 'ɴ', '⭕', 'ᴛ',
+        '◇', 'ɪ', '½', 'ʀ', '❥', '⚜', '⋆', '⏺', '❕', 'ꕥ', '：', '◆', '✽',
+        '…', '☑', '︎', '═', '▶', '⬇', 'ʟ', '！', '✈', '�', '☀', 'ғ',
+    ]) + ']|'  # various symbols
+         r'\b\w+\b'  # word
+         r')')
+
+    # TODO - check gain, maybe remove them?
+    REPL_PATTERNS = [
+        (r'\b(\d+)([a-z]+)\b', r'\1 \2'),  # 16gb -> 16 gb
+        (r'\b([a-z]+)(\d+)\b', r'\1 \2'),  # gtx780 -> gtx 780
+        (r'!!+', r'!!'),  # !!!! -> !!
+    ]
+
+    max_feat_descr = 100000
+    max_feat_name = 100000
+    num_brands = 2500
+    vectorizer = make_pipeline(
+        FillEmpty(),                                                                # 处理nan值
+        PreprocessDataKL(num_brands=num_brands, repl_patterns=REPL_PATTERNS),       # 特征过滤KL处理
+        FeatureUnionMP([                                                            # 返回的是特征的拼接
+            ('descr_idf', make_pipeline(
+                PandasSelector('item_description'),
+                TfidfVectorizer(                                                    # 这次用tf-idf处理
+                    max_features=max_feat_descr,
+                    ngram_range=(1, 2),
+                    token_pattern=TOKEN_PATTERN,
+                    dtype=np.float32,
+                )
+            )),
+
+            ('name_idf',
+             make_pipeline(PandasSelector('name'),
+                           CountVectorizer(
+                               max_features=max_feat_name,
+                               ngram_range=(1, 2),
+                               token_pattern=TOKEN_PATTERN,
+                               dtype=np.float32,
+                           ))),
+
+            ('category_idf',
+             make_pipeline(PandasSelector('category_name'),
+                           CountVectorizer(dtype=np.float32))),
+
+            ('ohe', make_pipeline(
+                PandasSelector(columns=['shipping', 'no_description',
+                                        'item_condition_id', 'brand_name',
+                                        'category_name_l2', 'category_name']),
+                PandasToRecords(),
+                DictVectorizer(),
+            )),
+        ], n_jobs=n_jobs),
+        SparseMatrixOptimize(),
+        SanitizeSparseMatrix(),
+        ReportShape(),
+    )
+    print("第二组模型特征向量初始化结束...")
+    return vectorizer
+
+'''
+第三轮处理，还是那几个特征轮班拼接，处理。
+'''
+def prepare_vectorizer_3_tf(n_jobs=4):
+    print("第三组模型特征向量初始化开始...")
+    token_pattern = r"(?u)\b\w+\b"
+    vectorizer = make_pipeline(
+        FillEmpty(),
+        PreprocessDataPJ(n_jobs=n_jobs),
+        FeatureUnionMP([
+
+            ('tf_idf_1g', make_pipeline(
+                PandasSelector(columns=['name_clean', 'brand_name_clean', 'category_name', 'desc_clean']),
+                ConcatTexts(columns=['name_clean', 'brand_name_clean', 'category_name', 'desc_clean'],
+                            use_separators=True),
+                PandasSelector(columns=['text_concat']),
+                TfidfVectorizer(ngram_range=(1, 1), binary=True, min_df=5, token_pattern=token_pattern)
+            )),
+
+            ('tf_idf_2g', make_pipeline(
+                PandasSelector(columns=['name_clean', 'brand_name_clean', 'category_name', 'desc_clean']),
+                ConcatTexts(columns=['name_clean', 'brand_name_clean', 'category_name', 'desc_clean'],
+                            use_separators=True),
+                PandasSelector(columns=['text_concat']),
+                TfidfVectorizer(ngram_range=(2, 2), binary=True, min_df=25, token_pattern=token_pattern),
+                ReportShape()
+            )),
+
+            ('name_chargrams', make_pipeline(
+                PandasSelector('name'),
+                TfidfVectorizer(ngram_range=(3, 3), analyzer='char', binary=True, min_df=25),
+            )),
+
+            ('ohe', make_pipeline(
+                PandasSelector(columns=['shipping',
+                                        'item_condition_id', 'brand_name',
+                                        'cat_1', 'cat_2', 'cat_3', 'no_cat']),
+                PandasToRecords(),
+                DictVectorizer()
+            )),
+        ], n_jobs=n_jobs),
+        SparseMatrixOptimize(),
+        SanitizeSparseMatrix(),
+        ReportShape()
+    )
+    print("第三组模型特征向量初始化结束...")
+    return vectorizer
