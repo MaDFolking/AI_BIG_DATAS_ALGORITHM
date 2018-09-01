@@ -253,33 +253,23 @@ I(wi,Cd)≈logA∗N(A+C)∗(A+B)
 import gensim
 # 导入模型
 model = gensim.models.Word2Vec.load("wiki.zh.text.model")
-1
-2
-3
-4
-5
-6
+
 4. 模型使用
 可以参照官网上的指导迅速了解model的各种功能方法。
 
 4.0 获取词向量
         print model[u'汽车']
         type(model[u'汽车'])
-1
-2
+
 # 结果
 [  3.74845356e-01   1.86477005e+00   1.28353190e+00   8.04618478e-01 ... ]
 numpy.ndarray
-1
-2
-3
+
 4.1 计算一个词的最近似的词，倒排序
 result = model.most_similar(u'足球')
 for each in result:
     print each[0] , each[1]
-1
-2
-3
+
 国际足球 0.556692957878
 足球运动 0.530436098576
 篮球 0.518306851387
@@ -290,23 +280,13 @@ football 0.500162124634
 体育 0.499264538288
 足球比赛 0.488131582737
 冰球 0.48725092411
-1
-2
-3
-4
-5
-6
-7
-8
-9
-10
+
 4.2 计算两词之间的余弦相似度
 word2vec一个很大的亮点：支持词语的加减运算。（实际中可能只有少数例子比较符合）
 
 >>> model.most_similar(positive=['woman', 'king'], negative=['man'])
 [('queen', 0.50882536), ...]
-1
-2
+
 sim1 = model.similarity(u'勇敢', u'战斗')
 sim2 = model.similarity(u'勇敢', u'胆小')
 sim3 = model.similarity(u'高兴', u'开心')
@@ -315,22 +295,12 @@ print sim1
 print sim2
 print sim3
 print sim4
-1
-2
-3
-4
-5
-6
-7
-8
+
 0.254622852224
 0.38974887559
 0.423695453969
 0.376244588456
-1
-2
-3
-4
+
 4.3 计算两个集合之间的余弦似度
 当出现某个词语不在这个训练集合中的时候，会报错！！！。
 
@@ -341,26 +311,16 @@ list_sim1 =  model.n_similarity(list1, list2)
 print list_sim1
 list_sim2 = model.n_similarity(list1, list3)
 print list_sim2
-1
-2
-3
-4
-5
-6
-7
+
 0.541874230659
 0.13056320154
-1
-2
+
 4.4 选出集合中不同类的词语
 list = [u'纽约', u'北京', u'上海', u'西安']
 print model.doesnt_match(list)
 list = [u'纽约', u'北京', u'上海', u'西瓜']
 print model.doesnt_match(list)
-1
-2
-3
-4
+
 纽约
 西瓜
  
@@ -437,12 +397,142 @@ class Word2Vec(utils.SaveLoad):
   
  
  六.本次项目，常用的NLP特征工程和方法处理。
+ 1.构造特征
+ (1)构造词长度的特征:df_all['len_of_query'] = df_all['search_term'].map(lambda x: len(x.split())).astype(np.int64)
+ (2)构造不同文本之间相同词并取出来的特征：df_all['search_term'] = df_all['product_info'].map(lambda x: seg_words(x.split('\t')[0], x.split('\t')[1]))
+ (3)构造文本之间是否有相同词出现，返回个数的特征：df_all['query_in_title'] = df_all['product_info'].map(lambda x: str_whole_word(x.split('\t')[0], x.split('\t')[1], 0))
+ (4)构造一个文本词循环在另一个文本词中出现的个数，如果没有，用edit_distance相似度量来计算，如果是中文，换成余弦相似度来计算。
+ 其他看项目介绍即可。
+ 
+ 2.数据预处理常用方法
+ (1)统计我们样本某个需求的数量,比如品牌:
+ self.brands = X['brands'].value_counts().index[:self.num_brands]
+ 
+ (2)标注nan值，这个一般跟数据型数据不太一样，中文或者英文均可自己设定，我们习惯性设计unkown吧。
+ X['category_name'] = X['category_name'].fillna('unkown')
+ 或者fillna('')均可，看自己需求。
+ 
+ (3)处理敏感词
+ 不同业务都有敏感词，如果公司业务有词典最好，没有，需要自己根据业务来设计。
+ 比如:我们这次项目是商品: 1-9，需要转化为str, X10,X13这种会最终影响价格。
+ 还有，如果是乔丹品牌，分中国乔丹，美国乔丹，我们做推荐价格业务时，为了让结果更准确，需要在乔丹
+ 前面做个判断，也就是乔丹这个词必须要做成字典，然后用jieba.load它。然后根据乔丹前面的词，来衡量结果。
+ 这样的案例有很多，这块处理，更是考验我们的业务知识。
+ 
+ (4)特征构造，新型方法。
+ 在上文基础上，当业务复杂到包含时间范围时，我们需要构造关于时间的年份。
+ 因为做推荐时，商品的价格也是随时间波动而波动。
+ 然后还有男人，女人，小孩等等，都可以依次构造特征，比如
+ XXX.apply(lambda x:x[0] if x[0] != 'Women' else '/'.join(x[:2]))
+ 去掉商品描述里含有女人，并单独拿出这一特征。
+ 
+ (5)处理可能出现的干扰词。
+ 英文：for like fits
+ 中文: 像 大概 这样
+ 
+ (6)优化器，矩阵压缩。这次本次项目的核心点。
+ 这个不好理解，多看几遍。
+一. scipy.sparse.csr_matrix:
+indptr = np.array([0, 2, 3, 6])
+indices = np.array([0, 2, 2, 0, 1, 2])
+data = np.array([1, 2, 3, 4, 5, 6])
+csr_matrix((data, indices, indptr), shape=(3, 3)).toarray()
+array([[1, 0, 2],
+       [0, 0, 3],
+       [4, 5, 6]])
+# 按row行来压缩
+# 对于第i行，非0数据列是indices[indptr[i]:indptr[i+1]] 数据是data[indptr[i]:indptr[i+1]]
+# 在本例中
+# 第0行，有非0的数据列是indices[indptr[0]:indptr[1]] = indices[0:2] = [0,2]
+# 数据是data[indptr[0]:indptr[1]] = data[0:2] = [1,2],所以在第0行第0列是1，第2列是2
+# 第1行，有非0的数据列是indices[indptr[1]:indptr[2]] = indices[2:3] = [2]
+# 数据是data[indptr[1]:indptr[2] = data[2:3] = [3],所以在第1行第2列是3
+# 第2行，有非0的数据列是indices[indptr[2]:indptr[3]] = indices[3:6] = [0,1,2]
+# 数据是data[indptr[2]:indptr[3]] = data[3:6] = [4,5,6],所以在第2行第0列是4，第1列是5,第2列是6
+ 
   
-  
-  
-  
-  
-  
-  
+ 二.scipy.sparse.csc_matrix
+indptr = np.array([0, 2, 3, 6])
+indices = np.array([0, 2, 2, 0, 1, 2])
+data = np.array([1, 2, 3, 4, 5, 6])
+csc_matrix((data, indices, indptr), shape=(3, 3)).toarray()
+array([[1, 0, 4],
+       [0, 0, 5],
+       [2, 3, 6]])
+# 按col列来压缩
+# 对于第i列，非0数据行是indices[indptr[i]:indptr[i+1]] 数据是data[indptr[i]:indptr[i+1]]
+# 在本例中
+# 第0列，有非0的数据行是indices[indptr[0]:indptr[1]] = indices[0:2] = [0,2]
+# 数据是data[indptr[0]:indptr[1]] = data[0:2] = [1,2],所以在第0列第0行是1，第2行是2
+# 第1行，有非0的数据行是indices[indptr[1]:indptr[2]] = indices[2:3] = [2]
+# 数据是data[indptr[1]:indptr[2] = data[2:3] = [3],所以在第1列第2行是3
+# 第2行，有非0的数据行是indices[indptr[2]:indptr[3]] = indices[3:6] = [0,1,2]
+# 数据是data[indptr[2]:indptr[3]] = data[3:6] = [4,5,6],所以在第2列第0行是4，第1行是5,第2行是6
+
+(7)特征提取(在用TF-IDF,TSVD前，因为我们之前构造了大量特征，我们先用SGDRegressor去查看特征性)
+用SGDRegressor提取特征的原因是：我们这次用深度学习去拟合模型，而深度学习虽然最终是非线性模型，但它的本质是大量的线性通过
+softmax构建成非线性模型，所以我们采用SGDRegressor。
+ sgd = SGDRegressor(penalty='l1', loss='squared_loss', alpha=3.0e-11, power_t=-0.12, eta0=0.019, random_state=0,
+                           average=True)
+ sgd.fit(X, np.log1p(y))
+ coef_cutoff = np.percentile(np.abs(sgd.coef_), self.percentile_cutoff)
+ self.features_to_keep = np.where(np.abs(sgd.coef_) >= coef_cutoff)[0]
+ return  X[:, self.features_to_keep]
+ 我这里简单介绍下SGD
+ 它是一种梯度随机下降的模型，每次样本估计损失的梯度，模型随着梯度递减(即学习率)增加而更新。
+ 它有俩种损失函数的惩罚: 平方欧几里德范数L2或对范数L1俩者组合（类似弹性网络）。将模型参数缩减到零向量。
+ 如果参数更新由于正则化器而超过0.0值，则更新被截断为0.0允许学习稀疏模型并实现线性选择。
+ 所以，通过官网了解，它通过参数更新让正则化器超过0.0时，可以对稀疏模型实现线性选择。
+ 
+ 下面我介绍下如何使用:
+ penalty = 'l1' ,因为要带来稀疏性，根据公式这是绝对值，当梯度下降到一定程度时，可能会出现0，所以稀疏。
+ loss = 'squared_loss'指的是普通的最小二乘拟合
+ alpha 正则化，这里为了迎合稀疏，用个特别小的值3.0e-11
+ 我们输入一个百分位数，然后求出前百分多少的特征即可，这就是我们上面的意义。
+ 
+ (8)特征合并，也是管道合并，重写官网的。
+ 
+ (9)特征拼接，通过输入不同的特征拼接，去分别拟合不同的模型，最后去调参。
+ 大概意思跟我在kaggle里写的通过corr拼接一样，做个循环拼接即可，这个也是管道处理的。
+ 拼接后用TfidfVectorizer处理、
+ 
+ (10)DictVectorizer：
+ 将特征值映射列表转换为向量。此转换器需要将素名称的映射列表(类似字典的对象)转换为Numpy数组或者scipy.sparse矩阵中的特征值。
+ 这样才能跟scikit-learn估算器一起使用。
+ 但请注意，当特征值为string类型时，此转换器仅执行二进制单热编码。如果分类要素表示为数值，例如int，则可以使用DictVector
+ izer跟随OneHotEncoder来完成二进制单热编码。
+ 举例:
+ >> from sklearn.feature_extraction import DictVectorizer
+>>> v = DictVectorizer(sparse=False)
+>>> D = [{'foo': 1, 'bar': 2}, {'foo': 3, 'baz': 1}]
+>>> X = v.fit_transform(D)
+>>> X
+array([[ 2.,  0.,  1.],
+       [ 0.,  1.,  3.]])
+       
+ 七.总结这次项目的前期特征工程处理流程
+ 1.分词，依靠字典，或者正则，或者一些replace过滤噪点。提取词性，
+ 2.处理nan值。
+ 3.构造特征
+ 4.拼接特征
+ 5.特征提起
+ 6.分俩种，一种是用CountVectorzer统计词频，然后里面的binary设置为True,这是转换为二值化，为后期我们的神经网络提供效率。
+ 因为12个神经网络中，有8个是二值化处理的。
+ 第二种是生成TF-IDF权重矩阵，
+ 在这里在介绍下这里的用法:
+ Counter同理、。
+  TfidfVectorizer(
+                    max_features=max_feat_descr,  相当于创建一个词典，该词汇表仅考虑语料库中按术语频率排序的最高max_features。
+                    ngram_range=(1, 2), 选取至少切1个的词，最多2个词的。
+                    token_pattern=TOKEN_PATTERN,  正则表达式的过滤项。
+                    dtype=np.float32,
+                )
+ 7.DictVectorizer转化为向量。
+ 8.稀疏矩阵压缩: csc这个
+ 9.SanitizeSparseMatrix：可选，提取里面的大值。利用 numpy.nanmax：沿轴返回数组的最大值或最大值，忽略任何NaN。
+ 最后再用clip(0,max)这种方式截取。
+ 所以最后是要提取强特征。
+ 
+ 
   
   
