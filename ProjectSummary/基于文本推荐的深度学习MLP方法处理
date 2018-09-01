@@ -1,0 +1,436 @@
+深度学习基础知识
+1.神经元和权重Weights:像大脑的神经元一样是基本结构，我的理解是个线性方程，只是这个权重是个服从正态分布的w随机数。
+然后我们的样本一般是y = w1.x1+w2.x2+...+b这种线性公式。
+而神经元赋值给他随机w,然后 得到新的w11 = w*w1+w*w2.... 我们的核心也是优化这个w，使其达到最优化结果。
+在整个神经网络中，最终特征性强的的特征会赋值给高权重，弱特征赋值给低权重。
+
+2.偏差(Bias) 任何方程都有偏差，本质是改变权重与输入相乘得到的结果范围。a*w1 + b
+
+3.激活函数(Activation Function) 这也是让本质是线性的神经网络变成非线性函数，f(a*w1+b)
+n个输入X1-XN，权重W1-WN,和偏差b结合输出为 U = ∑W*X+b 相当于一个神经元的输出结果进行激活。
+而这个激活函数就是用在U,也就是 f(U) 本质都是导数，而导数是观察我们的变化情况，二阶导数是观察我们变化的速率。
+Sigmoid:变换产生一个值为0到1之间更平滑的范围。我们可能需要观察在输入值略有变化时输出值中发生的变化。
+光滑的曲线使我们能够做到这一点，因此优于阶跃函数。
+f(x) = 1/1+e-x
+
+ReLU（整流线性单位） 当X>0时，函数的输出值为X；当X<=0时，输出值为0 使用ReLU函数的最主要的好处是对于大于0的所有输入来说，
+它都有一个不变的导数值。常数导数值有助于网络训练进行得更快。
+f(x) = max(x,0) = {0 x<=0 ; x x>=0
+
+tanh()-1 1之间的函数，比ReLu更润滑。 f(x) = 1-e^-2x / 1 + e^-2x.我这次项目中，也创建了一个类似tanh函数，主要目的是防止过多0产生。
+
+Softmax——Softmax激活函数通常用于输出层，用于分类问题。它与sigmoid函数是很类似的，的区别就是输出被归一化为总和为1。Sigmoid函数将发挥
+作用以防我们有一个二进制输出，但是如果我们有一个多类分类问题，softmax函数使为每个类分配值这种操作变得相当简单，而这可以将其解释为概率。
+以这种方式来操作的话，我们很容易看到——假设你正在尝试识别一个可能看起来像8的6。该函数将为每个数字分配值如下。我们可以很容易地看出
+，较高概率被分配给6，而下一个较高概率分配给8，依此类推
+公式你懂得 E的那种。
+
+4.神经网络:目标是找到一个未知函数的近似值，通过相互联系的神经元形成，这些神经元具有权重和在网络训练期间根据错误进行更新的偏差。通过
+激活函数将非线性变化置于线性组合，而这个线性组合最终会生成输出，激活的神经元组合给出输出值。
+
+5.输入/输出/隐藏层：本质是网络的第一层，最后一层。而隐藏层是我们的处理层，对传入数据执行特定任务并输出传递给下一层的作用。输入输出可见，
+
+6.MLP(多层感知器):多个神经元通过全连接来完成神经网络的任务。
+
+7.正向传播: 输入通过隐藏层到输出层的运动，信息沿着单一方向前进。
+
+8.成本函数(Cost Function) 用来衡量神经网络目标的准确性，当损失函数发生错误时，会惩罚它。
+其实就是评估指标。 比如 1/m∑(y-a)^2
+
+9.梯度下降(Gradient Descent) 梯度下降是一种最小化成本的优化算法，其实就是不断的优化函数时，我们的step不断减小，因为防止欠你和超过最优点，
+但一般是很保守的方法。俗称局部最优解，每次找局部最优。
+
+10.学习率: 每次迭代成本函数的最小化的量，我们下降到成本函数的最小值的速率，就是学习率。太大欠你和，太小过拟合。
+
+11.反向传播: 当我们定义神经网络时，我们为我们的节点分配随机权重和偏差值。一旦我们收到单次迭代的输出，
+我们就可以计算出网络的错误。然后将该错误与成本函数的梯度一起反馈给网络以更新网络的权重。 最后更新这些权重，
+以便减少后续迭代中的错误。使用成本函数的梯度的权重的更新被称为反向传播。
+在反向传播中，网络的运动是向后的，错误随着梯度从外层通过隐藏层流回，权重被更新。
+我感觉有点像boosting算法的残差运算。
+
+12.批次(Bathes): 将输入随机分成大小相等的块，与整个数据集一次性馈送到网络时建立的模型相比，批量数据使得模型更加广义化。
+
+13.周期(Epochs): 被定义为向前和向后传播中所有批次的单次训练迭代。这意味着1个周期是整个输入数据的单次向前和向后传递。
+你可以选择你用来训练网络的周期数量，更多的周期将显示出更高的网络准确性，然而，网络融合也需要更长的时间。
+另外，你必须注意，如果周期数太高，网络可能会过度拟合。
+
+14.丢弃（Dropout）——Dropout是一种正则化技术，可防止网络过度拟合套。顾名思义，在训练期间，隐藏层中的一定数量的神经元被随机地丢弃。
+这意味着训练发生在神经网络的不同组合的神经网络的几个架构上。你可以将Dropout视为一种综合技术，然后将多个网络的输出用于产生最终输出。 
+
+15.批量归一化（Batch Normalization）——作为一个概念，批量归一化可以被认为是我们在河流中设定为特定检查点的水坝。
+这样做是为了确保数据的分发与希望获得的下一层相同。当我们训练神经网络时，权重在梯度下降的每个步骤之后都会改变，这会改变数据的形状如何发送到下一层。 
+但是下一层预期分布类似于之前所看到的分布。 所以我们在将数据发送到下一层之前明确规范化数据。 
+简单说，就是数据的标准化/归一化，防止下层看到的数据基本就是上一层。
+
+16.滤波器（Filters）——CNN中的滤波器与加权矩阵一样，它与输入图像的一部分相乘以产生一个回旋输出。
+我们假设有一个大小为28 * 28的图像，我们随机分配一个大小为3 * 3的滤波器，
+然后与图像不同的3 * 3部分相乘，形成所谓的卷积输出。滤波器尺寸通常小于原始图像尺寸。在成本最小化的反向传播期间，滤波器值被更新为重量值。
+
+17.卷积神经网络（CNN）——卷积神经网络基本上应用于图像数据。假设我们有一个输入的大小（28 * 28 * 3），
+如果我们使用正常的神经网络，将有2352（28 * 28 * 3）参数。并且随着图像的大小增加参数的数量变得非常大。
+我们“卷积”图像以减少参数数量（如上面滤波器定义所示）。当我们将滤波器滑动到输入体积的宽度和高度时，将产生一个二维激活图，
+给出该滤波器在每个位置的输出。我们将沿深度尺寸堆叠这些激活图，并产生输出量。
+你可以看到下面的图，以获得更清晰的印象。
+
+18.池化（Pooling）——通常在卷积层之间定期引入池层。这基本上是为了减少一些参数，并防止过度拟合。
+最常见的池化类型是使用MAX操作的滤波器尺寸（2,2）的池层。它会做的是，它将占用原始图像的每个4 * 4矩阵的较大值。
+你还可以使用其他操作（如平均池）进行池化，但是较大池数量在实践中表现更好。
+
+19.填充（Padding）——填充是指在图像之间添加额外的零层，以使输出图像的大小与输入相同。这被称为相同的填充。 
+在应用滤波器之后，在相同填充的情况下，卷积层具有等于实际图像的大小。
+有效填充是指将图像保持为具有实际或“有效”的图像的所有像素。在这种情况下，在应用滤波器之后，输出的长度和宽度的大小在每个卷积层处不断减小。
+
+20.数据增强（Data Augmentation）——数据增强是指从给定数据导出的新数据的添加，这可能被证明对预测有益。例如，如果你使光线变亮，可能
+更容易在较暗的图像中看到猫，或者例如，
+数字识别中的9可能会稍微倾斜或旋转。在这种情况下，旋转将解决问题并提高我们的模型的准确性。通过旋转或增亮，我们正在提高数据的质量。这被称为数据增强。
+
+21.循环神经元（Recurrent Neuron）——循环神经元是在T时间内将神经元的输出发送回给它。如果你看图，输出将返回输入t次。展开的神经元
+看起来像连接在一起的t个不同的神经元。这个神经元的基本优点是它给出了更广义的输出。
+循环神经网络（RNN）——循环神经网络特别用于顺序数据，其中先前的输出用于预测下一个输出。在这种情况下，网络中有循环。隐藏神经元内的循
+环使他们能够存储有关前一个单词的信息一段时间，以便能够预测输出。隐藏层的输出在t时间戳内再次发送到隐藏层。展开的神经元看起来像上图。只有
+在完成所有的时间戳后，循环神经元的输出才能进入下一层。发送的输出更广泛，以前的信息保留的时间也较长。
+然后根据展开的网络将错误反向传播以更新权重。这被称为通过时间的反向传播（BPTT）。
+
+22消失梯度问题（Vanishing Gradient Problem）——激活函数的梯度非常小的情况下会出现消失梯度问题。在权重乘以这些低梯度时的反向传播过程
+中，它们往往变得非常小，并且随着网络进一步深入而“消失”。这使得神经网络忘记了长距离依赖。这对循环神经网络来说是一个问题，长期依赖对于
+网络来说是非常重要的。
+这可以通过使用不具有小梯度的激活函数ReLu来解决。
+
+23激增梯度问题（Exploding Gradient Problem）——这与消失的梯度问题完全相反，激活函数的梯度过大。在反向传播期间，它使特定节点的权重相
+对于其他节点的权重非常高，这使得它们不重要。这可以通过剪切梯度来轻松解决，使其不超过一定值。
+
+****************************************************************************************************************************************
+
+MLP方法：
+我先说明下大概流程计算。
+先用tf.sparse_tensor_dense_matmul将文本数据生成密集矩阵，其他数据正常用Linear函数初始化w,b参数。
+然后输入时，第一个维度为batch_size,第二个维度为特征数，也就是你的词向量数。
+每个样本 => y = w1.x1+w2.x2...
+w是特征数，然后分别乘以第一个神经元的w，求和 得到w11,
+这样依次类推。经过第一个隐层后，得到的矩阵时
+横坐标:输入样本数，纵坐标:神经元个数， 第二个，第三个同理。为了防止过拟合，每层hidden加relu,最后再softmax.
+
+一.创建相应函数
+1.初始化稀疏矩阵参数
+w和b用tf.get_variable(name = name,initializer = tf.glorat_normal_initializer())即可。b用zeros
+tf.sparse_tensor_dense_matmul:是个矩阵乘法，将稀疏矩阵转化为密集矩阵。但有个前提，第二个参数必须是密集矩阵，第一个
+参数是稀疏矩阵。也就是第二个参数是密集矩阵乘以第一个参数是稀疏矩阵。
+tf.sparse_tensor_dense_matmul(xs,w) + b  xs是我们输入的稀疏矩阵，w,b是我们初始化的参数，也就是密集矩阵的w和b
+w是横坐标为输入数，纵坐标为特征数。
+
+2.初始化线性参数
+根据MLP规则，直接前一层输入*下一层神经元个数+b即可。
+我们每次都是传入name和shape.
+
+3.评估指标
+ np.sqrt(mean_squared_log_error(np.expm1(y_true), np.expm1(y_pred)))
+ 也就是1/n 根号 log的值-log值
+ 
+4.修改relu激活函数，防止出现梯度消失。
+公式如下：
+pos = tf.nn.relu(输入)
+alpha = 我们的输入结果reshape[-1]
+neg = alpha * (输入-abs(输入)) *0.5
+return neg+pos
+解析:这个是防止梯度一直出现0的情况，梯度出现0的原因就是我们上一层的输出结果
+为负数，所以我这里做个绝对值相减，如果不是0，那么这个值就是0，不影响，如果是0.
+那么这个值就是负数。再乘以0.5 使其更平滑。这样及保障了常数导数，使其运行更快，
+又保证了防止更多等于0的情况。
+
+5.创建是否启用二值化稀疏矩阵.这个矩阵是迎合我们文本的稀疏数据。
+
+这个矩阵最后通过CounterVector/TF-IDFVector去调度。
+这里解释下二值化神经网络
+二值化神经网络，是指在浮点型神经网络的基础上，将其权重矩阵中权重值和各个激活函数值同时进行二值化得到的神经网络。
+二值化神经网络具有很好的特性，具体体现在：
+(1)通过将权重矩阵二值化，一个权重值只占用一个比特，相比于单精度浮点型权重矩阵，网络模型的内存消耗理论上能减少32倍，
+因此二值化神经网络在模型压缩上具有很大的优势。
+(2)当权重值和激活函数值同时进行二值化之后，原来32个浮点型数的乘加运算，可以通过一次异或运算(xnor)和一次popcnt运算解决，
+在模型加速上具有很大的潜力。
+总结：将权重值和激活函数值二值化到-1 和 +1 来实现，理论缩小32倍。 因为原来的是float32双精度，占据32个字节。
+
+对于每个数据集的4个模型中的2个，我们通过将所有非零值设置为1来在训练和预测期间对输入数据进行二值化。
+这就像使用二进制CountVectorizer而不是TFIDF免费获得额外数据集。也就是将各种数字，化为1，-1俩种 b 字节的处理，大大降低了内存消耗。
+
+关于里面稀疏矩阵创建的解释:
+SparseMatrix:
+indices:我们向量的位置。因为我们处理的文本是第二个位置，所以这里设置为[None,2],代表着处理第二个位置。
+values: 我们输入的向量值，必须是float32
+dense_shape: 我们的维度，为2
+tensor:我们的tensor单位，也就是以上之和。
+我们下面feed_dict将indices进行矩阵列转换，这样，取第二个数就是我们的文本内容位置。
+
+stack 和 hstack 和 vstack
+   设定是否进行二值化处理,不进行二值化，我们就将非零值都设置为1，同样加快速度。
+    np.stack:里面列表大小必须相同，默认是axis = 0,也就是按照行向量转换。
+    如下：[[1, 2, 3], [4, 5, 6]]
+        增加一维，新维度下标为0，也就是把每行都放到一个列表中，从上到下排开。
+        [[1 2 3]
+        [4 5 6]]
+    如果是列:axis = 1 也就是把每列都放到一个列表中，从上到下排开。
+        [[1 4]
+         [2 5]  这个就是我们文本内容位置。
+        [3 6]]
+    我们这里设置为转置，其实就是按列排。
+    np.hstack() 水平堆叠：按照行拼接：
+    a=[1,2,3]
+    b=[4,5,6]
+    print(np.hstack((a,b)))
+
+    输出：[1 2 3 4 5 6 ]
+    a=[[1],[2],[3]]
+    b=[[1],[2],[3]]
+    c=[[1],[2],[3]]
+    d=[[1],[2],[3]]
+    print(np.hstack((a,b,c,d)))
+    因为是水平堆叠，所以每行的单独元素，都会合并成一行。
+
+    输出：
+    [[1 1 1 1]
+    [2 2 2 2]
+    [3 3 3 3]]
+    
+    vstack按照整个数组去拼接。也就是一个数组就是一行。
+    a=[1,2,3]
+    b=[4,5,6]
+    print(np.vstack((a,b)))
+    
+    输出：
+    [[1 2 3]
+    [4 5 6]]
+    如果是vstack((a,b,c,d))
+    [[1]
+     [2]
+     [3]
+     [1]
+     [2]
+     [3]
+     [1]
+     [2]
+     [3]
+     [1]
+     [2]
+     [3]]
+    np.ones_like(x) 将x矩阵数都变成1.
+    '''
+    
+二.构建父类，为了后面拟合，后面的子类主要是改变其损失函数，以及神经元个数，深度，是否二值化。
+
+这次构建网络中，用了大量方法防止过拟合，因为我们毕竟是个稀疏矩阵转化为密集矩阵的过程。
+
+self.n_hidden = n_hidden                         # 隐层,默认2个，都是16，后期会相应改变。
+self.reg_l2 = reg_l2                             # L2正则系数，相当于lambda
+self.reg_l1 = reg_l1                             # L1正则系数，相当于alpha
+self.learning_rate = learning_rate               # 学习率
+self.lr_decay = lr_decay                         # 线性衰退率
+self.bs_decay = bs_decay                         # batch改变率，如果epoch小于2时，让我们的迭代batch*2，从而下次迭代时batch增加，这是为了更好地学习。
+self.decay_epochs = decay_epochs                 # epoch的阈值，我们初始设置为2，意思是小于2时，就开始进行线性和非线性衰退操作，让他乘以0.75进行逐渐衰退，防止过拟合。
+self.n_epoch = n_epoch                           # epoch数量。
+self.batch_size = batch_size                     # 一次迭代个数
+self.use_target_scaling = use_target_scaling     # 数据是否标准化
+if self.use_target_scaling:
+    self.target_scaler = StandardScaler()
+self.n_bins = n_bins                             # 输入个数
+self.seed = seed                                 # 种子数量
+self.actfunc = actfunc                           # 选择哪个激活函数，默认为relu
+self.binary_X = binary_X                         # 是否进行二值化处理
+self.is_fitted = False                           # 是否拟合数据，默认False,调用fit函数，则自动改为True
+
+考虑到本次项目用二值化处理，而生成的数据是主要是1，所以需要有个考量函数，用tf.squeeze处理我们的线性初始化linear.
+损失函数用tf.losses.mean_squared_error.这里介绍下常用的损失函数和优化器。
+
+损失函数:用来预测y和已知答案y_差距。我们的目的是使损失函数不断减小，从而训练出更高准确率的神经网络。
+
+1.均方误差:  --回归问题，有时也可以分类。
+MSE : n个样本的预测值 y 和已知答案 y_ 之差的平方和,再求平均值。
+loss_mse = tf.reduce_mean(tf.square(y_ - y))
+这个损失常用在回归问题。有时也可用在分类问题。
+
+2.tf.losses.mean_squared_error -- 回归
+这是本次项目用的原始损失函数，但后来被huber取代
+它的作用是每次批次的样本总损失与里面调节权重的weights的相应元素会做出重新调整，如果weights的shape与predictions不匹配，
+那么测量元素的损失predictions与相应的值缩放weights.
+也就是可调节的损失函数。返回的是加权的损失浮动Tensor, 本身均方差的损失就适合用于回归，而这个里面加入权重，可以更好地调节结果。
+
+3.交叉熵  --  分类
+H(X = x) = -∑p(x)logq(x)
+刻画两个概率分布之间的距离，是分类问题的损失函数，给定两个概率分布p和q,交叉熵刻画的是两个概率分布之间的距离。
+可以通过Softmax回归将神经网络前向传播得到的结果变成交叉熵要求的概率分布得分。在TensorFlow中，Softmax回归的参数被去掉了，
+只是一个额外的处理层，将神经网络的输出变成一个概率分布。
+
+#labels为预测输出，且必须采用labels=y_, logits=y的形式将参数传入
+tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=y)
+# 自定义
+cross_entropy1 = -tf.reduce_mean(y_ * tf.log(tf.clip_by_value(y1, 1e-10, 1.0)))
+
+4.自定义损失函数
+部分问题可能需要自定义来衡量。
+举例:对于产品销量预测问题，表面上是一个回归问题，可使用MSE损失函数。
+可实际情况下，当预测值大于实际值时，损失值应是正比于商品成本的函数；当预测值小于实际值，
+损失值是正比于商品利润的函数，多数情况下商品成本和利润是不对等的.
+
+Loss(y,y') = ∑f(y,y')
+f(x,y) = {a(x-y) x>y , b(y-x) x<y
+
+代码实现:
+其实就是设置loss_more为对应商品成本，loss_less对应商品利润
+loss= tf.reduce_sum(tf.where(tf.greater(y, y_), (y-y_)*loss_more,(y_-y)*loss_less))。
+
+tf.greater(x,y)，返回x>y的判断结果的bool型tensor，当tensor x, y的维度不一致时，采取广播（broadcasting）机制。
+
+tf.where(condition,x=None, y=None, name=None)，根据condition选择x (if true) or y (if false)。
+
+5.TensorFlow的Cross_Entropy实现
+(1) tf.nn.softmax_cross_entropy_with_logits    --  分类
+该函数的功能是自动计算logits（未经过Softmax）与labels之间的cross_entropy交叉熵。
+
+注意点：如果labels的每一行是one-hot表示，也就是只有一个地方为1，其他地方为0，
+可以使用tf.sparse_softmax_cross_entropy_with_logits()
+
+警告:
+（1）这个操作的输入logits是未经缩放的，该操作内部会对logits使用softmax操作；
+（2）参数labels,logits必须有相同的形状 [batch_size, num_classes] 和相同的类型(float16, float32,float64)中的一种。
+
+计算过程，先求softmax, 也就是e的运算 ，再做交叉熵：H = -∑y'log(yi)
+注意:返回的是向量，不是数，如果要求交叉熵，我们要再做一步tf.reduce_sum操作,就是对向量里面所有元素求和，最后才得到交叉熵
+，如果求loss，则要做一步tf.reduce_mean操作，对向量求均值！
+
+(2)tf.nn.sparse_softmax_cross_entropy_with_logits  -- 二分类,0,1稀疏数据
+该函数的标签labels要求是排他性的即只有一个正确类别，labels的形状要求是[batch_size] 而值必须是从0开始编码的int32或int64，
+而且值范围是[0, num_class)，对比于tf.nn.softmax_cross_entropy_with_logits的[batchsize，num_classes]格式的得分编码。
+
+(3)tf.nn.sigmoid_cross_entropy_with_logits --分类 这个太原始了，现在不咋用
+
+(4) tf.nn.weighted_cross_entropy_with_logits -- 分类
+weighted_sigmoid_cross_entropy_with_logits是sigmoid_cross_entropy_with_logits的拓展版，多
+支持一个pos_weight参数，在传统基于sigmoid的交叉熵算法上，正样本算出的值乘以某个系数。
+
+
+6.Huber loss -- 回归
+这是这次使用的损失函数。
+是为了增强平方误差损失函数（squared loss function）对噪声（或叫离群点，outliers）的鲁棒性提出的。
+tf.losses.huber_loss(self.output, self.predict,weights=2.0, delta=1.0)
+数学公式:也是跟我们自定义一样，在俩个范围俩个公式，所以鲁棒性更强。
+predictions：预测的产出。
+weights：可选，Tensor其等级为0或相同等级 labels，并且必须可广播到labels（即，所有维度必须1与相应的losses维度相同或相同）。
+delta：float，huber损失函数从二次变为线性的点。
+scope：计算损失时执行的操作范围。
+
+三.最常用的Adam优化器，Adam优化算法
+
+Adam 算法和传统的随机梯度下降不同。随机梯度下降保持单一的学习率（即 alpha）更新所有的权重，学习率在训练过程中并不会改变。
+而 Adam 通过计算梯度的一阶矩估计和二阶矩估计而为不同的参数设计独立的自适应性学习率。
+Adam 算法的提出者描述其为两种随机梯度下降扩展式的优点集合，即：
+适应性梯度算法（AdaGrad）为每一个参数保留一个学习率以提升在稀疏梯度（即自然语言和计算机视觉问题）上的性能。
+均方根传播（RMSProp）基于权重梯度最近量级的均值为每一个参数适应性地保留学习率。这意味着算法在非稳态和在线问题上有很有优秀的性能。
+Adam 算法同时获得了 AdaGrad 和 RMSProp 算法的优点。Adam 不仅如 RMSProp 算法那样基于一阶矩均值计算适应性参数学习率，
+它同时还充分利用了梯度的二阶矩均值（即有偏方差/uncentered variance）。具体来说，算法计算了梯度的
+指数移动均值（exponential moving average），超参数 beta1 和 beta2 控制了这些移动均值的衰减率。
+移动均值的初始值和 beta1、beta2 值接近于 1（推荐值），因此矩估计的偏差接近于 0。该偏差通过首先计算
+带偏差的估计而后计算偏差修正后的估计而得到提升。
+
+四.训练全过程。
+1.初始化主要参数
+predict
+output
+loss
+
+2.初始化稀疏线性函数，
+也就是我们的输入值。我们这个输出，就是第一个隐层的输入。
+输入值的横坐标:样本数
+纵坐标，第一层hidden神经元个数。
+然后做个判断，是否等于3 如果hidden设置3层，
+就调用linear隐层初始化函数，然后正则化为l2,不是3，正则化li1
+
+3.初始化标准函数，是否二值化这些。
+
+4.拟合
+(1)构建计算流图
+self._graph = tf.Graph
+
+(2)初始化config
+  config = tf.ConfigProto(
+            intra_op_parallelism_threads=1,  # 对于单个op可执行并行化，以后可以设定
+            inter_op_parallelism_threads=1,  # 执行阻塞操作的节点在池中排队,就是java的阻塞队列
+            use_per_session_threads=1,       # 流程的会话设置的线程数。
+            allow_soft_placement=True,
+            device_count={'CPU': 4, 'GPU': int(use_gpu)})
+            
+(3)初始化会话
+self.session_tf = tf.Session(graph = self._graph,config = config)
+
+(4)计算流图操作
+ with self._graph.as_default():
+
+(5)在里面初始化参数
+tf.set_random_seed(self.seed)
+random_state = np.random.RandomState(self.seed)
+self._xs = SparseMatrix()                                              # 初始化稀疏矩阵
+self._lr = tf.placeholder(tf.float32,shape = [])                       # 初始化学习率
+self.build_model(n_features)                                           # 初始化模型参数
+self.trainADam = tf.train.AdamOptimizer(self._lr).minimize(self.loss)  # 优化器
+self.session_tf.run(tf.global_variables_initializer())                 # 初始化主要参数后，开始run，run里是我们的初始化参数即可
+bs = self.batch_size                                                   # 跑之前，设置batch
+lr = self.learning_rate                                                # 学习率
+
+(6)epoch迭代
+for n_epoch in range(self.n_epoch):
+
+(7)初始化损失
+ train_loss = 0     
+ 
+(8)开始batch训练
+这里要设置feed_dict字典。
+我们将预测值，lr放入里面，然后用session.run([优化器,损失]，feed_dict)来跑。
+如果只有一个优化器，feed_dict就设置优化器内容，同理。
+
+        for _x,_y in batches:
+            feed_dict = self._x_feed_dict(_x)
+            feed_dict[self.predict] = _y
+            feed_dict[self._lr] = lr
+            '''
+            初始化训练集的损失值，记住第一个_是预测值，是我们要求的值
+            '''
+            _,loss = self.session_tf.run(
+                [self.trainADam,self.loss],feed_dict = feed_dict
+            )
+            train_loss += loss / len(index_batches)
+        print_time = True
+        print(X_valid)
+        if X_valid is not None:
+            assert not to_predict
+            if y_valid is not None:
+                feed_dict = self._x_feed_dict                             # 二值化
+                feed_dict[self.predict] = y_valid_scaled                  # 预测值进行标准化
+                '''
+                初始化验证集的预测值和损失值
+                '''
+                valid_predict,valid_loss = self.session_tf.run(
+                    [self.output,self.loss],feed_dict = feed_dict
+                )
+                valid_predict = self._invert_target(valid_predict)
+                valid_rmsle = get_rmsle(y_valid,valid_predict)
+                dt = time.time() - t0
+                print_time = False
+                print('第{}次的train_loss为: {:.5f}, valid_loss为: {:.5f}, valid_rmsle为: {:.5f}, 时间为: {:.1f}'.format(n_epoch,train_loss,valid_loss,valid_rmsle,dt))
+            else:
+                valid_predict = self.predict(X_valid)
+            predictions.append(valid_predict)
+        elif to_predict:
+            predictions.append([self.predict(x) for x in to_predict])
+        if print_time:
+            dt = time.time() - t0
+            print('第{}次train_loss为: {:.5f}, 时间为: {:.1f} s'.format(n_epoch,train_loss,dt))
+        if n_epoch < self.decay_epochs:
+            bs *= self.bs_decay
+            lr *= self.lr_decay
+        if verbose:
+            logging.info(memory_info())
+return self
+
+以上大概都讲了一遍。我会单独开一篇讲下tensorflow原理。
+
+
+
+
+
