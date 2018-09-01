@@ -525,6 +525,7 @@ array([[ 2.,  0.,  1.],
                     max_features=max_feat_descr,  相当于创建一个词典，该词汇表仅考虑语料库中按术语频率排序的最高max_features。
                     ngram_range=(1, 2), 选取至少切1个的词，最多2个词的。
                     token_pattern=TOKEN_PATTERN,  正则表达式的过滤项。
+                    binary = True 所有非零项计数都设置为1，即二值化。
                     dtype=np.float32,
                 )
  7.DictVectorizer转化为向量。
