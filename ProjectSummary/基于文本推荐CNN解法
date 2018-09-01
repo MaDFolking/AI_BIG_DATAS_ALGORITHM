@@ -39,3 +39,21 @@ Conv1D（kernel_size=3）实际就是Conv2D（kernel_size=（3,300）），当�
 络处理文本会非常快速有效的内涵。
 
 三.整体流程
+嵌入层设计：
+我们的params就是初始化的shape[样本数，样本特征]
+我们的样本特征为32，样本数就是输入书。
+ids为int类型的shape=[batch数,词长度]、
+
+卷积核设计: 10个卷积核，3个kernel_size, kernel_size 就是n-gram的n，也就是每次拼3个词。
+激活函数是relu.
+
+卷积后直接dropout防止过拟合，增强神经元学习能力。
+然后池化层，用的是平均池化层，stride为1，是valid
+最后用tf.contrib.layers.flatten 进行展开处理，返回的扁平张量[batch_size，k]。
+
+
+最后将这些tf.concat拼接，然后全连接，用dense最后输出一个。因为是回归问题，一个句子
+预测一个值。
+
+
+
