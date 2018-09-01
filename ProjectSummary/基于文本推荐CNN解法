@@ -1,1 +1,41 @@
-一.
+CNN处理就要简单一些了。主要开始要经过一个嵌入式，将稀疏矩阵转为密集矩阵。
+
+一.嵌入式 
+tf.nn.embedding_lookup
+它的本质是利用查找表的方式直接找出我们想要的值的索引并返回，在FastText中将其转化为霍夫曼树查找，时间
+复杂度变为O(logN)
+
+此函数用于在张量列表中执行并行查找params。它是一种概括 tf.gather，其中params解释为大嵌入张量的分区。 params可以是PartitionedVariable使用
+tf.get_variable()分区器返回的。
+
+如果len(params) > 1，每个元件id的ids被的元件之间分配params根据partition_strategy。在所有策略中，如果id空间不均匀地划分分区数，
+(max_id + 1) % len(params)则将为每个第一个分区分配一个id。
+
+如果partition_strategy是"mod"，我们将每个id分配给分区 p = id % len(params)。例如，13个ID分为5个分区： [[0, 5, 10], [1, 6, 11], 
+[2, 7, 12], [3, 8], [4, 9]]
+
+如果partition_strategy是"div"，我们以连续的方式将ID分配给分区。在这种情况下，13个ID分为5个分区： [[0, 1, 2], [3, 4, 5], [6, 7, 8], 
+[9, 10], [11, 12]]
+
+查找结果连接成密集张量。返回的张量有形shape(ids) + shape(params)[1:]。
+
+ARGS：
+params：表示完整嵌入张量的单张量，或除了第一维之外全部具有相同形状的P张量列表，表示分片嵌入张量。或者，a PartitionedVariable，
+通过沿维度0划分创建。每个元素必须根据给定的大小适当partition_strategy。
+ids：A Tensor类型int32或int64包含要查找的ID params。
+partition_strategy：指定分区策略的字符串，相关if len(params) > 1。目前"div"并"mod"得到支持。默认是"mod"。
+name：操作的名称（可选）。
+validate_indices：已弃用。如果将此操作分配给CPU，则值indices总是在范围内验证。如果分配给GPU，则超出范围的索引会导致安全但未指定的行为，
+这可能包括引发错误。
+max_norm：如果不是None，如果其l2范数大于此值，则会对每个嵌入进行裁剪。
+返回：
+A Tensor与张量相同的类型params。
+
+二.conv1d 代替 conv2d
+Conv1D（kernel_size=3）实际就是Conv2D（kernel_size=（3,300）），当然必须把输入也reshape成（600,300,1），即可在多行上进行Conv2D卷积。
+这也可以解释，为什么在Keras中使用Conv1D可以进行自然语言处理，因为在自然语言处理中，我们假设一个序列是600个单词，每个单词的词向量是300维，
+那么一个序列输入到网络中就是（600,300），当我使用Conv1D进行卷积的时候，实际上就完成了直接在序列上的卷积，卷积的时候实际是以（3,300）进行卷积，
+又因为每一行都是一个词向量，因此使用Conv1D（kernel_size=3）也就相当于使用神经网络进行了n_gram=3的特征提取了。这也是为什么使用卷积神经网
+络处理文本会非常快速有效的内涵。
+
+三.整体流程
