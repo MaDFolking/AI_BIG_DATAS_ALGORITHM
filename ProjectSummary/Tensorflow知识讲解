@@ -1,0 +1,21 @@
+feed_dict:
+对于范围内的i（total_batch）：
+        ＃获取样本和特征的每次迭代数量
+        batch_xs，batch_ys = mnist.train.next_batch（batch_size）
+        ＃记住，运行一定要在会话对象上运行，用优化器去优化，后面feed_dict是个字典函数，表示这个函数，整体是用优化器来计算这个函数的损失函数值。
+        sess.run（optm，feed_dict = {x：batch_xs，y：batch_ys，keepratio：0.7}）
+        ＃计算完损失函数后，叠加给avg_cost，记住最后测试阶段，保留率是1，因为我们最后是计算准确值。而没必要增强神经元的学习能力。
+        avg_cost + = sess.run（cost，feed_dict = {x：batch_xs，y：batch_ys，keepratio：1。}）
+   
+   ＃得到损失函数
+    avg_cost = avg_cost / total_batch
+    ＃显示每个纪元步骤的日志
+    如果epoch％display_step == 0： 
+        print（“Epoch：％03d /％03d cost：％。9f”％（epoch，training_epochs，avg_cost））
+        ＃最后求结果保留率都是1，用ACCR也就是得分分别带入不同批次即可。
+        train_acc = sess.run（accr，feed_dict = {x：batch_xs，y：batch_ys，keepratio：1。}）
+        打印（“训练准确度：％。3f”％（train_acc））
+        #test_acc = sess.run（accr，feed_dict = {x：testimg，y：testlabel，keepratio：1。}）
+        #print（“测试准确度：％。3f”％（test_acc））
+        
+
