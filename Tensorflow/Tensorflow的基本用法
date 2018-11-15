@@ -1,0 +1,32 @@
+一.Variable:变量,用来初始化用的。
+Weights = tf.Variable(tf.random_uniform([1],-1.0,1.0))
+biases = tf.Variable(tf.zero([1]))
+
+二.reduce_mean:平均值。square: 平方。reduce_sum ：求和。
+loss = tf.reduce_mean(tf.square(y - y_data))
+
+三.tf.train.优化法(梯度下降，Adam)  .minimize(损失函数loss)
+
+四.tf.global_variables_initializer:初始化，也就是java的int a = 10; 我们之前都是int a. 这里是设定结果，再用这个函数初始化进行激活变量
+
+五.tf.Session() 激活。初始化后我们如果要运行，就要激活，也就是激活整个神经网络。
+sess.run(init)
+
+六.assign 跟新
+new_value = tf.add(state,one)
+update = tf.assign(state,new_value)
+#这样每次都更新加法功能。
+
+init = tf.global_variables_initializer()
+
+with tf.Session() as sess:
+    sess.run(init)
+    for i in range(3):
+        # 每次都通过run来更新加法这个功能。
+        sess.run(update)
+        # 打印需要run
+        print(sess.run(state))
+        
+        
+七.激励函数
+线性转为非线性，可自己创建激励函数，但必须可微可导，因为反向传播时必须可导函数
