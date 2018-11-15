@@ -1,2 +1,3 @@
+如果不进行正则化，当w为1,2时触发激励函数，
 import tensorflow as tf
 
