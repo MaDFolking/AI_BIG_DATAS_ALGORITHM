@@ -1,0 +1,80 @@
+import tensorflow as tf
+import matplotlib.pyplot as plt
+
+'''
+案例1：name_scope中get_variable与Variable的区别。
+'''
+## 在name_scope中，tf.Variable创建的变量，都共享在这个name_scope的名字中。
+## 但get_variable创建的变量不受影响。
+with tf.name_scope('name_scope'):
+    initializer = tf.constant_initializer(value=1.)
+    var1 = tf.get_variable("var1",shape=[1],dtype = tf.float32,initializer = initializer)
+    ## 用Variable初始化值时，必须写在Variable的第一个参数里。
+    var2 = tf.Variable([2.],"var2",dtype = tf.float32)
+    var3 = tf.Variable([2.1],"var2",dtype = tf.float32)
+    var4 = tf.Variable([2.2],"var2",dtype = tf.float32)
+    var5 = tf.Variable([2.3],"var2",dtype = tf.float32)
+
+with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+    print(var1.name)
+    print(sess.run(var1))
+    print(var2.name)
+    print(sess.run(var2))
+    print(var3.name)
+    print(sess.run(var3))
+    print(var4.name)
+    print(sess.run(var4))
+    print(var5.name)
+    print(sess.run(var5))
+    
+   
+'''
+案例2：variable_scope
+在 variable_scope 中可以重复使用。
+'''
+## variable_scope来初始化变量时，都属于scope命名空间内。只是get_variable为 name_scope/变量名:0
+## Variable为name_scope/Variable:0
+with tf.variable_scope('name_scope'):
+    initializer = tf.constant_initializer(value=1.)
+    var1 = tf.get_variable("var1",shape=[1],dtype = tf.float32,initializer = initializer)
+    ## 用Variable初始化值时，必须写在Variable的第一个参数里。
+    var2 = tf.Variable([2.],"var2",dtype = tf.float32)
+    var3 = tf.Variable([2.1],"var2",dtype = tf.float32)
+    var4 = tf.Variable([2.2],"var2",dtype = tf.float32)
+    var5 = tf.Variable([2.3],"var2",dtype = tf.float32)
+    ## 在 variable_scope 中可以重复使用变量,不用写名字后面的内容比如dtype这些。
+    var5_reuse = tf.Variable([2.],"var2")
+    ## 如果想重复写get_variable变量，需要在上面加    scope.reuse_variables()
+    ## 表示下面的变量都可以重复使用该name，且下面的var6和var7都是同样的variable.都是var2的。
+    scope.reuse_variables()
+    var6 = tf.get_variable("var1")
+    var7 = tf.get_variable("var1")
+
+with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+    print(var1.name)
+    print(sess.run(var1))
+    print(var2.name)
+    print(sess.run(var2))
+    print(var3.name)
+    print(sess.run(var3))
+    print(var4.name)
+    print(sess.run(var4))
+    print(var5.name)
+    print(sess.run(var5))
+    
+## 企业中用法，调用同个框架，根据名字不同，效果不同：当然如果你不用get_varaible，用name_scope也可。
+## 此时下面的例子就是非共享变量，用variable_scope,也就是俩个不同的变量。
+with tf.variable_scope("train") as scope:
+    train = RNN(train_config)
+with tf.variable_scope("test") as scope:
+    test = RNN(test_config)
+    
+## 下面方法就可以共享,写在一个scope里，用scope.reuse_variables()，此时train里的参数都会被test所使用。
+with tf.variable_scope("rnn") as scope:
+    sess = tf.Session()
+    train = RNN(train_config)
+    scope.reuse_variables()
+    test = RNN(test_config)
+    sess.run(tf.global_variables_initializer())
