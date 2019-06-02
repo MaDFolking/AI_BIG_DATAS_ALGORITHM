@@ -1,0 +1,420 @@
+#！/usr/bin/env python
+# -*- coding: utf-8 -*-
+'''
+@author: 金容明
+@file: tf_lstm_rfm.py
+@time: 2019/05/23 11:27
+@help: RFM预测模型测试阶段
+'''
+###引入第三方模块###
+import os
+import re 
+import sys
+import time
+import argparse
+import numpy as np
+import pandas as pd
+import multiprocessing
+import tensorflow as tf
+import matplotlib.pyplot as plt
+
+from random import shuffle
+from tensorflow.contrib import rnn
+
+
+###定义设置LSTM常量###
+
+# 获取buckets的动态参数
+FLAGS=None   
+
+
+## 加载数据
+def load_data(train_path,test_path):
+    # 读取OSS数
+    train_file_path = os.path.join(FLAGS.buckets,FLAGS.train_path)
+    test_file_path = os.path.join(FLAGS.buckets,FLAGS.test_path)
+    
+    # 创建tf的reader对象
+    reader = tf.TextLineReader()
+    # 将OSS数据转成序列格式
+    file_name_queue_train = tf.train.string_input_producer([train_file_path])
+    file_name_queue_test = tf.train.string_input_producer([test_file_path])
+
+    # 懒加载序列里的value值。
+    key_train,value_train = reader.read(file_name_queue_train)
+    # key_test,value_test = reader.read(file_name_queue_train)
+
+     # 初始化特征列,这行是double类型
+    record_defaults_train = [[1.0],[1.0],[1.0],["1.0"],["1.0"],[""]] 
+    record_defaults_test = [[1.0],[1.0],[1.0],["1.0"],["1.0"],[""]] 
+
+    col1, col2, col3, col4, col5,col6 = tf.decode_csv(value_train, record_defaults=record_defaults_train)
+    t1, t2, t3, t4, t5,t6 = tf.decode_csv(value_train, record_defaults=record_defaults_test)
+
+    
+    # 前三个字段时表示唯一用户,我们这里第一步先不处理，最后一个时特征列,pt_day是时间。我们把除了前三个和最后一个外其他拼接成特征列.
+    feature_train = tf.concat([[col4], [col5], [col6]],0)
+    feature_test = tf.concat([[t4],[t5],[t6]],0)
+
+    # 我们需要将数据一步步喂给DataFrame
+    init = tf.global_variables_initializer()    
+    with tf.Session() as sess:    
+        sess.run(init)
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess = sess,coord = coord)       
+        
+        # 训练集读取
+        df_train = sess.run([feature_train])
+        for i in range(FLAGS.total_num - 1):
+            df_train = np.append(df_train,sess.run([feature_train]),axis = 0)   
+        
+        df_temp = df_train
+        df_train = df_temp[0:15000,:]
+        df_valid = df_temp[15000:20001,:]
+        
+        df_test = sess.run([feature_test])
+        for j in range(FLAGS.test_num - 1):
+            df_test = np.append(df_test,sess.run([feature_test]),axis = 0)   
+          
+        # print(df_train.shape)
+        # print(df_valid.shape)
+        # print(df_test.shape)
+        coord.request_stop()
+        coord.join(threads)
+    return df_train,df_valid,df_test
+
+## 处理训练集数据
+## 我们不能随机取，而应该按照step来取，这样才能发挥LSTM的优势。
+## 所以我每次都循环来取即可，循环10000次。
+def get_train_data(data_train,batch_size_first,batch_size_end,train_path,is_training = True,
+                   time_feature_step = 90,time_label_step = 30):
+    data_temp = data_train
+    
+    # 如果是验证集,每次随机打乱数组进行抽取，用bagging本质，防止过拟合
+    # 如果是训练集,则按照step依次添加
+    if is_training == True:
+        data_temp = data_train[batch_size_first:batch_size_end,:]
+    else:
+        np.random.shuffle(data_train)
+        data_temp = data_train[:FLAGS.batch_size,:]
+        
+
+    X_train = np.zeros(shape = (1))
+    y_train = np.zeros(shape = (1))
+
+    X_train = np.delete(X_train,0,axis = 0)
+    y_train = np.delete(y_train,0,axis = 0)
+    
+    # 训练集
+    for i in data_temp:
+        list1 = list(i[0].replace('[','').replace(']','').replace('"','').split(','))
+        aa = []
+        n = 0
+        for t1 in list1:
+            n = n + 1
+            if n % 4 == 1:
+                continue 
+            aa.append(float(t1))
+        n = 0 
+        
+        list1 = list(i[1].replace('[','').replace(']','').replace('"','').split(','))
+        bb = []
+        for t2 in list1:
+            n = n + 1
+            if n % 4 == 1:
+                continue 
+            bb.append(float(t2))
+        
+        aa = aa + bb
+        n = 0
+        
+        list1 = list(i[2].replace('[','').replace(']','').replace('"','').split(','))
+        cc = []
+        for t3 in list1:
+            n = n + 1
+            if n % 4 == 1:
+                continue 
+            cc.append(float(t3))
+        # aa = [float(a) for a in list(i[0].replace('[','').replace(']','').replace('"','').split(',')) if len(str(a)) < FLAGS.is_time_filt ]
+        # bb = [float(b) for b in list(i[1].replace('[','').replace(']','').replace('"','').split(',')) if len(str(b)) < FLAGS.is_time_filt ]
+        # aa = aa + bb
+        # cc = [float(c) for c in list(i[2].replace('[','').replace(']','').replace('"','').split(',')) if len(str(c)) < FLAGS.is_time_filt ]
+        # print(len(aa))
+        # print(len(cc))
+        # if len(aa) == 270 and len(cc) == 90:
+#         print(aa)
+#         print(bb)
+        X_train = np.append(X_train,aa).reshape(-1,time_feature_step * FLAGS.feature_col)
+        y_train = np.append(y_train,cc).reshape(-1,time_label_step * FLAGS.feature_col)
+
+    # print(X_train.shape)
+    # print(y_train.shape)
+   
+    return X_train,y_train
+
+
+## 处理测试集数据
+def get_test_data(data_test,batch_size_first,batch_size_end,test_path,time_feature_step = 90,time_label_step = 30):
+    # 每次随机打乱数组进行抽取，用bagging本质，防止过拟合
+    # shuffle(data_test)
+
+    data_test = data_test[batch_size_first:batch_size_end,:]
+
+    X_test = np.zeros(shape = (1))
+    y_test = np.zeros(shape = (1))
+
+    X_test = np.delete(X_test,0,axis = 0)
+    y_test = np.delete(y_test,0,axis = 0)
+    
+    # 测试集
+    for i in data_test:
+        list1 = list(i[0].replace('[','').replace(']','').replace('"','').split(','))
+        aa = []
+        n = 0
+        for t1 in list1:
+            n = n + 1
+            if n % 4 == 1:
+                continue 
+            aa.append(float(t1))
+        n = 0 
+        
+        list1 = list(i[1].replace('[','').replace(']','').replace('"','').split(','))
+        bb = []
+        for t2 in list1:
+            n = n + 1
+            if n % 4 == 1:
+                continue 
+            bb.append(float(t2))
+        
+        aa = aa + bb
+        n = 0
+        
+        list1 = list(i[2].replace('[','').replace(']','').replace('"','').split(','))
+        cc = []
+        for t3 in list1:
+            n = n + 1
+            if n % 4 == 1:
+                continue 
+            cc.append(float(t3))
+        
+        # aa = [float(a) for a in list(i[0].replace('[','').replace(']','').replace('"','').split(','))  ]
+        # bb = [float(b) for b in list(i[1].replace('[','').replace(']','').replace('"','').split(',')) if len(str(b)) < FLAGS.is_time_filt ]
+        # aa = aa + bb
+        # cc = [float(c) for c in list(i[2].replace('[','').replace(']','').replace('"','').split(',')) if len(str(c)) < FLAGS.is_time_filt ]
+        
+        # print(len(aa))
+        # print(len(cc))
+       #  if len(aa) == 270 and len(cc) == 90:
+
+        X_test = np.append(X_test,aa).reshape(-1,time_feature_step * FLAGS.feature_col)
+        y_test = np.append(y_test,cc).reshape(-1,time_label_step * FLAGS.feature_col)
+    
+    # print(X_train.shape)
+    # print(y_train.shape)
+    
+    return X_test,y_test
+
+
+
+## 开始设计神经网络
+def train():
+    '''
+    所有LSTM操作都在此进行,目前都放在一个图上。
+    '''
+    g1 = tf.Graph()
+    with g1.as_default():
+        data, valid, test = load_data(FLAGS.train_path,FLAGS.test_path)
+        
+        # 编写正则化函数
+        def weight_variable(shape, l2):
+            if l2 is not None or l2 != '':
+                initial = tf.truncated_normal(shape, stddev = 1)
+                weight_decay = tf.multiply(tf.nn.l2_loss(initial), l2, name='weight_loss')
+                tf.add_to_collection('losses', weight_decay)
+                return tf.Variable(initial, dtype = tf.float32)
+            else:
+                return
+
+        # 每次训练数据，越大则消耗越多,设置为动态参数
+        batch_size = tf.placeholder(tf.int32,[])
+        
+        # 初始化俩层的权重W和偏置项b。我们之前标准化按照均值为0，标准差为1的方式，所以此处也如此。根据矩阵表达式，bias值为W的列。
+        W = {
+              'in' : weight_variable([FLAGS.feature_col,FLAGS.cell_num],FLAGS.l2_normal), 
+              'out' : tf.Variable(tf.truncated_normal([FLAGS.cell_num,FLAGS.output_num],stddev = 1),dtype = tf.float32)
+            }
+        
+        bias = {
+                 'in' : tf.Variable(tf.constant(0.1,shape = [FLAGS.cell_num,]),dtype = tf.float32),
+                 'out' : tf.Variable(tf.constant(0.1,shape = [FLAGS.output_num,]),dtype = tf.float32)
+               }
+        
+        # 设定防止过拟合的开关,也给其一个动态参数
+        keep_prob = tf.placeholder(tf.float32,[])
+        learning_r = tf.placeholder(tf.float32,[])
+        
+        # 输入数据的格式,第一个为数量,因为我将timestep跟特征拼接了,所以是二维空间
+        # 初始化标准化的GAMA和beta和均值，方差(我们这里设置为均值为0，方差为1的正态分布数据)
+        input_x = tf.placeholder(tf.float32,[None,FLAGS.time_train_step * FLAGS.feature_col])
+        input_y = tf.placeholder(tf.float32,[None,FLAGS.output_num])
+        gamma = tf.Variable(tf.ones([FLAGS.time_train_step * FLAGS.feature_col]))
+        beta = tf.Variable(tf.zeros([FLAGS.time_train_step * FLAGS.feature_col]))
+        lstm_mean = tf.Variable(tf.zeros([FLAGS.time_train_step * FLAGS.feature_col]), trainable = False)
+        lstm_variance = tf.Variable(tf.ones([FLAGS.time_train_step * FLAGS.feature_col]), trainable = False)
+        
+        
+        # BN算法，batch_normal，批量正则化函数,然后再进入relu层和dropout层.input_x是维度,后面的均值，方差,beta,gama维度必须跟input_x相同即可
+        input_x_normal = tf.nn.batch_normalization(input_x, lstm_mean, lstm_variance, beta, gamma, FLAGS.normal_epsilon)
+        
+        #通过reshape将输入的input_x转化成2维，-1表示函数自己判断该是多少行，列必须是feature_col
+        input_x_r = tf.reshape(input_x_normal,[-1,FLAGS.feature_col])
+        
+      
+        
+        
+        # relu_layer : input * W + b 
+        input_rnn = tf.nn.dropout(tf.nn.relu_layer(input_x_r, W['in'], bias['in']), keep_prob)
+        
+        # 即LSTM接受：batch_size个，time_train_step行cell_num(神经元个数)列的矩阵
+        input_rnn = tf.reshape(input_rnn, [-1, FLAGS.time_train_step, FLAGS.cell_num])
+        
+        # 定义一个带着“开关”的LSTM单层，一般管它叫细胞
+        def lstm_cell(cell_num,keep_prob):
+            cell = rnn.LSTMCell(cell_num, reuse = tf.get_variable_scope().reuse)
+            return rnn.DropoutWrapper(cell, output_keep_prob = keep_prob)
+        
+        # state_is_tuple：如果为True，则接受和返回的状态是n元组，其中 n = len(cells)。如果为False，则状态全部沿列轴连接。
+        lstm_layers = tf.contrib.rnn.MultiRNNCell([lstm_cell(FLAGS.cell_num,keep_prob) for _ in range(FLAGS.layer_num)], state_is_tuple = True)
+        
+        # 初始化LSTM网络,以下是固定格式
+        init_state = lstm_layers.zero_state(batch_size, dtype = tf.float32)
+        
+        # 组合LSTM神经网络
+        outputs, state = tf.nn.dynamic_rnn(lstm_layers, inputs = input_rnn, initial_state = init_state, time_major = False)
+        
+        # 简单说上面的state是输出一种格式，或者shape，下面h_state是输出层的输入数据格式。
+        h_state = state[-1][1]
+#         print(outputs.shape)
+#         output=tf.reshape(outputs,[FLAGS.output_num,-1])
+#         print(output.shape)
+        #将LSTM层的输出，输入到输出层
+        y_pre = tf.matmul(h_state, W['out']) + bias['out']
+        
+        loss_metal = tf.reduce_mean(tf.square(tf.subtract(y_pre, input_y)))
+        
+        # 下面我们要调用之前创建的正则化,在loss上加入正则化防止过拟合
+        tf.add_to_collection('losses', loss_metal)
+        loss = tf.add_n(tf.get_collection('losses'))
+        
+        # 初始化优化器
+        opt = tf.train.AdamOptimizer(learning_rate = learning_r)
+        train_op = opt.minimize(loss)     
+        init = tf.global_variables_initializer()
+    
+        # 用以保存参数的函数（跑完下次再跑，就可以直接读取上次跑的结果而不必重头开始）
+        ckpt_path = os.path.join(FLAGS.checkpointDir, FLAGS.model_out_path)
+        saver = tf.train.Saver()
+
+    # 设置tf按需使用GPU资源，而不是有多少就占用多少checkpointDir
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    lr = FLAGS.learning_rate
+    #使用with，保证执行完后正常关闭tf
+    with tf.Session(config = config,graph = g1) as sess:     
+        # 先判定模型保存路径是否有数据，有模型则使用模型的参数
+ 
+        # module_file = tf.train.latest_checkpoint(FLAGS.model_in_path)
+        module_file = os.path.join(FLAGS.checkpointDir, FLAGS.model_out_path)
+        saver.restore(sess, module_file)
+        print ("成功加载模型参数")     
+                # 开始预测数据
+        print('模型开始预测...')
+        batch_size_test = FLAGS.batch_size 
+        first = 0
+        
+        # 初始化测试集存储空间
+        y_pre_test = np.zeros(shape = (batch_size_test,FLAGS.output_num))
+        y_pre_test = np.delete(y_pre_test,[i for i in range(batch_size_test)],axis = 0)
+        num_test_range = (FLAGS.test_num // batch_size_test)
+        # print(num_test_range)
+        # 下面开始加载测试数据，用模型参数去跑测试集，并拼接成结果numpy数组
+        for i in range(num_test_range):
+            test_x, test_y = get_test_data(data_test = test,batch_size_first = first,batch_size_end = batch_size_test, test_path = FLAGS.test_path)
+            # 添加到测试集集和中
+            y_pre_test = np.append(y_pre_test,
+            sess.run(y_pre, feed_dict={input_x: test_x, keep_prob: FLAGS.keep_prob_end, batch_size:  test_y.shape[0]}),axis = 0)
+            first += FLAGS.batch_size 
+            batch_size_test += FLAGS.batch_size
+    
+        
+        str_result = ''
+        list_temp = []
+        # 防止同步到ODPS时出现超过256的情况，这里保留1位小数。
+        for i in range(len(y_pre_test)):
+            for j in y_pre_test[i].tolist():
+                list_temp.append(round(j,1))
+            str_result += str(list_temp) + '\n'
+            list_temp = []
+        
+        # 保存模型结果文件
+        tf.gfile.FastGFile(FLAGS.data_result + 'submission.txt', 'w').write(str_result)       
+      
+        print('模型全部结束')
+		
+
+
+
+def main(_):
+    train()
+    
+# 设置参数时,不一定所有参数都用ArgumentParser设置，比如batch_size和保留率我们会在循环中发生改变，就用tensorflow方式设置比较好。下面
+# 都是比较固定的参数我们会设置动态参数。以后神经网络多时还要修改。
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--buckets', type = str, default = '', help = 'bueckts桶')
+    parser.add_argument('--checkpointDir', type = str, 
+                        default = 'oss://bucketjrm2.oss-cn-shanghai-internal.aliyuncs.com/',
+                        help = '模型保存路径的默认路径')
+    parser.add_argument('--max_steps', type = int, default = 10000, help = '训练集最大迭代次数')
+    parser.add_argument('--learning_rate', type = float, default = 0.0005, help = '学习率' )
+    parser.add_argument('--keep_prob', type = float, default = 0.5, help = 'DropOut训练时最大保留率')
+    parser.add_argument('--keep_prob_end', type = float, default = 0.5, help = 'DropOut模型保存时最大保留率')
+    parser.add_argument('--time_train_step', type = int, default = 90, help = '训练集的最大天数')
+    parser.add_argument('--time_label_step', type = int, default = 30, help = '预测最大天数')
+    parser.add_argument('--feature_col', type = int, default = 3, help = 'feature维度')
+    parser.add_argument('--layer_num', type = int, default = 2, help = '网络层数')
+    parser.add_argument('--cell_num', type = int, default = 720, help = '第一层隐藏层的神经元个数')
+    parser.add_argument('--output_num', type = int, default = 90, help = 'label维度')
+    parser.add_argument('--l2_normal', type = float, default = 0.01, help = 'L2正则项')
+    parser.add_argument('--max_num', type = float, default = 100, help = '最大迭代次数')
+    parser.add_argument('--batch_size',type = int, default = 200, help = '每次迭代数量')
+    parser.add_argument('--loss_min',type = float, default = 0.0001, help = '训练集和验证集的最小损失值')
+    parser.add_argument('--normal_epsilon',type = float, default = 0.001, help = '标准化中防止除以0的情况所留的小数')
+    parser.add_argument('--is_training', type = bool, default = True, help = '读取数据是否为训练集，默认为True,False为验证集')
+    parser.add_argument('--is_time_filt', type = int, default = 6, help = '默认过滤时间的大小，目前设置为6，以后可能改成8')
+    parser.add_argument('--train_path', type = str, 
+                        default = 'oss://bucketjrm2.oss-cn-shanghai-internal.aliyuncs.com/data_rfm/train__fec09ed311044c2eabc96c0d4787418b',
+                        help = '训练集输入路径')
+    parser.add_argument('--test_path',type = str,
+                        default = 'oss://bucketjrm2.oss-cn-shanghai-internal.aliyuncs.com/data_test/test__1ea651d259934b7282228fd223b5f9c5',
+                        help = '测试集输入路径')
+    parser.add_argument('--model_out_path', type = str, 
+                        default = 'rfm_model.ckpt',
+                        help = '模型输出路径')
+    parser.add_argument('--model_in_path', type = str, 
+                        default = 'rfm_model.ckpt',
+                        help = '模型输入路径')
+    parser.add_argument('--total_num', type = int, default = 20000, help = '总数据输入数量')
+    parser.add_argument('--train_num', type = int, default = 15000, help = '训练集输入数量')
+    parser.add_argument('--valid_num', type = int, default = 5000, help = '验证集输入数量')
+    parser.add_argument('--test_num', type = int, default = 5004, help = '模型输出数量')
+    parser.add_argument('--min_num', type = int, default = 0, help = '最小数值')
+    parser.add_argument('--data_result',type = str,
+                        default = 'oss://bucketjrm2.oss-cn-shanghai-internal.aliyuncs.com/data_result/',
+                        help = '模型结果输出路径')
+
+
+
+    FLAGS, _ = parser.parse_known_args()
+    tf.app.run(main=main)
+
