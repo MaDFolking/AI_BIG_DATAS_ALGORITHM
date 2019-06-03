@@ -1,4 +1,3 @@
-#！/usr/bin/env python
 # -*- coding: utf-8 -*-
 '''
 @author: 金容明
@@ -360,7 +359,6 @@ def train():
         tf.gfile.FastGFile(FLAGS.data_result + 'submission.txt', 'w').write(str_result)       
       
         print('模型全部结束')
-		
 
 
 
@@ -373,7 +371,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--buckets', type = str, default = '', help = 'bueckts桶')
     parser.add_argument('--checkpointDir', type = str, 
-                        default = 'oss://bucketjrm2.oss-cn-shanghai-internal.aliyuncs.com/',
+                        default = '',
                         help = '模型保存路径的默认路径')
     parser.add_argument('--max_steps', type = int, default = 10000, help = '训练集最大迭代次数')
     parser.add_argument('--learning_rate', type = float, default = 0.0005, help = '学习率' )
@@ -393,16 +391,16 @@ if __name__ == '__main__':
     parser.add_argument('--is_training', type = bool, default = True, help = '读取数据是否为训练集，默认为True,False为验证集')
     parser.add_argument('--is_time_filt', type = int, default = 6, help = '默认过滤时间的大小，目前设置为6，以后可能改成8')
     parser.add_argument('--train_path', type = str, 
-                        default = 'oss://bucketjrm2.oss-cn-shanghai-internal.aliyuncs.com/data_rfm/train__fec09ed311044c2eabc96c0d4787418b',
+                        default = 'train__59e34b7cfde74ed99eecf1ad5accda23',
                         help = '训练集输入路径')
     parser.add_argument('--test_path',type = str,
-                        default = 'oss://bucketjrm2.oss-cn-shanghai-internal.aliyuncs.com/data_test/test__1ea651d259934b7282228fd223b5f9c5',
+                        default = 'test__a99c0e219ab54899bb479eb4c66f6b02',
                         help = '测试集输入路径')
     parser.add_argument('--model_out_path', type = str, 
-                        default = 'rfm_model.ckpt',
+                        default = 'tensorflow_model',
                         help = '模型输出路径')
     parser.add_argument('--model_in_path', type = str, 
-                        default = 'rfm_model.ckpt',
+                        default = 'tensorflow_model',
                         help = '模型输入路径')
     parser.add_argument('--total_num', type = int, default = 20000, help = '总数据输入数量')
     parser.add_argument('--train_num', type = int, default = 15000, help = '训练集输入数量')
@@ -417,4 +415,3 @@ if __name__ == '__main__':
 
     FLAGS, _ = parser.parse_known_args()
     tf.app.run(main=main)
-
