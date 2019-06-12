@@ -111,7 +111,7 @@ def get_train_data(data_train,batch_size_first,batch_size_end,train_path,is_trai
         
         aa = aa + bb
         n = 0
-        print(len(aa))
+        # print(len(aa))
         
 #         list1 = list(i[2].replace('[','').replace(']','').replace('"','').split(','))
 #         cc = []
