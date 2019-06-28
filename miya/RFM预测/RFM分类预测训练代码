@@ -1,0 +1,442 @@
+# -*- coding: utf-8 -*-
+'''
+@author: 金容明
+@file: tf_lstm_rfm.py
+@time: 2019/05/23 11:27
+@help: RFM预测模型训练阶段
+'''
+###引入第三方模块###
+import os
+import re 
+import sys
+import time
+import argparse
+import numpy as np
+import pandas as pd
+import multiprocessing
+import tensorflow as tf
+import matplotlib.pyplot as plt
+
+from random import shuffle
+from tensorflow.contrib import rnn
+
+
+###定义设置LSTM常量###
+
+# 获取buckets的动态参数
+FLAGS=None   
+
+
+## 加载数据
+def load_data(feature_train):
+    
+    # 读取OSS数
+    train_file_path = tf.gfile.Glob(os.path.join(FLAGS.buckets,FLAGS.train_path))
+    
+    # 创建tf的reader对象
+    reader = tf.TextLineReader()
+    # 将OSS数据转成序列格式
+    file_name_queue_train = tf.train.string_input_producer(train_file_path)
+
+    # 懒加载序列里的value值。
+    key_train,value_train = reader.read(file_name_queue_train)
+
+     # 初始化特征列,这行是double类型
+    record_defaults_train = [["1.0"],["1.0"],["1.0"],["1.0"],["1.0"],["1.0"],["1.0"]] 
+
+    col1, col2, col3, col4, col5, col6, col7 = tf.decode_csv(value_train, record_defaults=record_defaults_train)
+    
+    # 一次读取大量数据,毕竟是测试集，我们不需要batch读取
+    # 注意，该方法返回的是个list，后续如果用矩阵计算，需要转成numpy np.array(list)
+    feature_train = tf.train.batch([col5, col6, col7],batch_size=FLAGS.total_num, num_threads=5, capacity=FLAGS.total_num)   
+    
+    
+    # 我们需要将数据一步步喂给DataFrame
+    init = tf.global_variables_initializer()    
+    with tf.Session() as sess:    
+        sess.run(init)
+        coord = tf.train.Coordinator()
+        threads = tf.train.start_queue_runners(sess = sess,coord = coord)       
+        
+        print('读取数据开始...')
+
+        df_train = sess.run([feature_train])
+
+        df_train = np.array(df_train)
+        print(df_train.shape)
+
+        # 生成的是三维度，需要转成二维,注意这个二维是跟原维度相同即可。
+        df_train = df_train.reshape(FLAGS.train_feature_start,FLAGS.total_num)
+        #  然后进行转置操作
+        df_train = df_train.T
+        
+        print(df_train.shape)
+        print('读取数据结束...')
+  
+        coord.request_stop()
+        coord.join(threads)
+    
+    return df_train
+
+
+
+
+
+## 处理训练集数据
+
+def get_train_data(data_train,batch_size,batch_size_first,batch_size_end,train_path,is_training = True):
+    data_temp = data_train
+    
+    # 如果是验证集,每次随机打乱数组进行抽取，用bagging本质，防止过拟合
+    # 如果是训练集,则按照step依次添加
+    if is_training == False:
+        data_temp = data_train[batch_size_first:batch_size_end,:]
+    else:
+        np.random.shuffle(data_train)
+        data_temp = data_train[:batch_size,:]
+        
+
+    X_train = np.zeros(shape = (1))
+    y_train = np.zeros(shape = (1))
+
+    X_train = np.delete(X_train,0,axis = 0)
+    y_train = np.delete(y_train,0,axis = 0)
+    
+    # 训练集
+    for i in data_temp:
+        list1 = list(i[0].replace('[','').replace(']','').replace('"','').split(','))
+        aa = []
+        n = 0
+        for t1 in list1:
+            n = n + 1
+            if n % (FLAGS.feature_col + 1) == 1:
+                continue 
+            aa.append(float(t1))
+        # print(len(aa))
+        n = 0 
+        
+        list1 = list(i[1].replace('[','').replace(']','').replace('"','').split(','))
+        bb = []
+        for t2 in list1:
+            n = n + 1
+            if n % (FLAGS.feature_col + 1) == 1:
+                continue 
+            bb.append(float(t2))
+        
+        aa = aa + bb
+        n = 0
+
+        cc = [float(i) for i in i[2].split(',')]
+             
+        X_train = np.append(X_train,aa).reshape(-1,FLAGS.time_train_step * FLAGS.feature_col)
+
+        y_train = np.append(y_train,cc).reshape(-1,FLAGS.time_label_step * FLAGS.feature_col_label)
+
+    return X_train,y_train
+
+
+## 开始设计神经网络
+def train():
+    '''
+    所有LSTM操作都在此进行,目前都放在一个图上。
+    '''
+    g1 = tf.Graph()
+    with g1.as_default():
+        data = load_data(FLAGS.train_path)
+        # 编写正则化函数
+        def weight_variable(shape, l2):
+            if l2 is not None or l2 != '':
+                initial = tf.truncated_normal(shape, stddev = 1)
+                weight_decay = tf.multiply(tf.nn.l2_loss(initial), l2, name='weight_loss')
+                tf.add_to_collection('losses', weight_decay)
+                return tf.Variable(initial, dtype = tf.float32)
+            else:
+                return
+
+        # 每次训练数据，越大则消耗越多,设置为动态参数
+        batch_size = tf.placeholder(tf.int32,[])
+        
+             # tf.truncated_normal(0, 0.01, [3,3,1,64])
+        # 初始化俩层的权重W和偏置项b。我们之前标准化按照均值为0，标准差为1的方式，所以此处也如此。根据矩阵表达式，bias值为W的列。
+        # tf.contrib.layers.xavier_initializer
+        # 该初始化器旨在使所有层中的梯度比例保持大致相同。在均匀分布中，
+        # 这最终是范围： x = sqrt(6. / (in + out)); [-x, x]并且对于正态分布，使用标准偏差sqrt(2. / (in + out))。
+        # 自定义该函数: 
+#         def xavier_init(fan_in, fan_out, constant = 1):
+#             low = -constant * np.sqrt(6.0 / (fan_in + fan_out))
+#             high = constant * np.sqrt(6.0 / (fan_in + fan_out))
+#             return tf.random_uniform((fan_in, fan_out),
+#                              minval = low, maxval = high,
+#                              dtype = tf.float32)
+        # 因为标准差为sqlrt(2 / (in + out)),所以它对输入输出的数据的分布更适应。
+        #  Weights = tf.Variable(tf.contrib.layers.xavier_initializer()(([input_size,output_size])),name="weights")
+
+        W = {
+              # 'in' : weight_variable([FLAGS.feature_col,FLAGS.cell_num],FLAGS.l2_normal),
+              'in' : tf.Variable(tf.contrib.layers.xavier_initializer()(([FLAGS.feature_col,FLAGS.cell_num])),dtype = tf.float32),
+              'out' : tf.Variable(tf.contrib.layers.xavier_initializer()(([FLAGS.cell_num,FLAGS.num_classes])),dtype = tf.float32)
+            }
+        
+        bias = {
+                 'in' : tf.Variable(tf.constant(0.1,shape = [FLAGS.cell_num,]),dtype = tf.float32),
+                 'out' : tf.Variable(tf.constant(0.1,shape = [FLAGS.num_classes,]),dtype = tf.float32)
+               }
+        
+        # 设定防止过拟合的开关,也给其一个动态参数
+        keep_prob = tf.placeholder(tf.float32,[])
+        learning_r = tf.placeholder(tf.float32,[])
+        
+        # 输入数据的格式,第一个为数量,因为我将timestep跟特征拼接了,所以是二维空间
+        # 初始化标准化的GAMA和beta和均值，方差(我们这里设置为均值为0，方差为1的正态分布数据)
+        x = tf.placeholder(tf.float32,[None,FLAGS.time_train_step * FLAGS.feature_col])
+        y = tf.placeholder(tf.int32,[None,FLAGS.output_num])
+        
+#         x = tf.placeholder(tf.float32,[None,FLAGS.time_train_step * FLAGS.feature_col])
+#         y = tf.placeholder(tf.int32,[None])
+        
+#         input_x = tf.placeholder(tf.float32,[None,FLAGS.time_train_step * FLAGS.feature_col])
+#         input_y = tf.placeholder(tf.int32,[None,FLAGS.num_classes])
+        
+        input_x = list()
+        input_y = list()
+        
+        
+        for i in range(FLAGS.batch_size):
+            input_x.append(x[i])
+
+        for i in range(FLAGS.batch_size):
+            input_y.append(tf.one_hot(y[i],depth=FLAGS.num_classes))
+            
+        
+        
+        gamma = tf.Variable(tf.ones([FLAGS.time_train_step * FLAGS.feature_col]))
+        beta = tf.Variable(tf.zeros([FLAGS.time_train_step * FLAGS.feature_col]))
+        lstm_mean = tf.Variable(tf.zeros([FLAGS.time_train_step * FLAGS.feature_col]), trainable = False)
+        lstm_variance = tf.Variable(tf.ones([FLAGS.time_train_step * FLAGS.feature_col]), trainable = False)
+        
+        
+        # BN算法，batch_normal，批量标准化函数,然后再进入relu层和dropout层.input_x是维度,后面的均值，方差,beta,gama维度必须跟input_x相同即可
+        input_x_normal = tf.nn.batch_normalization(input_x, lstm_mean, lstm_variance, beta, gamma, FLAGS.normal_epsilon)
+                                      # , lstm_mean, lstm_variance, beta, gamma, FLAGS.normal_epsilon
+                                      
+        
+        #通过reshape将输入的input_x转化成2维，-1表示函数自己判断该是多少行，列必须是feature_col
+        input_x_r = tf.reshape(input_x_normal,[-1,FLAGS.feature_col])                
+        
+        # relu_layer : input * W + b 
+        # relu  alpha：float> = 0.负斜率系数。
+        # 属于泄露版本，防止relu让神经元等于0的情况
+        # 当设备不活动时，它允许一个小的渐变：  f(x) = alpha * x for x < 0，  f(x) = x for x >= 0。
+        # softsign：x / 1 + |x| 更不容易饱和的导数。
+        input_x_in_r = tf.nn.relu(tf.matmul(input_x_r,W['in']) + bias['in'])
+        input_relu = tf.nn.dropout(input_x_in_r, keep_prob)
+        
+        # 即LSTM接受：batch_size个，time_train_step行cell_num(神经元个数)列的矩阵
+        input_rnn = tf.reshape(input_relu, [-1, FLAGS.time_train_step, FLAGS.cell_num])
+        
+        # 定义一个带着“开关”的LSTM单层，一般管它叫细胞
+        # 用softsign比tanh效果更好，更不容易饱和。
+        # 更不容易饱和说明更不可微可导,防止最后学习无法进行,(说白了,数到接近0时导数下降缓慢)
+        def lstm_cell(cell_num,keep_prob):
+            cell = rnn.LSTMCell(cell_num, activation = tf.nn.softsign, reuse = tf.get_variable_scope().reuse)
+            return rnn.DropoutWrapper(cell, output_keep_prob = keep_prob)
+        
+        # 我们将上面神经元函数用列表表达式拼接，组成LSTM网络结构。
+        # state_is_tuple：如果为True，则接受和返回的状态是n元组，其中 n = len(cells)。如果为False，则状态全部沿列轴连接。
+        # 然后再初始化网络结构,这是定式。
+        lstm_layers = tf.contrib.rnn.MultiRNNCell([lstm_cell(FLAGS.cell_num,keep_prob) for _ in range(FLAGS.layer_num)], state_is_tuple = True)
+        
+        # 初始化LSTM网络,以下是固定格式
+        init_state = lstm_layers.zero_state(batch_size, dtype = tf.float32)
+        
+        # 组合LSTM神经网络
+        # legacy_seq2seq.basic_rnn_seq2seq(encoder_input,decode_input,Mcell)
+        # dec_outputs, dec_memory = tf.contrib.legacy_seq2seq.basic_rnn_seq2seq(encoder_input,decode_input,Mcell)
+        # Mcell = tf.contrib.rnn.MultiRNNCell(tcells)
+        # outputs, state = tf.contrib.legacy_seq2seq.basic_rnn_seq2seq(encoder_input,decode_input,lstm_layers)
+
+        outputs, state = tf.nn.dynamic_rnn(lstm_layers, inputs = input_rnn, initial_state = init_state, time_major = False)
+        h_state = state[-1][1]
+        
+        # 训练后尝试用全连接调节权重,relu层使其非线性化。 softsign : x / |x| + 1  softplus : log(1 + exp(x))
+#         logits = tf.nn.softmax(tf.matmul(tf.layers.dense(inputs = h_state, units = FLAGS.cell_num, activation=tf.nn.relu, kernel_regularizer=tf.contrib.layers.l2_regularizer(FLAGS.l2_normal)),W['out'])) + bias['out']
+        # loss = tf.reduce_sum(input_y * tf.log(logits+1e-10))
+        
+        # pre_d = tf.nn.softmax(logits)
+        
+        # tf.layers.dense(rnn_outputs[-1], num_classes)
+#         logits = tf.layers.dense(h_state, FLAGS.num_classes, activation=tf.nn.relu, kernel_regularizer=tf.contrib.layers.l2_regularizer(FLAGS.l2_normal))
+        
+        # pre_logits = tf.nn.softmax(tf.matmul(h_state, W['out']) + bias['out'])
+        # cross_entropy = -tf.reduce_sum(y_*tf.log(y_conv + 1e-10))
+        # loss = -tf.reduce_sum(input_y*tf.log(pre_logits + 1e-8))
+        
+        logits = tf.matmul(h_state,W['out']) + bias['out']
+        
+        loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(
+                labels = input_y,
+                logits = logits
+                ))  
+        
+        # loss = tf.reduce_mean(tf.square(tf.subtract(pre_logits , input_y)))
+        
+        pre_d = tf.argmax(logits,1)
+        # 我们的input_y 是 list类型,与 pre_d 必须要转成tensor才可以。 
+        target = tf.argmax(tf.reshape(input_y,[-1,FLAGS.num_classes]),1)
+        corr = tf.cast(tf.equal(pre_d,target),tf.float32)
+        
+        
+        
+#         y = tf.nn.softmax(wx + b)
+#         y_ = tf.placeholder("float", [None,3])
+#         cross_entropy = -tf.reduce_sum(y_*tf.log(y+1e-10))
+        
+        # 统计正确总数
+        correct_num = tf.reduce_sum(corr)
+        # 统计acuuary值
+        accuracy = tf.reduce_mean(corr)
+       
+        # train_step = tf.train.GradientDescentOptimizer(0.01).minimize(cross_entropy)
+#         opt = tf.train.GradientDescentOptimizer(learning_r)
+#         train_op = opt.minimize(loss)
+        opt = tf.train.AdamOptimizer(learning_rate = learning_r)
+        train_op = opt.minimize(loss)
+        
+        init = tf.global_variables_initializer()
+    
+        # 用以保存参数的函数（跑完下次再跑，就可以直接读取上次跑的结果而不必重头开始）
+        ckpt_path = os.path.join(FLAGS.checkpointDir, FLAGS.model_out_path)
+        saver = tf.train.Saver()
+
+    # 设置tf按需使用GPU资源，而不是有多少就占用多少checkpointDir
+    config = tf.ConfigProto()
+    config.gpu_options.allow_growth = True
+    lr = FLAGS.learning_rate
+    
+    #使用with，保证执行完后正常关闭tf
+    with tf.Session(config = config,graph = g1) as sess:       
+        # 先判定模型保存路径是否有数据，有模型则使用模型的参数
+        try:
+            module_file = os.path.join(FLAGS.checkpointDir, FLAGS.model_out_path)
+            print('模型参数路径: ',module_file)
+            saver.restore(sess, module_file)
+            print ("成功加载模型参数")        
+        except:
+            #如果是第一次运行，通过init告知tf加载并初始化变量
+            print ("没有加载成功，进行初始化操作,开始训练模型...")
+            sess.run(init)
+        
+         # 训练集读取
+        NUM = FLAGS.total_num // FLAGS.batch_size
+        for z in range(FLAGS.max_num):
+            lr = lr * FLAGS.learning_rate_dec
+            print(data.shape) 
+            try:
+                for i in range(NUM):              
+                    # 读取训练数据集,每次进行shuffle随机处理
+                    train_x, train_y = get_train_data(data_train = data , batch_size = FLAGS.batch_size ,batch_size_first = 0 + i * FLAGS.batch_size , batch_size_end = FLAGS.batch_size + i * FLAGS.batch_size, train_path = FLAGS.train_path, is_training = FLAGS.is_training)
+                    # print(train_x.shape)
+                    # 正常保留率设置为0.5,每次优化我们的优化器        
+                    _, train_loss, correct_num_d,accuracy_d = sess.run([train_op,loss,correct_num,accuracy],feed_dict = {x: train_x, y: train_y,keep_prob: FLAGS.keep_prob_end,batch_size: FLAGS.batch_size, learning_r: lr})
+                               
+                    if i % 20 == 0:
+                        print("epoch: {0}, step: {1},train_loss: {2},correct_num: {3},accuracy: {4}"
+.format(z + 1,i+1,train_loss,correct_num_d,accuracy_d))
+                        saver.save(sess,ckpt_path)
+                    if i % 500 == 0:
+                        lr = lr * FLAGS.learning_rate_dec
+#                     if train_loss < FLAGS.loss_min:
+#                         print ("训练集均已训练完毕,开始保存模型...")
+#                         save_path = saver.save(sess,ckpt_path)
+#                         print('模型路径为: ',save_path)
+#                         return 
+                        
+                for j in range(NUM):              
+                    # 读取训练数据集,每次进行shuffle随机处理
+                    valid_x, valid_y = get_train_data(data_train = data , batch_size = FLAGS.batch_size ,batch_size_first = 0 + j * FLAGS.batch_size , batch_size_end = FLAGS.batch_size + j * FLAGS.batch_size, train_path = FLAGS.train_path, is_training = False)                                
+                    # 正常保留率设置为0.5,每次优化我们的优化器        
+                    _, valid_loss, correct_num_d,accuracy_d = sess.run([train_op,loss,correct_num,accuracy],feed_dict = {x: valid_x, y: valid_y,keep_prob: FLAGS.keep_prob_end,batch_size: FLAGS.batch_size, learning_r: lr})
+                               
+                    if j % 20 == 0:
+                        print("epoch: {0}, step: {1},valid_loss: {2},correct_num: {3},accuracy: {4}".format(z + 1,j+1,valid_loss,correct_num_d,accuracy_d))
+                        saver.save(sess,ckpt_path)
+#                     if valid_loss < FLAGS.loss_min:
+#                         print ("训练集均已训练完毕,开始保存模型...")
+#                         save_path = saver.save(sess,ckpt_path)
+#                         print('模型路径为: ',save_path)
+#                         return 
+                
+                # 每经历一次遍历,模型保存一次.
+                saver.save(sess,ckpt_path)
+    
+            # 防止迭代超出范围,我们设定StopIteration异常,如果执行下面步骤说明迭代已经到了上限,此时我们执行最后一次，然后开始保存模型。
+            except StopIteration:
+                print ("训练集均已训练完毕,开始保存模型...")
+                save_path = saver.save(sess,ckpt_path)
+                print('模型路径为: ',save_path)
+                break  
+           
+        
+        # 结束读取数据进程
+        coord.request_stop()
+        coord.join(threads)
+        print('模型全部结束')
+
+
+
+def main(_):
+    train()
+    
+# 设置参数时,不一定所有参数都用ArgumentParser设置，比如batch_size和保留率我们会在循环中发生改变，就用tensorflow方式设置比较好。下面
+# 都是比较固定的参数我们会设置动态参数。以后神经网络多时还要修改。
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--buckets', type = str, default = '', help = 'bueckts桶')
+    parser.add_argument('--checkpointDir', type = str, default = '',help = '模型保存路径的默认路径')
+    parser.add_argument('--num_classes', type = int, default = 2,help = '模型类型总数')
+    parser.add_argument('--max_steps', type = int, default = 10000, help = '训练集最大迭代次数')
+    parser.add_argument('--learning_rate', type = float, default = 1, help = '学习率' )
+    parser.add_argument('--learning_rate_dec',type = float, default = 0.1, help = '学习下降率,指数级别下降。' )
+    parser.add_argument('--keep_prob', type = float, default = 0.6, help = 'DropOut训练时最大保留率')
+    parser.add_argument('--keep_prob_end', type = float, default = 0.5, help = 'DropOut模型保存时最大保留率')
+    parser.add_argument('--time_train_step', type = int, default = 90, help = '训练集的最大天数')
+    parser.add_argument('--time_label_step', type = int, default = 1, help = '预测最大天数,我们这次是第30天，所以是1')
+    parser.add_argument('--feature_col', type = int, default = 3, help = 'feature维度')
+    parser.add_argument('--feature_col_label', type = int, default = 1, help = 'label的feature维度,默认为1')
+    parser.add_argument('--layer_num', type = int, default = 2, help = '网络层数')
+    parser.add_argument('--cell_num', type = int, default = 64, help = '神经元个数')
+    parser.add_argument('--output_num', type = int, default = 1, help = 'label维度')
+    parser.add_argument('--train_feature_start', type = int, default = 3, help = '训练集原始特征维度数')
+    parser.add_argument('--data_id', type = int, default = 4, help = 'id的维度,这里是客户+商户+业态+用户ID=4')
+    parser.add_argument('--l2_normal', type = float, default = 0.0001, help = 'L2正则项')
+    parser.add_argument('--max_num', type = float, default = 10, help = '最大迭代次数')
+    parser.add_argument('--batch_size',type = int, default = 512, help = '每次迭代数量')
+    parser.add_argument('--loss_min',type = float, default = 0.01, help = '训练集和验证集的最小损失值')
+    parser.add_argument('--normal_epsilon',type = float, default = 0.01, help = '标准化中防止除以0的情况所留的小数')
+    parser.add_argument('--is_training', type = bool, default = True, help = '读取数据是否为训练集，默认为True,False为验证集')
+    parser.add_argument('--is_time_filt', type = int, default = 6, help = '默认过滤时间的大小，目前设置为6，以后可能改成8')
+    parser.add_argument('--train_path', type = str, 
+                        default = 'train*',
+                        help = '训练集输入路径')
+    parser.add_argument('--test_path',type = str,
+                        default = 'test*',
+                        help = '测试集输入路径')
+    parser.add_argument('--model_out_path', type = str, 
+                        default = '',
+                        help = '模型输出路径')
+    parser.add_argument('--model_in_path', type = str, 
+                        default = '',
+                        help = '模型输入路径')
+    parser.add_argument('--total_num', type = int, default = 2700000, help = '总数据输入数量')
+    parser.add_argument('--train_num', type = int, default = 40000, help = '一次获取的训练集输入数量')
+    parser.add_argument('--valid_num', type = int, default = 5000, help = '验证集输入数量')
+    parser.add_argument('--test_num', type = int, default = 5000, help = '模型输出数量')
+    parser.add_argument('--min_num', type = int, default = 0, help = '最小数值')
+    parser.add_argument('--data_result',type = str,
+                        default = 'oss://bucketjrm2.oss-cn-shanghai-internal.aliyuncs.com/data_result/',
+                        help = '模型结果输出路径')
+
+
+
+    FLAGS, _ = parser.parse_known_args()
+    tf.app.run(main=main)
