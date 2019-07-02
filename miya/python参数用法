@@ -1,0 +1,549 @@
+import argparse
+import os
+import glob
+import datetime
+import luigi
+
+from config.config import ensure_dir, getLogger
+logger = getLogger(__name__)
+
+TASK_LOG = 'task_log'
+ensure_dir(TASK_LOG)
+
+
+class AutoLogTasks(luigi.Task):
+    """ Base class to inherit for tasks with following behavior
+        1. Track task complete with file "task_log/{class_name}_{_identifier()}"
+            - upon task completion, a task log file will be created marking it complete
+    """
+    retry_count = 3
+    dep = luigi.Parameter(default=None)
+    rerun = luigi.BoolParameter(default=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.rerun:
+            logger.debug('{} need to be rerun, schedule update.'.format(self._task_name()))
+            self._remove_task_log()
+
+    def requires(self):
+        """ Use self.dep to construct this dependency function
+            Usage:
+            SubClassTask(dep=[OtherSubClassTask(), OtherSubClassTask2()])
+            will create a SubClassTask which requires
+            OtherSubClassTask & OtherSubClassTask2 to complete first
+        """
+        if self.dep is not None:
+            if isinstance(self.dep, (tuple, list)):
+                for dep in self.dep:
+                    yield dep
+            else:
+                yield self.dep
+
+    def _identifier(self):
+        """ how to identify this task with the parameters, e.g.
+            task is expected to run daily,
+            class param: date,
+            identifier: "%Y%m%D" of date
+        """
+        return ""
+
+    def _task_name(self):
+        return self.get_task_family() + self._identifier()
+
+    def output(self):
+        """ luigi.LocalTarget('task_log/task_family_name+idnetifier') """
+        path = os.path.join(TASK_LOG, self._task_name())
+        # logger.debug(path)
+        return luigi.LocalTarget(path)
+
+    def on_success(self):
+        """ on success, create self.output() to let luigi know it is done """
+        logger.info('Process {} is successful'.format(self._task_name()))
+        with self.output().open('w') as outfile:
+            outfile.write('')
+
+    def on_failure(self, exception):
+        logger.exception('[Status]: {} Process failed'.format(self._task_name()))
+        super(AutoLogTasks, self).on_failure(exception)
+
+    def complete(self):
+        """ Flag this task as incomplete if any requirement is incomplete or
+            has been updated more recently than this task"""
+        import os
+        import time
+
+        def mtime(path):
+            return os.path.getmtime(path)
+
+        # assuming 1 output
+        if not os.path.exists(self.output().path):
+            logger.debug('%s, Task not complete', self._task_name())
+            return False
+
+        self_mtime = mtime(self.output().path)
+
+        # the below assumes a list of requirements, each with a list of outputs. YMMV
+        for el in self.requires():
+            if not el.complete():
+                logger.debug('%s, requires (%s) not complete', self._task_name(), el._task_name())
+                return False
+            outputs = el.output()
+            if not isinstance(outputs, (list, tuple)):
+                outputs = [outputs]
+            for output in outputs:
+                if mtime(output.path) > self_mtime:
+                    logger.debug('%s, requires (%s) is more update.',
+                                 self._task_name(), el._task_name())
+                    logger.debug('self time: {}, require time: {}.'.format(
+                        time.ctime(self_mtime), time.ctime(mtime(output.path))))
+                    return False
+        return True
+
+    def _remove_task_log(self):
+        """ remove task log to trigger task incomplete """
+        try:
+            os.remove(self.output().path)
+        except FileNotFoundError:
+            pass
+
+class DailyTask(AutoLogTasks):
+    date = luigi.DateParameter(default=datetime.date.today())
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.remove_outdated_log()
+
+    def remove_outdated_log(self):
+        tasks_done = glob.glob(os.path.join('task_log', '*'))
+        for task in tasks_done:
+            if self._task_name() in task:
+                if '_' + self.date.strftime('%Y%m%d') not in task:
+                    os.remove(task)
+
+    def _identifier(self):
+        """ how to identify this task with the parameters, e.g.
+            task is expected to run daily,
+            class param: date,
+            identifier: "%Y%M%D" of date
+        """
+        return '_' + self.date.strftime('%Y%m%d')
+
+
+# Stage 1:
+class ImportRawData(AutoLogTasks):
+    """ Raw data import process
+        full_update:
+            if True: use dao.full_update() to import data, execute regardless of run history
+        rerun:
+            if True: execute dao.append regardless of run history
+        dao: dao from dao.huihua.definition,
+             need full_update, append, need_update & try_init function
+    """
+    full_update = luigi.BoolParameter(default=False)
+    skip = luigi.BoolParameter(default=False)
+    dao = luigi.Parameter()
+
+    def __init__(self, *args, **kwargs):
+        super(ImportRawData, self).__init__(*args, **kwargs)
+        if self.full_update:
+            logger.debug('{} need to be rerun, schedule update.'.format(self._task_name()))
+            self._remove_task_log()
+        else:
+            if self._check_need_update():
+                logger.debug('{} need to be updated, schedule update.'.format(self._task_name()))
+                self._remove_task_log()
+
+    def __repr__(self):
+        return "{}(dao={})".format(
+            type(self).__name__,
+            type(self.dao).__name__
+        )
+
+    def _identifier(self):
+        """ Identifier = ImportRawDate-{dao_name} """
+        output = super(ImportRawData, self)._identifier()
+        output = output + '-{}'.format(type(self.dao).__name__)
+        return output
+
+    def run(self):
+        """ if full_update, run dao.full_update, else run try_init & append """
+        if self.full_update:
+            self.dao.full_update()
+        else:
+            self.dao.try_init()
+        try:
+            self.dao.append()
+        except NotImplementedError:  # if no append is implemented, overwrite with full update
+            self.dao.full_update()
+
+    def _check_need_update(self):
+        """ check need update from dao """
+        if self.skip:
+            return False
+        return self.dao.need_update()
+
+
+class IntermediateData(AutoLogTasks):
+    """ Data DTL process
+        dao: Dao inherited SparkDaoBase, impletemented dao.save()
+    """
+    dao = luigi.Parameter()
+    def __repr__(self):
+        return "{}(dao={})".format(
+            type(self).__name__,
+            type(self.dao).__name__
+        )
+
+    def _identifier(self):
+        output = super(IntermediateData, self)._identifier()
+        output = output + '-{}'.format(type(self.dao).__name__)
+        return output
+
+    def run(self):
+        self.dao.save()
+
+
+class DailyExportTasks(DailyTask):
+    """ Data export process
+        dao: Dao inherited dao.connection.DataBaseModel, has a working dao.export()
+        i.e. impletemented dao.prepare_data()
+        truncate:
+            If true: truncate table before inserting dao.prepare_data() to DB
+    """
+    dao = luigi.Parameter()
+    truncate = luigi.BoolParameter(default=False)
+
+    def __repr__(self):
+        return "{}(dao={})".format(
+            type(self).__name__,
+            type(self.dao).__name__
+        )
+
+    def _identifier(self):
+        output = super(DailyExportTasks, self)._identifier()
+        output = output + '-{}'.format(type(self.dao).__name__)
+        return output
+
+    def run(self):
+        self.dao.export(truncate=self.truncate)
+
+
+class SubProcessTasks(AutoLogTasks):
+    retry_count = 1
+    def commands(self):
+        raise NotImplementedError('Please implement self.commands()')
+
+    def run(self):
+        import subprocess
+        for command in self.commands():
+            execute_count = 0
+            return_code = 1
+            logger.debug('calling %s', repr(command))
+            while return_code > 0 and execute_count <= 3:
+                if return_code > 0 and execute_count > 0:
+                    logger.debug('Command %s call failed, retry', repr(command))
+                return_code = subprocess.call(command)
+                execute_count += 1
+
+            if return_code:
+                raise ValueError('Command %s call failed', repr(command))
+
+
+class MainDataFlow(SubProcessTasks):
+    full_update = luigi.BoolParameter(default=False)
+    rerun = luigi.BoolParameter(default=False)
+    skip_import = luigi.BoolParameter(default=False)
+    skip_export = luigi.BoolParameter(default=False)
+    local_scheduler = luigi.BoolParameter(default=False)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # always run
+        self._remove_task_log()
+
+    def commands(self):
+        output = []
+        if not self.skip_import:
+            s1 = ['python', 'luigi_make.py', '-s', '1']
+            if self.full_update:
+                s1.append('-f')
+            if self.rerun:
+                s1.append('-r')
+            output.append(s1)
+        s2 = ['python', 'luigi_make.py', '-s', '2']
+        output.append(s2)
+        s3 = ['python', 'luigi_make.py', '-s', '3']
+        output.append(s3)
+        s4 = ['python', 'luigi_make.py', '-s', '4']
+        output.append(s4)
+        if not self.skip_export:
+            s5 = ['python', 'luigi_make.py', '-s', '5']
+            output.append(s5)
+        if self.local_scheduler:
+            for command in output:
+                command.append('-l')
+        return output
+
+
+class PrepLRDataSet(SubProcessTasks):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # always run
+        self._remove_task_log()
+
+    def commands(self):
+        output = []
+        base = ['python', '-m', 'huihua_product_pref.train_model_logistic']
+        from huihua_product_pref.train_model_logistic import MODEL_PHASES
+        for i in MODEL_PHASES:
+            output.append(base + ['--trainset', i])
+        output.append(base + ['--applyset'])
+        return output
+
+class PrepLRModel(SubProcessTasks):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # always run
+        self._remove_task_log()
+
+    def commands(self):
+        output = []
+        base = ['python', '-m', 'huihua_product_pref.train_model_logistic']
+        output.append(base + ['--prep_model'])
+        return output
+
+
+class TasksGroup(AutoLogTasks):
+    """ implement gen_tasks_dict to create task list and list dependency """
+    _task = None
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # always run
+        self._remove_task_log()
+
+    def gen_tasks_dict(self):
+        raise NotImplementedError('Please implement gen_tasks_dict(self)')
+
+    def task_dict(self):
+        if self._task is None:
+            self._task = self.gen_tasks_dict()
+        return self._task
+
+    def requires(self):
+        for task in self.task_dict().values():
+            yield task
+
+
+class Stage1ImportTasksGroup(TasksGroup):
+    full_update = luigi.BoolParameter(default=False)
+    rerun = luigi.BoolParameter(default=False)
+    skip = luigi.BoolParameter(default=False)
+
+    def gen_tasks_dict(self):
+        from dao.huihua.definition import (
+            CouponRedeemDao, CouponLocationDao, ItemInfoDao,
+            CurrentCouponDao, BarcodeRecordDao, DailyCouponLocationDao)
+        stage1 = {
+            "CouponRedeemDao": CouponRedeemDao(),
+            "CouponLocationDao": CouponLocationDao(),
+            "ItemInfoDao": ItemInfoDao(),
+            "CurrentCouponDao": CurrentCouponDao(),
+            "BarcodeRecordDao": BarcodeRecordDao(),
+            "DailyCouponLocationDao": DailyCouponLocationDao(),
+        }
+        if self.full_update:
+            logger.info('Full update model, Re-import all data from data source.')
+        if self.rerun:
+            logger.info('rerun model, rerun append import from data source.')
+        for key, dao in stage1.items():
+            stage1[key] = ImportRawData(
+                dao=dao, full_update=self.full_update, rerun=self.rerun,
+                skip=self.skip)
+        return stage1
+
+
+class Stage2ProcessDataTasks(TasksGroup):
+    def gen_tasks_dict(self):
+        # data cleansing
+        stage1 = Stage1ImportTasksGroup(skip=True).gen_tasks_dict()
+        from dao.huihua.cleansed_data import (
+            CouponCleansed, CouponRedeem, BasketRecord, BarcodeScan, ItemInfo
+        )
+        stage2 = {
+            "CouponRedeem": (CouponRedeem(),
+                             (stage1['CouponLocationDao'], stage1['CouponRedeemDao'])),
+            "BarcodeScan": (BarcodeScan(),
+                            stage1['BarcodeRecordDao']),
+            "ItemInfo": (ItemInfo(),
+                         (stage1['ItemInfoDao']))
+        }
+        for key, (dao, dep) in stage2.items():
+            stage2[key] = IntermediateData(dao=dao, dep=dep)
+        stage2['BasketRecord'] = IntermediateData(
+            dao=BasketRecord(),
+            dep=(stage2['ItemInfo'], stage1['CouponRedeemDao'])
+        )
+        stage2["CouponCleansed"] = IntermediateData(dao=CouponCleansed(),
+                                                    dep=(stage2['ItemInfo'], stage1['CouponLocationDao']))
+        # stage3 model data prepare
+        from huihua_product_pref.model_data_dao import (
+            SkuRecord, CatRecord, DiscountRecord, BarcodeRecord,
+            CatRepurchase, BrandRepurchase, SkuRepurchase
+        )
+        stage3 = {
+            "SkuRecord": (SkuRecord(),
+                          stage2['BasketRecord']),
+            "CatRecord": (CatRecord(),
+                          (stage2['BasketRecord'])),
+            "CatRepurchase": (CatRepurchase(),
+                              stage2['BasketRecord']),
+            "BrandRepurchase": (BrandRepurchase(),
+                                (stage2['BasketRecord'])),
+            "SkuRepurchase": (SkuRepurchase(),
+                              stage2['BasketRecord']),
+            "DiscountRecord": (DiscountRecord(),
+                               (stage2['CouponRedeem'])),
+            "BarcodeRecord": (BarcodeRecord(),
+                              stage2['BarcodeScan']),
+        }
+        for key, (dao, dep) in stage3.items():
+            stage3[key] = IntermediateData(dao=dao, dep=dep)
+        stage2.update(stage3)
+        return stage2
+
+
+class Stage3ModelDataPrep(TasksGroup):
+    def gen_tasks_dict(self):
+        stage1 = Stage1ImportTasksGroup(skip=True).gen_tasks_dict()
+        stage3 = {'PrepLRDataSet': PrepLRDataSet(dep=stage1['CouponRedeemDao'])}
+        stage3['PrepLRModel'] = PrepLRModel(dep=stage3['PrepLRDataSet'])
+        return stage3
+
+class Stage4ModelApplyTasks(TasksGroup):
+    def gen_tasks_dict(self):
+        stage1 = Stage1ImportTasksGroup(skip=True).gen_tasks_dict()
+        stage2 = Stage2ProcessDataTasks().gen_tasks_dict()
+        # stage4 model preference results
+        from huihua_product_pref.gen_app_coupon_list import (
+            SkuResult, CatResult, ScanResult, GeneralRecommendResult,
+            RuleBaseRecommendResult, CFRecommendResult, LRRecommendResult,
+            NBRecommendResult, final_recommendation
+        )
+        stage4 = {
+            "SkuResult": (SkuResult(),
+                          (stage1['CurrentCouponDao'], stage2['SkuRecord'])),
+            "CatResult": (CatResult(),
+                          (stage1['CurrentCouponDao'], stage2['CatRecord'], stage2['ItemInfo'])),
+            "ScanResult": (ScanResult(),
+                           (stage1['CurrentCouponDao'], stage2['BarcodeRecord'])),
+        }
+
+        for key, (dao, dep) in stage4.items():
+            stage4[key] = IntermediateData(dao=dao, dep=dep)
+        # stage5 model final preference results
+        stage5 = {}
+        stage5['GeneralRecommendResult'] = IntermediateData(
+            dao=GeneralRecommendResult(),
+            dep=(stage1['CurrentCouponDao'], stage2['SkuRecord'], stage2['ItemInfo'])
+        )
+        stage5['RuleBaseRecommendResult'] = IntermediateData(
+            dao=RuleBaseRecommendResult(),
+            dep=(stage4['CatResult'], stage4['SkuResult'], stage5['GeneralRecommendResult'])
+        )
+        stage5['CFRecommendResult'] = IntermediateData(
+            dao=CFRecommendResult(),
+            dep=(stage2['SkuRecord'], stage1['CurrentCouponDao'])
+        )
+        stage5['LRRecommendResult'] = IntermediateData(
+            dao=LRRecommendResult(),
+            dep=(stage2['SkuRecord'], stage1['CurrentCouponDao'],
+                 stage2["CatRepurchase"], stage2["BrandRepurchase"],
+                 stage2["SkuRepurchase"])
+        )
+        stage5['NBRecommendResult'] = IntermediateData(
+            dao=NBRecommendResult(),
+            dep=(stage2['SkuRecord'], stage1['CurrentCouponDao'],
+                 stage2["CatRepurchase"], stage2["BrandRepurchase"],
+                 stage2["SkuRepurchase"])
+        )
+        stage5['final_recommendation'] = IntermediateData(
+            dao=final_recommendation,
+            dep=(stage5['LRRecommendResult'], stage5['CFRecommendResult'])
+        )
+        stage4.update(stage5)
+        return stage4
+
+class Stage5ExportTasks(TasksGroup):
+    def gen_tasks_dict(self):
+        from dao.db_table import (
+            CouponToMatch, GeneralRecommendDB, UserRecommendDB,
+            RecommendHistory, ProductInfo
+        )
+        from huihua_product_pref.gen_push_notification_list import (
+            PushCampaignList, PushCampaignSettings)
+        # create empty table in DB if there isn't one
+        PushCampaignList()
+        PushCampaignSettings()
+        ProductInfo()
+        # prepare data and insert
+        stage2 = Stage2ProcessDataTasks().gen_tasks_dict()
+        stage4 = Stage4ModelApplyTasks().gen_tasks_dict()
+        stage5 = {
+            "CouponToMatch": (CouponToMatch(),
+                                (stage2['ItemInfo'], stage2['BasketRecord']),
+                                {'truncate': True}),
+            "GeneralRecommendDB": (GeneralRecommendDB(),
+                                    (stage4['GeneralRecommendResult']),
+                                    {'truncate': True}),
+            "UserRecommendDB": (UserRecommendDB(),
+                                (stage4['final_recommendation']),
+                                {'truncate': True}),
+            "RecommendHistory": (RecommendHistory(),
+                                    (stage4['GeneralRecommendResult'],
+                                    stage4['final_recommendation']),
+                                    {}),
+        }
+        for key, (dao, dep, kwargs) in stage5.items():
+            stage5[key] = DailyExportTasks(dao=dao, dep=dep, **kwargs)
+        return stage5
+
+if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser(description='Main program')
+    parser.add_argument('--stage', '-s', action='store', type=int, nargs='+',
+                        help='rerun all module regardless of complete state')
+    parser.add_argument('--rerun', '-r', action='store_true',
+                        help='rerun all module regardless of complete state')
+    parser.add_argument('--skip_import', '-si', action='store_true',
+                        help='skip import processes')
+    parser.add_argument('--skip_export', '-se', action='store_true',
+                        help='skip export processes')
+    parser.add_argument('--full_update', '-f', action='store_true',
+                        help='re initiate raw data and rerun all module')
+    parser.add_argument('--local_scheduler', '-l', action='store_true',
+                        help='if true, run with local scheduler')
+    args = parser.parse_args()
+
+    if not args.stage:
+        luigi.build([MainDataFlow(
+            full_update=args.full_update, rerun=args.rerun,
+            skip_import=args.skip_import, skip_export=args.skip_export,
+            local_scheduler=args.local_scheduler
+        )], local_scheduler=args.local_scheduler)
+    else:
+        if 1 in args.stage:
+            luigi.build([Stage1ImportTasksGroup(
+                    full_update=args.full_update, rerun=args.rerun
+                )], local_scheduler=args.local_scheduler)
+        if 2 in args.stage:
+            luigi.build([Stage2ProcessDataTasks()],
+                        local_scheduler=args.local_scheduler)
+        if 3 in args.stage:
+            luigi.build([Stage3ModelDataPrep()],
+                        local_scheduler=args.local_scheduler)
+        if 4 in args.stage:
+            luigi.build([Stage4ModelApplyTasks()],
+                        local_scheduler=args.local_scheduler)
+        if 5 in args.stage:
+            luigi.build([Stage5ExportTasks()],
+                        local_scheduler=args.local_scheduler)
