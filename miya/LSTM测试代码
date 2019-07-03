@@ -20,6 +20,7 @@ import matplotlib.pyplot as plt
 
 from random import shuffle
 from tensorflow.contrib import rnn
+from tensorflow.python.ops import init_ops
 
 
 ###定义设置LSTM常量###
@@ -161,14 +162,6 @@ def get_train_data(data_train,batch_size,batch_size_first,batch_size_end,train_p
     return X_train,y_train
 
 
-## 分布式初始化类
-
-class ConfigGPU(object):
-    def __init__(self):
-        self.gpu_list = range(FLAGS.gpu_num)
-        self.CUDA_VISIBLE_DEVICES = ','.join([str(x) for x in self.gpu_list])
-
-from tensorflow.python.ops import init_ops
 ## 构造分布式的LSTM类,后续扩展后再研究模型融合的方案
 
 class LstmModelMultiClassfi(object):
