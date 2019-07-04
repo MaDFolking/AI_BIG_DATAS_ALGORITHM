@@ -57,11 +57,11 @@ def Config():
     parser.add_argument('--normal_epsilon',type = float, default = 0.01, help = '标准化中防止除以0的情况所留的小数')
     parser.add_argument('--thread_num', type = int, default = 5, help = '读取数据的线程数量')
     parser.add_argument('--is_training', type = bool, default = True, help = '读取数据是否为训练集，默认为True,False为验证集')
-    parser.add_argument('--train_path', type = str, default = 'oss://bucketjrm2.oss-cn-shanghai-internal.aliyuncs.com/data_temp/train*',help = '训练集输入路径')  # 后续需要去掉只剩下train*
+    parser.add_argument('--train_path', type = str, default = 'train*',help = '训练集输入路径')  # 后续需要去掉只剩下train*
     parser.add_argument('--decay_num', type = int, default = 1000, help = '每多少次学习率更新')
     parser.add_argument('--test_path',type = str,default = 'test*',help = '测试集输入路径')
-    parser.add_argument('--model_out_path', type = str, default = 'oss://bucketjrm2.oss-cn-shanghai-internal.aliyuncs.com/tensorflow_model/',help = '模型输出路径')
-    parser.add_argument('--model_in_path', type = str, default = 'oss://bucketjrm2.oss-cn-shanghai-internal.aliyuncs.com/tensorflow_model/',help = '模型输入路径')
+    parser.add_argument('--model_out_path', type = str, default = '',help = '模型输出路径')
+    parser.add_argument('--model_in_path', type = str, default = '',help = '模型输入路径')
     parser.add_argument('--total_num', type = int, default = 50000, help = '总数据输入数量')
     parser.add_argument('--train_num', type = int, default = 40000, help = '一次获取的训练集输入数量')
     parser.add_argument('--valid_num', type = int, default = 5000, help = '验证集输入数量')
@@ -458,6 +458,12 @@ class LstmModelMultiClassfiDis(object):
         所有的节点都要执行这段代码， 就大家互相知道了， 这个集群里面都有哪些成员，不同的成员的类型是什么， 是ps节点还是worker节点。
         '''
         self.cluster = tf.train.ClusterSpec({"ps": self.ps_hosts, "worker": self.worker_hosts})
+        
+        print(self.cluster.as_dict())
+        self.num_workers = len(self.cluster.as_dict()['worker'])      # 求出worker数量
+        self.num_ps = len(self.cluster.as_dict()['ps'])            # 求出ps数量
+        print('num worker:%d, num ps:%d'%(self.num_workers,self.num_ps))    
+        
         # 启动我们的服务端
         '''
         tf.train.Server这个的定义开始，就每个节点不一样了。 根据执行的命令的参数不同，决定了这个任务是哪个任务。
@@ -499,45 +505,9 @@ class LstmModelMultiClassfiDis(object):
         self.feature_col_label = FLAGS.feature_col_label
         self.time_label_step = FLAGS.time_label_step
         self.train_path = FLAGS.train_path
-        self.is_training = FLAGS.is_training
-        
-        
+        self.is_training = FLAGS.is_training             
         print('分布式LSTM模型初始化结束...')
-            
-    
-    # 正则化
-#     def weight_variable(self, shape, l2):
-#             if l2 is not None or l2 != '':
-#                 with tf.variable_scope(tf.get_variable_scope(), reuse= tf.get_variable_scope().reuse) :   
-#                     regularizer = tf.contrib.layers.l2_regularizer(l2)
-#                     weight_decay = tf.get_variable('weight_loss',shape,dtype = tf.float32,initializer = tf.contrib.layers.xavier_initializer(),trainable=True)
-#                     tf.add_to_collection('losses', regularizer(weight_decay))
-#                     return weight_decay
-#             else:
-#                 return
-            
-    # 梯度 
-    def average_gradients(self,tower_grads):  
-        average_grads = []
-        for grad_and_vars in zip(*tower_grads):
-            grads = [g for g, _ in grad_and_vars]
-            grad = tf.stack(grads, 0)
-            grad = tf.reduce_mean(grad, 0)
-            grad_and_var = (grad, grad_and_vars[0][1])
-            average_grads.append(grad_and_var)
-        return average_grads
-#         average_grads = []
-#         for grad_and_vars in zip(*tower_grads):
-#             grads = [tf.expand_dims(g, 0) for g, _ in grad_and_vars]
-#             grads = tf.concat(grads, 0)
-#             grad = tf.reduce_mean(grads, 0)
-#             grad_and_var = (grad, grad_and_vars[0][1])
-#             average_grads.append(grad_and_var)
-#         return average_grads
-
-    
-    
-    
+                        
     ## 加载数据
     def load_data(self):
         # 读取OSS数
@@ -558,8 +528,8 @@ class LstmModelMultiClassfiDis(object):
         # 一次读取大量数据,毕竟是测试集，我们不需要batch读取
         # 注意，该方法返回的是个list，后续如果用矩阵计算，需要转成numpy np.array(list)
         # 我们如果想确定随机打乱数据，可以直接用: 
-        feature_train = tf.train.shuffle_batch([col5, col6, col7],batch_size=self.total_num, num_threads=self.thread_num, \
-                                               capacity=self.total_num, min_after_dequeue = self.min_after_dequeue)  
+        feature_train = tf.train.shuffle_batch([col5, col6, col7],batch_size=self.total_num, num_threads=self.thread_num,capacity=self.total_num, min_after_dequeue = self.min_after_dequeue)  
+        
         
         init = tf.global_variables_initializer()
         with tf.Session() as sess:  
@@ -569,10 +539,11 @@ class LstmModelMultiClassfiDis(object):
             threads = tf.train.start_queue_runners(sess = sess,coord = coord)   
             
             data = sess.run([feature_train])
+            # print(data)
             data = np.array(data)
             # 生成的是三维度，需要转成二维,注意这个二维是跟原维度相同即可。
             data = data.reshape(self.train_feature_start,self.total_num).T     
-                        
+            # print(data)     
             # 结束读取数据进程
             coord.request_stop()
             coord.join(threads)
@@ -615,7 +586,7 @@ class LstmModelMultiClassfiDis(object):
             
             
     # 创建网络对象 
-    def build_model(self,batch_size,keep_prob,x,y,scope,num_classes,layer_num,time_train_step,feature_col,cell_num,l2_normal,normal_epsilon):
+    def build_model(self,batch_size,keep_prob,x,y,num_classes,layer_num,time_train_step,feature_col,cell_num,l2_normal,normal_epsilon):
         # tf.reset_default_graph()   
         with tf.variable_scope(tf.get_variable_scope(), reuse= tf.AUTO_REUSE) :   
             input_x = [x[i] for i in range(batch_size)]
@@ -682,23 +653,9 @@ class LstmModelMultiClassfiDis(object):
             
             return loss,logits,pre_d,target,correct_num,accuracy
         
-    def feed_all_gpu(self,inp_dict, tower_data):
-        for i in range(len(self.models)):
-            x,y,loss,correct_num,accuracy,grads = self.models[i]
-            train_x, train_y = tower_data[i]
-            inp_dict[x] = train_x
-            inp_dict[y] = train_y
-        return inp_dict
     
     # 训练模型
-    def train_lstm(self):
-        
-        
-        # 我们要先构建图，再 session,下面就是图的操作,后续所有操作都用session.
-        
-        
-        # with self._graph.as_default():
-            
+    def train_lstm(self):           
         if self.job_name == "ps":         
             self.server.join()
             print('进入到PS...')
@@ -706,121 +663,80 @@ class LstmModelMultiClassfiDis(object):
             print('进入到WORKER...')
             print('分布式LSTM模型开始构建...')
             self._graph = tf.Graph()  # 构建在一个图中
-        
-            config = tf.ConfigProto()
-            config.gpu_options.allow_growth = True 
-            self.session_tf = tf.Session(graph = self._graph,config = config)
-            with self._graph.as_default(), tf.device(tf.train.replica_device_setter(worker_device="/job:worker/task:%d" % self.task_index,cluster=self.cluster)):
-                global_step = tf.get_variable('global_step', [],initializer=tf.constant_initializer(0), trainable=False)
-                self.learning_rate = tf.train.exponential_decay(self.learning_rate,global_step,self.decay_num, self.learning_rate_dec,staircase=True) 
-                self.models = []   
-                optimizer = tf.contrib.opt.LazyAdamOptimizer(self.learning_rate)
-                
-                with tf.variable_scope(tf.get_variable_scope(), reuse= tf.AUTO_REUSE):
-                    for gpu_id in self.gpu_list:
-                         with tf.device('/gpu:%d' % gpu_id):        # 初始化第一个设备
-                            print ('gpu:%d...'% gpu_id)
-                            with tf.name_scope('tower_%d' % gpu_id) as scope:  # 初始化命名空间
-                            #with tf.variable_scope('gpu_v', reuse=gpu_id > self.gpu_list[0]):
-                                # 我们的x,y是在循环里,所以放到元组中再取出来。
-                                x = tf.placeholder(tf.float32,[self.batch_size,self.time_train_step * self.feature_col])
-                                y = tf.placeholder(tf.int32,[self.batch_size,self.output_num])
-                                loss,logits,pre_d,target,correct_num,accuracy = \
-                                self.build_model(self.batch_size,self.keep_prob,x,y,\
-                                scope,self.num_classes,self.layer_num,self.time_train_step,self.feature_col,self.cell_num,self.l2_normal,self.normal_epsilon)
-                                # 开启共享
-                                tf.get_variable_scope().reuse_variables()
-                                # 开始计算梯度
-                                grads = optimizer.compute_gradients(loss)
-                                # self.models.append((loss,correct_num,accuracy,grads))
-                                self.models.append((x,y,loss,correct_num,accuracy,grads))
-                # 取出我们的x,y,梯度grads,方便后续run.
-                x,y,loss,correct_num,accuracy,grads = zip(*(self.models))
-                
-                self.loss = tf.reduce_mean(loss)
-                self.correct_num = tf.reduce_mean(correct_num)
-                self.accuracy = tf.reduce_mean(accuracy)
-                # self.train_op = optimizer.apply_gradients(self.average_gradients(grads),global_step = global_step)   
-                if self.issync == 1:
-                #同步模式计算更新梯度
-                    print('进入到同步')
-                    self.rep_op = tf.train.SyncReplicasOptimizer(optimizer,replicas_to_aggregate=len(self.worker_hosts),
-                                              total_num_replicas=len(self.worker_hosts),use_locking=True)
-                    self.train_op = rep_op.apply_gradients(self.average_gradients(grads),global_step = global_step)
-                    self.init_token_op = rep_op.get_init_tokens_op()
-                    self.chief_queue_runner = rep_op.get_chief_queue_runner()
-                else:
-                      #异步模式计算更新梯度
-                    print('进入到异步')
-                    self.train_op = optimizer.apply_gradients(self.average_gradients(grads),global_step = global_step)   
-                                                   
-                self.init_op = tf.initialize_all_variables()
-                self.ckpt_path = os.path.join(self.checkpointDir, self.model_out_path)
-                self.saver = tf.train.Saver()
-            '''
-             含义类似一个监督者， 就是因为分布式了， 很多机器都在运行， 像什么参数初始化，
-             保存模型， 写summary什么的，这个supervisoer帮你一起弄起来了， 就不用自己去手工去做这些事情了，
-             而且在分布式的环境下设计到各种参数的共享， 其中的过程自己手工写也不好写，
-             于是tensorflow就给大家包装好这么一个东西了。 这里的参数is_chief比较重要，
-             在所有的计算节点里还是有一个主节点的， 这个主节点来负责初始化参数， 模型的保存，
-             summary的保存。 logdir就是保存和装载模型的路径。 不过这个似乎的启动就会去这个logdir的
-             目录去看有没有checkpoint的文件，有的话就自动装载了，没有就用init_op指定的初始化参数， 
-             好像没有参数指定不让它自动load的；
+            with self._graph.as_default():
+                NUM = self.total_num // self.batch_size
+                while True:
+                    data = self.load_data()
+                    with tf.device(tf.train.replica_device_setter(cluster=self.cluster)):
+                        self.global_step = tf.get_variable('global_step', [],initializer=tf.constant_initializer(0), trainable=False)
+                        self.learning_rate = tf.train.exponential_decay(self.learning_rate,self.global_step,self.decay_num, self.learning_rate_dec,staircase=True) 
 
-            '''
-            sv = tf.train.Supervisor(graph = self._graph ,is_chief=(self.task_index == 0),init_op=init_op,saver=saver,global_step=global_step,save_model_secs=60)
-            with sv.prepare_or_wait_for_session(server.target) as sess:
-                # 如果是同步模式
-                if FLAGS.task_index == 0 and issync == 1:
-                    try:
-                        module_file = os.path.join(self.checkpointDir, self.model_out_path)
-                        print('模型参数路径: ',module_file)
-                        self.saver.restore(sess, module_file)
-                        print ("成功加载模型参数")        
-                    except:
-                        #如果是第一次运行，通过init告知tf加载并初始化变量
-                        print ("没有加载成功，进行初始化操作,开始训练模型...")
-                        sv.start_queue_runners(sess, [chief_queue_runner])
-                        sess.run(init_token_op)
-            
-                    # 训练集读取
-                    NUM = self.total_num // self.batch_size
-                    for z in range(self.max_num):
-                        # 加载数据
-                        data = self.load_data()
-                        tower_data = []
-                        try:
-                            for i in range(NUM):              
-                                # 读取训练数据集
-                                # 有多少个GPU,就读取多少次。
-                                # tower_data = [] 
-                                train_x, train_y = self.get_train_data(data_train = data,batch_size = self.batch_size,batch_size_first = 0 + i * self.batch_size , batch_size_end = self.batch_size + i * self.batch_size,train_path = self.train_path,time_train_step = self.time_train_step,feature_col = self.feature_col, time_label_step = self.time_label_step,feature_col_label = self.feature_col_label, is_training = self.is_training)                       
-                                
-                                tower_data.append((train_x, train_y))
-                                
-                                if i % self.gpu_num  == 1:
-                                    feed_dict = {}
-          
-                                    feed_dict = self.feed_all_gpu(feed_dict,tower_data)
-                                    _, train_loss, correct_num_d,accuracy_d = self.session_tf.run([self.train_op,self.loss,self.correct_num,self.accuracy], feed_dict = feed_dict)
-                                    tower_data = []  
-        
-                                    print("epoch: {0}, step: {1},train_loss: {2},correct_num: {3},accuracy: {4}".format(z + 1,i+1,train_loss,correct_num_d,accuracy_d))
-                                    # saver.save(self.session_tf,ckpt_path)
+                        self.x = tf.placeholder(tf.float32,[self.batch_size,self.time_train_step * self.feature_col])
+                        self.y = tf.placeholder(tf.int32,[self.batch_size,self.output_num])
+                        self.loss,self.logits,self.pre_d,self.target,self.correct_num,self.accuracy = \
+                        self.build_model(self.batch_size,self.keep_prob,self.x,self.y,\
+                          self.num_classes,self.layer_num,self.time_train_step,self.feature_col,self.cell_num,self.l2_normal,self.normal_epsilon)
+ 
+                    with tf.device('/job:worker/task:%d' % self.task_index):
+                        opt = tf.train.AdamOptimizer(self.learning_rate * self.num_workers)
+                        self.opt = tf.train.SyncReplicasOptimizer(opt,replicas_to_aggregate=self.num_workers,total_num_replicas=self.num_workers)
+                        self.train_op = self.opt.minimize(self.loss, global_step=self.global_step)
+                        if self.issync == 1:
+                        #同步模式计算更新梯度
+                            print('进入到同步')
+                            self.chief_queue_runner = self.opt.get_chief_queue_runner()
+                            self.init_tokens_op=self.opt.get_init_tokens_op(num_tokens=0)
+                            
+                        else:
+                              #异步模式计算更新梯度
+                            print('进入到异步')
+                            self.train_op = optimizer.apply_gradients(self.average_gradients(grads),global_step = self.global_step)   
+                                                           
+                        self.init_op = tf.initialize_all_variables()
+                        self.init_local = tf.local_variables_initializer()
+                        self.ckpt_path = os.path.join(self.checkpointDir, self.model_out_path)
+                        self.saver = tf.train.Saver()   
+                        sv=tf.train.Supervisor(graph=self._graph,is_chief=(self.task_index == 0),init_op=self.init_op,local_init_op=self.init_local,summary_op=None,saver=self.saver, global_step=self.global_step)
+                
+                        self.config = tf.ConfigProto(allow_soft_placement=True,log_device_placement=False)
+                    
+                        with sv.prepare_or_wait_for_session(self.server.target,config = self.config) as sess:
+                            # 如果是同步模式
+                            if self.issync == 1:
+                                try:
+                                    module_file = os.path.join(self.checkpointDir, self.model_out_path)
+                                    print('模型参数路径: ',module_file)
+                                    self.saver.restore(sess, module_file)
+                                    print ("成功加载模型参数")        
+                                except:
+                                    #如果是第一次运行，通过init告知tf加载并初始化变量
+                                    print ("没有加载成功，进行初始化操作,开始训练模型...")
+                                    sv.start_queue_runners(sess, [self.chief_queue_runner])
+                                    sess.run(self.init_tokens_op)
+                                # 训练集读取
+                                NUM = self.total_num // self.batch_size
+                            
+                            try:
+                                for i in range(NUM):              
+                                    train_x, train_y = self.get_train_data(data_train = data,batch_size = self.batch_size,batch_size_first = 0 + i * self.batch_size , batch_size_end = self.batch_size + i * self.batch_size,train_path = self.train_path,time_train_step = self.time_train_step,feature_col = self.feature_col, time_label_step = self.time_label_step,feature_col_label = self.feature_col_label, is_training = self.is_training)                       
+
+                                    _, train_loss, correct_num_d, accuracy_d = sess.run([self.train_op,self.loss,self.correct_num,self.accuracy],feed_dict = {self.x: train_x, self.y: train_y})
+                                    
+                                    if i % 20 == 0:
+                                        print("epoch: {0}, step: {1},train_loss: {2},correct_num: {3},accuracy: {4}".format(z + 1,i+1,train_loss,correct_num_d,accuracy_d))
+                                        self.saver.save(sess,self.ckpt_path)
                                     if train_loss < self.loss_min:
                                         print ("训练集均已训练完毕,开始保存模型...")
-                                        save_path = saver.save(sess,ckpt_path)
+                                        save_path = self.saver.save(sess,self.ckpt_path)
                                         print('模型路径为: ',save_path)
                                         return 
         
-                            saver.save(sess,ckpt_path)
-            
-                        # 防止迭代超出范围,我们设定StopIteration异常,如果执行下面步骤说明迭代已经到了上限,此时我们执行最后一次，然后开始保存模型。
-                        except StopIteration:
-                            print ("训练集均已训练完毕,开始保存模型...")
-                            save_path = saver.save(sess,ckpt_path)
-                            print('模型路径为: ',save_path)
-                            break  
+                            except StopIteration:
+                                print ("训练集均已训练完毕,开始保存模型...")
+                                save_path = self.saver.save(sess,ckpt_path)
+                                print('模型路径为: ',save_path)
+                                break  
+  
         
         print('模型训练结束...')
         
@@ -849,28 +765,3 @@ if __name__ == '__main__':
     # tf.app.run(main = main(True,True))
     # tf.app.run()
     main(True,False)
-
-
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
- 
-   
-    
-    
-
-
-
-
-  
-  
-  
