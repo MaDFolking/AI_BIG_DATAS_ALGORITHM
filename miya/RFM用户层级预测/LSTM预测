@@ -32,19 +32,20 @@ from tensorflow.python.ops import init_ops
 FLAGS=None
 
 
+
 ### 动态参数 ###
 def Config():
     parser = argparse.ArgumentParser()
     
     ##模型参数
-    parser.add_argument('--learning_rate', type = float, default = 0.001, help = '学习率' )
+    parser.add_argument('--learning_rate', type = float, default = 0.0001, help = '学习率' )
     parser.add_argument('--learning_rate_dec',type = float, default = 0.6, help = '学习下降率,指数级别下降。' )
     parser.add_argument('--keep_prob', type = float, default = 0.6, help = 'DropOut训练时最大保留率')
     parser.add_argument('--keep_prob_end', type = float, default = 0.5, help = 'DropOut模型保存时最大保留率')
     parser.add_argument('--feature_col_label', type = int, default = 1, help = 'label的feature维度,默认为1')
-    parser.add_argument('--layer_num', type = int, default = 3, help = '网络层数')
+    parser.add_argument('--layer_num', type = int, default = 2, help = '网络层数')
     parser.add_argument('--cell_num', type = int, default = 128, help = '神经元个数')
-    parser.add_argument('--l2_normal', type = float, default = 0.0001, help = 'L2正则项')
+    parser.add_argument('--l2_normal', type = float, default = 0.01, help = 'L2正则项')
     parser.add_argument('--max_num', type = float, default = 100, help = '最大迭代次数')
     parser.add_argument('--batch_size',type = int, default = 256, help = '每次迭代数量')
     parser.add_argument('--loss_min',type = float, default = 0.0001, help = '训练集和验证集的最小损失值')
@@ -52,7 +53,7 @@ def Config():
     parser.add_argument('--max_steps', type = int, default = 10000, help = '训练集最大迭代次数')
     parser.add_argument('--decay_num', type = int, default = 1000, help = '每迭代多少次学习率更新')
     parser.add_argument('--activation_list',type=list,default={'selu','relu','elu','leaky_relu','crelu','softsign','softplus','tanh','maxout'})
-    parser.add_argument('--activation_select',type=str,default='selu')
+    parser.add_argument('--activation_select',type=str,default='softplus')
     parser.add_argument('--alpha',type=float,default=0.2)
     
 
@@ -89,7 +90,7 @@ def Config():
     parser.add_argument('--model_id_num', type = int, default = 4, help = '模型ID数量,表示我们的唯一主键是多少维度')
     parser.add_argument('--output_num', type = int, default = 1, help = 'label输出维度')
     parser.add_argument('--train_feature_start', type = int, default = 3, help = '训练集原始特征维度数')
-    parser.add_argument('--total_num', type = int, default = 50000, help = '总数据输入数量')
+    parser.add_argument('--total_num', type = int, default = 20000, help = '总数据输入数量')
     parser.add_argument('--train_num', type = int, default = 40000, help = '一次获取的训练集输入数量')
     parser.add_argument('--valid_num', type = int, default = 5000, help = '验证集输入数量')
     parser.add_argument('--test_num', type = int, default = 3600000, help = '模型输出数量')
@@ -102,6 +103,7 @@ def Config():
     FLAGS, _ = parser.parse_known_args()
     return FLAGS
     
+
 
 ## 单机单卡的LSTM 
 class LstmModelClassfi(object):
@@ -137,6 +139,7 @@ class LstmModelClassfi(object):
         self.alpha = FLAGS.alpha
         self.activation_select = FLAGS.activation_select    # 激活函数选择器
         self.activation_list = FLAGS.activation_list    # 激活函数选择
+        self.min_after_dequeue = FLAGS.min_after_dequeue
         
         print('单机单卡LSTM模型初始化结束...')
         
@@ -187,7 +190,8 @@ class LstmModelClassfi(object):
         
         # 经过测试改用正序不影响结果，泛化能力也很强，但平时我们要多用乱序比较好 : tf.train.shuffle_batch,乱序要写 min_after_dequeue
         # tf.train.shuffle_batch([],batch_size=self.total_num, num_threads=thread_num,capacity=total_num, min_after_dequeue = min_after_dequeue) 
-        feature_train = tf.train.batch([col5, col6, col7],batch_size=self.total_num, num_threads=self.thread_num, capacity=self.total_num) 
+        # feature_train = tf.train.batch([col5, col6, col7],batch_size=self.total_num, num_threads=self.thread_num, capacity=self.total_num) 
+        feature_train = tf.train.shuffle_batch([col5, col6, col7],batch_size=self.total_num, num_threads=self.thread_num, capacity=self.total_num,min_after_dequeue = self.min_after_dequeue)  
         
         with tf.Session() as sess:  
             sess.run(tf.global_variables_initializer())  
@@ -210,8 +214,8 @@ class LstmModelClassfi(object):
     ## 处理训练集数据   
     def get_train_data(self,data_train,batch_size,batch_size_first,batch_size_end,train_path,time_train_step,feature_col, \
                        time_label_step,feature_col_label,is_training = True):
-        data_temp = data_train
-        np.random.shuffle(data_temp)
+        # np.random.shuffle(data_train)
+        # print(data_train)
         # 截取batch数量的数据
         data_temp = data_train[batch_size_first:batch_size_end,:]
 
@@ -221,19 +225,22 @@ class LstmModelClassfi(object):
         X_train = np.delete(X_train,0,axis = 0)
         y_train = np.delete(y_train,0,axis = 0)
         
+        n = 0
         # 训练集
         for i in data_temp:
             # 处理特征
             list_feature = list(i[0].replace('[','').replace(']','').replace('"','').split(',') + i[1].replace('[','').replace(']','').replace('"','').split(','))
         
-            feature_one = [ float(list_feature[t1]) for t1 in range(len(list_feature)) if t1 % (feature_col + 1) != 1 ]
-
+            feature_one = [ float(list_feature[t1]) for t1 in range(len(list_feature)) if t1 % (feature_col + 1) != 0 ]
+              
+            
             # 处理label数据
             label_total = [float(i) for i in i[2].split(',')]
             
             # 处理后存放到numpy空间中
             X_train = np.append(X_train,feature_one).reshape(-1,time_train_step * feature_col)
             y_train = np.append(y_train,label_total).reshape(-1,time_label_step * feature_col_label)
+            
         
         return X_train,y_train
 
@@ -258,14 +265,14 @@ class LstmModelClassfi(object):
                   }
             
             # batch算法标准化
-#             gamma = tf.get_variable('gamma_in',shape = [time_train_step * feature_col],initializer=init_ops.constant_initializer(1),trainable=True)
-#             beta = tf.get_variable('beta_in',shape = [time_train_step * feature_col],initializer=init_ops.constant_initializer(0),trainable=True)
-#             lstm_mean = tf.get_variable('lstm_mean_in',shape = [time_train_step * feature_col], initializer=init_ops.constant_initializer(0),trainable=True)
-#             lstm_variance = tf.get_variable('lstm_variance_in',shape = [time_train_step * feature_col],initializer=init_ops.constant_initializer(1),trainable=True)
-#             input_x_normal = tf.nn.batch_normalization(input_x, lstm_mean, lstm_variance, beta, gamma, normal_epsilon)
+            gamma = tf.get_variable('gamma_in',shape = [time_train_step * feature_col],initializer=init_ops.constant_initializer(1),trainable=True)
+            beta = tf.get_variable('beta_in',shape = [time_train_step * feature_col],initializer=init_ops.constant_initializer(0),trainable=True)
+            lstm_mean = tf.get_variable('lstm_mean_in',shape = [time_train_step * feature_col], initializer=init_ops.constant_initializer(0),trainable=True)
+            lstm_variance = tf.get_variable('lstm_variance_in',shape = [time_train_step * feature_col],initializer=init_ops.constant_initializer(1),trainable=True)
+            input_x_normal = tf.nn.batch_normalization(input_x, lstm_mean, lstm_variance, beta, gamma, normal_epsilon)
             
             # 通过reshape将输入的input_x转化成2维，-1表示函数自己判断该是多少行，列必须是feature_col
-            input_x_r = tf.reshape(input_x,[-1,feature_col])                
+            input_x_r = tf.reshape(input_x_normal,[-1,feature_col])                
             
             # relu和dropout操作,softsign activation_sele(input_x_r,W['in'],bias['in'])
             input_relu = tf.nn.dropout(self.activation_sele(input_x_r,W['in'],bias['in']), keep_prob)
@@ -350,7 +357,7 @@ class LstmModelClassfi(object):
             self.num_classes,self.layer_num,self.time_train_step,self.feature_col,self.cell_num,self.l2_normal,self.normal_epsilon)
             
             # 梯度先算总损失
-            self.train_op = self.optimizer.minimize(self.cross_entropy)                                                           
+            self.train_op = self.optimizer.minimize(self.loss)                                                           
             
             # 模型路径并初始化保存模型对象
             ckpt_path = os.path.join(self.checkpointDir, self.model_out_path)
@@ -371,8 +378,10 @@ class LstmModelClassfi(object):
             # 训练集读取
             NUM = self.total_num // self.batch_size
             # 加载数据
-            data = self.load_data()
+            # data = self.load_data()
             for z in range(self.max_num):
+                # 加载数据
+                data = self.load_data()
                 try:
                     for i in range(NUM): 
                         # 获取训练数据
@@ -380,16 +389,17 @@ class LstmModelClassfi(object):
                         if i % 20 == 1:
                             start_time = time.time()
                         # 获取结果
-                        _, cross_entropy_d, correct_num_d,accuracy_d,pre_d_d,input_x_r_d,input_rnn_d,logits_d = self.session_tf.run([self.train_op, \
-                        self.cross_entropy,self.correct_num,self.accuracy,self.pre_d,self.input_x_r, self.input_rnn, self.logits \
+                        _,loss_d,cross_entropy_d, correct_num_d,accuracy_d,pre_d_d,input_x_r_d,input_rnn_d,logits_d = \
+                        self.session_tf.run([self.train_op,self.loss \
+                        ,self.cross_entropy,self.correct_num,self.accuracy,self.pre_d,self.input_x_r, self.input_rnn, self.logits \
                         ],feed_dict = {x: train_x, y: train_y})
                         
                         # 每20次打印1次
                         if i > 1 and i % 20 == 0:
                             end_time = time.time()
                             time_end = end_time - start_time
-                            print("epoch: {0}, step: {1},cross_entropy: {2},correct_num: {3},accuracy: {4},input_x_r_d{5},input_rnn_d{6},pre_d_d:{7},logits_d:{8},time_end: {9}". \
-                                  format(z + 1,i+1,cross_entropy_d,correct_num_d,accuracy_d,input_x_r_d,input_rnn_d,pre_d_d,logits_d,time_end))
+                            print("epoch: {0}, step: {1},cross_entropy: {2},loss:{3},correct_num: {4},accuracy: {5},time_end: {6}". \
+                                  format(z + 1,i+1,cross_entropy_d,loss_d,correct_num_d,accuracy_d,time_end))
                             saver.save(self.session_tf,ckpt_path)
 
                         # 损失降低到我们的阈值时，退出并保存
@@ -726,6 +736,7 @@ class LstmModelMultiClassfiDis(LstmModelClassfi):
         return self
         
     
+
 # 主函数编写,因为pai里目前不支持调用python主参数,在这里我用FLAGS取代写成定式,后续到其他平台可以修改回来。
 def main(is_single,is_distribute):
     # 初始化参数
