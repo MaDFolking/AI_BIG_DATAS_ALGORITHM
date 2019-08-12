@@ -812,7 +812,56 @@ Q1,Q2,Q3,Q4都是各自区间的中位数，Q越大，说明数据波动越大�
 
 
 (3) 层次
-
+    a.凝聚分类层次: 自底向上的方法,开始将每个对象作为单独的一个组,然后逐次合并相近的对象或组,直到合并结束或者某条件中止。
+                   单链接: 用欧式距离判断不同对象是否距离最短,然后合并成新的簇。比如a,b，然后下一层ab与cd最短，则分为abcd.也可以用第二层开始用
+                   相似度来进行划分。如果是奇数,则为abc。以此类推。
+                   
+    b.分裂分类层次: 所有对象放一个簇中,不停的划分更小的簇,一直到每个对象都在单独的一个簇中或者满足某条件中止。 时间复杂度最大为2^n-1,
+                   可以用启发式,即对已经分裂的地方不做回溯,降低时间复杂度,但这样会不准确，所以比较少用。
+                   
+    
+    
+    优点: 抗噪点和离群点能力强，但时间复杂度很高。
+                   
+    
+    
+    
+    简单的代码实现:
+    import numpy as np
+    import data_helper
+    np.random.seed(1)
+    def get_raw_data(n):
+     _data=np.random.rand(n,2)
+     #生成数据的格式是n个（x,y）
+     _groups={idx:[[x,y]] for idx,(x,y) in enumerate(_data)}
+     return _groups
+    def cal_distance(cluster1,cluster2):
+     #采用最小距离作为聚类标准
+     _min_distance=10000
+     for x1,y1 in cluster1:
+      for x2,y2 in cluster2:
+       _distance=(x1-x2)**2+(y1-y2)**2
+       if _distance<_min_distance:
+        _min_distance=_distance
+     return _distance
+    groups=get_raw_data(10)
+    count=0
+    while len(groups)!=1:#判断是不是所有的数据是不是归为了同一类
+     min_distance=10000
+     len_groups=len(groups)
+      
+     for i in groups.keys():
+      for j in groups.keys():
+       if i>=j:
+        continue
+       distance=cal_distance(groups[i],groups[j])
+       if distance<min_distance:
+        min_distance=distance
+        min_i=i
+        min_j=j#这里的j>i
+     groups[min_i].extend(groups.pop(min_j))
+     data_helper.draw_data(groups)
+     #一共n个簇，共迭代n-1次
 
 
 (4) 高斯
