@@ -1,0 +1,104 @@
+一. 自然语言的理解
+列举自然语言中常见问题和解决方案
+1.词意消歧: 消除歧义需要使用上下文，利用相邻词汇有相近含义的特点去解决看似相近的词语。
+2.指代消解: 一种更深刻的语言理解是解决“谁对谁做了什么”，即检测主语和动词的宾语。虽然你在小学已经学会了这些，但它比你想象的更难。
+  在句子 the thieves stole the paintings 中，很容易分辨出谁做了偷窃的行为。考虑(4)中句子的三种可能，尝试确定是什么被出售、被抓
+  和被发现（其中一种情况是有歧义的）。
+  a. The thieves stole the paintings. They were subsequently sold.
+  b. The thieves stole the paintings. They were subsequently caught.
+  c. The thieves stole the paintings. They were subsequently found.
+  要回答这个问题涉及到寻找代词 they 的先行词 thieves 或者 paintings。处理这个问题的
+  计算技术包括指代消解（anaphora resolution）——确定代词或名词短语指的是什么——和
+  语义角色标注（semantic role labeling）——确定名词短语如何与动词相关联（如施事，受 事，工具等）。
+3.自动生成:如果我们能够解决自动语言理解等问题，我们将能够继续那些包含自动生成语言的任
+  务，如自动问答和机器翻译。在自动问答中，一台机器要能够回答用户关于特定文本集的问
+  题：
+  a. Text: ... The thieves stole the paintings. They were subsequently sold. ...
+  b. Human: Who or what was sold?
+  c. Machine: The paintings.
+  机器的回答表明，它已经正确的计算出 they 是指 paintings，而不是 thieves。在机器翻
+  译中，机器要能够把文本翻译成另一种语言文字，并准确传达原文的意思。在把例子文本译
+  成法文过程中，我们不得不在第二句选择代词的性别：ils（男性）如果 thieves 被出售，ell
+  es（女性）如果 paintings 被出售。正确的翻译实际上取决于对代词的正确理解。
+  (6) a. The thieves stole the paintings. They were subsequently found.
+  b. Les voleurs ont volé les peintures. Ils ont été trouvés plus tard. (the thieves)
+  c. Les voleurs ont volé les peintures. Elles ont été trouvées plus tard. (the
+  paintings)
+  所有这些例子中，弄清楚词的含义、动作的主语以及代词的先行词是理解句子含义的步
+  骤，也是我们希望语言理解系统能够做到的事情。
+  
+4.机器翻译 
+  长久以来，机器翻译（MT）都是语言理解的圣杯，人们希望能找到从根本上提供高品
+  质的符合语言习惯的任意两种语言之间的翻译。其历史可以追溯到冷战初期，当时自动翻译
+  的许诺带来大量的政府赞助，它也是 NLP 本身的起源。
+  今天，特定语言之间实用的翻译系统已经存在，有些已经集成到搜索引擎中了。但是，
+  这些系统有一些严重的缺点。我们可以在 NLTK 的“babelizer”的帮助下探索它们（当你使用
+  from nltk.book import * 导入本章的材料时，已经自动装载了）。这个程序把提交的英
+  文句子翻译成指定语言，然后把结果重新翻译回英文。这样重复 12 次结束或者得到曾经产
+  生过的翻译时（表示一个循环）结束。
+  >>> babelize_shell()
+  NLTK Babelizer: type 'help' for a list of commands.
+  Babel> how long before the next flight to Alice Springs?
+  Babel> german
+  Babel> run
+  0> how long before the next flight to Alice Springs?
+  1> wie lang vor dem folgenden Flug zu Alice Springs?
+  2> how long before the following flight to Alice jump?
+  3> wie lang vor dem folgenden Flug zu Alice springen Sie?
+  4> how long before the following flight to Alice do you jump?
+  5> wie lang, bevor der folgende Flug zu Alice tun, Sie springen?
+  6> how long, before the following flight to Alice does, do you jump?
+  7> wie lang bevor der folgende Flug zu Alice tut, tun Sie springen?
+  8> how long before the following flight to Alice does, do you jump?
+  9> wie lang, bevor der folgende Flug zu Alice tut, tun Sie springen?
+  10> how long, before the following flight does to Alice, do do you jump?
+  11> wie lang bevor der folgende Flug zu Alice tut, Sie tun Sprung?
+  12> how long before the following flight does leap to Alice, does you?
+  请看，该系统正确地把 Alice Springs 从英文翻译成了德文（第 1 行），但在翻译回英文
+  时却以 Alice jump 结束（第 2 行）。介词 before 一开始被翻译成对应的德文介词 vor，但后
+  来变成了连词 bevor（第 5 行）。第 5 行以后的句子变的没有意义（但请注意以逗号指示的各
+  种分句，以及从 jump 到 leap 的变化）。翻译系统不能识别一个词是某个名字的一部分，并
+  且弄错了语法结构。语法问题在下面的例子中更加明显。是约翰发现了猪，还是猪找到约翰？
+  >>> babelize_shell()
+  Babel> The pig that John found looked happy
+  47
+  48
+  Babel> german
+  Babel> run
+  0> The pig that John found looked happy
+  1> Das Schwein, das John fand, schaute gl?cklich
+  2> The pig, which found John, looked happy
+  机器翻译是困难的，因为一个给定的词可能有几种不同的解释（取决于它的意思），也
+  因为必须改变词序才能与目标语言的语法结构保持一致。今天，这些困难遇到新情况，从新
+  闻和政府网站发布的两种或两种以上的语言文档中可以收集到大量的相似文本。给出一个德
+  文和英文双语的文档或者一个双语词典，我们就可以自动配对组成句子，这个过程叫做文本
+  对齐。一旦我们有一百万或更多的句子对，就可以检测出相应的词和短语，并建立一个能用
+  来翻译新文本的模型。
+  
+5. 人机对话系统
+  在人工智能的历史，主要的智能测试是一个语言学测试，叫做图灵测试：一个响应用户
+  文本输入的对话系统能否表现的自然到我们无法区分它是人工生成的响应？相比之下，今天
+  的商业对话系统能力是非常有限的，但在较小的给定领域仍然有些作用，就像我们在这里看
+  到的：
+  S: How may I help you?
+  U: When is Saving Private Ryan playing?
+  S: For what theater?
+  U: The Paramount theater.
+  S: Saving Private Ryan is not playing at the Paramount theater, but
+  it’s playing at the Madison theater at 3:00, 5:30, 8:00, and 10:30.
+  你不能要求这个系统提供驾驶指示或附近餐馆的细节，除非所需的信息已经被保存并且
+  合适的问题答案对已经被纳入语言处理系统。
+  请看，这个系统似乎了解用户的目标：用户询问电影上映的时间，系统正确的判断出用
+  户是想要看电影。这一推断看起来如此明显，你可能都没有注意到它，一个自然语言系统需
+  要被赋予这种自然的交互能力。没有它，当问到：“你知道拯救大兵瑞恩什么时候上映？”时，
+  系统可能只会回答一个冷冷的毫无用处的“是的”。然而，商业对话系统的开发者使用上下文
+  语境假设和业务逻辑确保在用户以不同方式表达需求或提供信息时对特定应用都能有效处
+  理。因此，如果你输入 When is ...或者 I want to know when ...或者 Can you tell me whe
+  n ...时，这些简单的规则总是对应着放映时间，这就足够系统提供有益的服务了。
+  对话系统给我们一个机会来说说一般认为的 NLP 流程。图 1-5 显示了一个简单的对话
+  系统架构。沿图的顶部从左向右是一些语言理解组件的“管道”。这些组件从语音输入经过文
+  法分析到某种意义的重现。图的中间，从右向左是这些组件的逆向流程，将概念转换为语音。
+  这些组件构成了系统的动态方面。在图的底部是一些有代表性的静态信息：语言相关的数据
+  仓库，这些用于处理的组件在其上运作。
+  
+  
