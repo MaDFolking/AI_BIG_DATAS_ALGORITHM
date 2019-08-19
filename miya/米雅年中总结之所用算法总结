@@ -931,7 +931,41 @@ Q1,Q2,Q3,Q4都是各自区间的中位数，Q越大，说明数据波动越大�
              MinPts: 领域密度阈值。
              
        输出: 基于密度的簇集合。
-       方法:           
+       伪代码过程：
+       1. 所有对象标记为unvisited list_temp['all'] = 'unvisited'
+       2. 创建临时变量: temp = 0,num = len(list_temp)
+       3. 创建总簇量C_temp = [],噪点集合E_temp = []
+       2. while !list_temp.contained('unvisited'):
+              temp = list_temp[int.random(num)]   # 从对象总数随机选取一个数作为我们的核心对象
+              temp['x'] = 'visited'               # 这个对象标记为visited.
+              n = 0                               # 判断周围是否有MinPts个对象
+              for i in range(ϵ):
+                  n += 1
+              if n >= MinPts:                     # 保证我们选取的核心对象中最少包含了MinPts个对象,所有用n进行比较,保证这个前提才能进行下面环节
+                  C = []                          # 创建一个空集合,用于存放该簇下的对象
+                  C.append(temp['x'])             # 先将核心对象存放到簇集合下。
+                  # 创建一个核心对象集合N,主要是后续检查C中这些点，是否满足周围ϵ中包含MinPts个的对象
+                  N = [N.append(temp[i]) for i in range(ϵ))]  
+                  for j in N:                     # 开始遍历，判断每个值是否为非访问
+                      if j == 'unvisited':  
+                          temp[j] = 'visited'
+                          if j 周围的ϵ下有MinPts个对象:
+                              N.append(temp[j])
+                          else:
+                              C.append(j)
+                  C_temp.append(C)               # 存放在总簇中
+              else:
+                  E_temp.append(temp)            # 如果不满足MinPts个点,存放在E_temp中。
+              
+
+                  
+                  
+                  
+                  
+              
+                  
+              
+              
                      
     
 
