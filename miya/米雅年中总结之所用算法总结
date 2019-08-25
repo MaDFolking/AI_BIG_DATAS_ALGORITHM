@@ -761,6 +761,65 @@ Q1,Q2,Q3,Q4都是各自区间的中位数，Q越大，说明数据波动越大�
               kmpp	使用k-means++算法选出K个初始中心点，思路是第一个点随机选取,第二个点离第一个最远，第三个取前俩个和最远，依次类推...
               external	指定额外的初始中心表
               
+              评估指标:
+              手肘法
+              - 核心指标：SSE(sum of the squared errors，误差平方和)
+              
+              
+              Ci是第i个簇
+              p是Ci中的样本点
+              mi是Ci的质心（Ci中所有样本的均值）
+              SSE是所有样本的聚类误差，代表了聚类效果的好坏。
+              
+              -手肘法核心思想
+              
+              随着聚类数k的增大，样本划分会更加精细，每个簇的聚合程度会逐渐提高，那么误差平方和SSE自然会逐渐变小。
+              当k小于真实聚类数时，由于k的增大会大幅增加每个簇的聚合程度，故SSE的下降幅度会很大，而当k到达真实聚类数时，再增加k所得到的聚合程度回报会迅速变小，所以SSE的下降幅度会骤减，然后随着k值的继续增大而趋于平缓，也就是说SSE和k的关系图是一个手肘的形状，而这个肘部对应的k值就是数据的真实聚类数
+              
+              import pandas as pd
+              from sklearn.cluster import KMeans
+              import matplotlib.pyplot as plt
+               
+              df_features = pd.read_csv(r'C:\预处理后数据.csv',encoding='gbk') # 读入数据
+              '利用SSE选择k'
+              SSE = []  # 存放每次结果的误差平方和
+              for k in range(1,9):
+                  estimator = KMeans(n_clusters=k)  # 构造聚类器
+                  estimator.fit(df_features[['R','F','M']])
+                  SSE.append(estimator.inertia_) # estimator.inertia_获取聚类准则的总和
+              X = range(1,9)
+              plt.xlabel('k')
+              plt.ylabel('SSE')
+              plt.plot(X,SSE,'o-')
+              plt.show()
+              
+              
+              
+              显然，肘部对于的k值为4(曲率最高)，故对于这个数据集的聚类而言，最佳聚类数应该选4。
+              轮廓系数
+              使用轮廓系数(silhouette coefficient)来确定，选择使系数较大所对应的k值
+              方法：
+              
+              计算样本i到同簇其他样本的平均距离ai。ai 越小，说明样本i越应该被聚类到该簇。将ai 称为样本i的簇内不相似度。
+              簇C中所有样本的a i 均值称为簇C的簇不相似度。
+              计算样本i到其他某簇Cj 的所有样本的平均距离bij，称为样本i与簇Cj 的不相似度。定义为样本i的簇间不相似度：bi =min{bi1, bi2, ..., bik}
+              bi越大，说明样本i越不属于其他簇。
+              
+              根据样本i的簇内不相似度a i 和簇间不相似度b i ，定义样本i的轮廓系数
+              
+              
+              判断：
+              轮廓系数范围在[-1,1]之间。该值越大，越合理。
+              si接近1，则说明样本i聚类合理；
+              si接近-1，则说明样本i更应该分类到另外的簇；
+              若si 近似为0，则说明样本i在两个簇的边界上。
+              所有样本的s i 的均值称为聚类结果的轮廓系数，是该聚类是否合理、有效的度量。
+              使用轮廓系数(silhouette coefficient)来确定，选择使系数较大所对应的k值
+              
+              sklearn.metrics.silhouette_score    sklearn中有对应的求轮廓系数的API
+
+
+              
               代码实现：
               1. Kmeans/K-众数
               #导入模块
