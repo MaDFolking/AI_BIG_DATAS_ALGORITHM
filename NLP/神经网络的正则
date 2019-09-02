@@ -1,0 +1,40 @@
+【AI数学】Layer-Normalization详细解析
+2018年10月19日 15:07:27 木盏 阅读数 4800更多
+分类专栏： Computer Vision  AI数学
+版权声明：本文为博主原创文章，遵循 CC 4.0 BY-SA 版权协议，转载请附上原文出处链接和本声明。
+本文链接：https://blog.csdn.net/leviopku/article/details/83182194
+最近深入batch normalization的研究，发现了一系列Normalization方法的富矿，深有收获。
+
+从2015年的BN开始，2016年出了LN(layer normalization)和IN(Instance Normalization)，2018年也就是今年，Kaiming提出了GN(Group normalization)，成为了ECCV2018最佳论文提名。
+
+论文标题：Layer Normalization
+
+论文链接：https://arxiv.org/abs/1607.06450v1
+
+从BN -> LN -> IN ->GN，一系列发展，容我慢慢道来。此文主要讨论Layer-Normalization
+
+Layer-Normalization
+对于Normalization不了解的同学请移步《batch normalization》
+
+LN是Hinton及其学生提出来的，所以这个分量足以我们好好讨论。
+
+BN虽然带来了很多好处，不过BN的缺点还是有一些的：
+
+    1，BN特别依赖Batch Size；当Batch size很小的适合，BN的效果就非常不理想了。在很多情况下，Batch size大不了，因为你GPU的显存不够。所以，通常会有其他比较麻烦的手段去解决这个问题，比如MegDet的CGBN等；
+
+    2，BN对处理序列化数据的网络比如RNN是不太适用的；So，BN的应用领域减少了一半。
+
+    3，BN只在训练的时候用，inference的时候不会用到，因为inference的输入不是批量输入。这也不一定是BN的缺点，但这是BN的特点。
+
+在前面谈到，标准化的作用就是改良数据分布。
+
+BN的操作是，对同一批次的数据分布进行标准化，得出的均值方差，其可信度受batch size影响。很容易可以想到，如果我们对小batch size得出均值方差，那势必和总数据的均值方差有所偏差。这样就解释了BN的第一个缺点：BN特别依赖Batch Size；
+
+LN的操作类似于将BN做了一个“转置”，对同一层网络的输出做一个标准化。注意，同一层的输出是单个图片的输出，比如对于一个batch为32的神经网络训练，会有32个均值和方差被得出，每个均值和方差都是由单个图片的所有channel之间做一个标准化。这么操作，就使得LN不受batch size的影响。同时，LN可以很好地用到序列型网络如RNN中。同时，LR在训练过程和inference过程都会有，这就是和BN很大的差别了。
+
+还有一个叫做Weight Normalization的操作，和LN有着同样的特点。WN是在训练过程中，对网络参数进行标准化。这也是一个很神奇的操作。不过效果表现上，是被LN虐了。还不足以成为主流的标准化方法，所以在这里只是稍微提一下。
+
+结果
+Hinton的文章里，并没有拿LN和BN做比较，它选的比较对象是WN(挑软柿子捏的感觉)。在Kaiming ECCV2018的paper里，实实在在拿LN和BN做了比较，结果是在较大batch size的时候BN的表现比LN好很多。BN也没那么好欺负的，不然怎么大大小小的主流网络都在用BN呢。
+
+总结一下，LN拼性能暂时不是BN的对手，但LN的应用范围更广，受限小。这是BN也无法比拟的。 
