@@ -25,39 +25,51 @@ PS: swap转成赋值总结: 设定一个内存循环临时变量与arr[i]初始�
 
 
 1.python版本:
-(1)普通版本:
- def insert_sort(list_temp):
+# encoding: utf-8
+
+# 普通方法
+def insert_sort(list_temp):
     if len(list_temp) <= 1:
         return list_temp
-    else:
-        num = len(list_temp)
-        for i in range(1, num):
-            temp = list_temp[i]
-            j = i - 1
-            while j >= 0:
-                if list_temp[j] > temp:
-                    list_temp[j + 1] = list_temp[j]
-                    list_temp[j] = temp
-                j -= 1
 
+    num = len(list_temp)
+    for i in range(1, num):
+        temp = list_temp[i]
+        j = i - 1
+        while j >= 0:
+            if list_temp[j] > temp:
+                list_temp[j + 1] = list_temp[j]
+                list_temp[j] = temp
+            j -= 1
+
+    return list_temp
+
+
+# 优化算法
+def insert_sort2(list_temp):
+    if len(list_temp) <= 1:
         return list_temp
 
-print(insert_sort([]))
+    num = len(list_temp)
+    for i in range(1, num):
+        temp = list_temp[i]
+        j = i
+        while j > 0 and list_temp[j - 1] > temp:
+            list_temp[j] = list_temp[j - 1]
+            j -= 1
 
-(2)升级版本:
-def insert_sort_2(list_temp):
-    if len(list_temp) == 1:
-        return list_temp
-    else:
-        num = len(list_temp)
-        for i in range(1,num):
-            temp = list_temp[i]
-            j = i
-            while j>0 and temp <list_temp[j-1]:
-                list_temp[j] = list_temp[j-1]
-                j -= 1
-            list_temp[j] = temp
-        return list_temp
+        list_temp[j] = temp
+
+    return list_temp
+
+
+if __name__ == "__main__":
+    print('普通的插入排序结果: {0}'.format(insert_sort([5, 3, 2, 2, 1, 2, 3, 4, 5, 6])))
+    print('优化后插入排序结果: {0}'.format(insert_sort2([5, 3, 2, 2, 1, 2, 3, 4, 5, 6])))
+
+
+
+
 
 
 
