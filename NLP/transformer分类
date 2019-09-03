@@ -1,3 +1,6 @@
+# transformerxl 的文本分类代码： https://github.com/kimiyoung/transformer-xl/tree/master/tf
+
+
 import sys
 sys.path.append('/home/bigdata/xm/lib/lib/python3.7/site-packages')
 import gc
