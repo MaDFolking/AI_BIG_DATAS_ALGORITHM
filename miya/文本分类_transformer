@@ -1,0 +1,435 @@
+import sys
+sys.path.append('/home/bigdata/xm/lib/lib/python3.7/site-packages')
+
+import os
+import gc
+import csv
+import json
+import nltk
+import math 
+import time
+import jieba
+import random
+import warnings
+import datetime
+import numpy as np 
+import pandas as pd 
+import tensorflow as tf
+
+from math import sqrt
+from odps import ODPS
+from odps.df import DataFrame
+from collections import Counter
+from tensorflow.contrib import rnn
+from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score
+
+warnings.filterwarnings("ignore")
+
+
+odps = ODPS('LTAIsdroAVHALblY', 'E1tfJVRaf3PWL3sz2lGWRLNmTt4dNy', 'miya_data_analysis',endpoint='http://service.odps.aliyun.com/api')
+
+# 加载原表
+table_name = 'miya_data_analysis.miya_goods_id_classfy_train'
+data = DataFrame(odps.get_table(table_name))
+# 加载词典 
+dict_name = 'miya_data_analysis.miya_goods_id_stop_words'
+dict_data = DataFrame(odps.get_table(dict_name))
+# 加载停止词 
+stop_name = 'miya_data_analysis.miya_stop_words_list'
+stop_words = DataFrame(odps.get_table(stop_name))
+data
+
+# 词典转pandas
+dict_data=dict_data.to_pandas()
+# 原数据转pandas
+data = data.to_pandas()
+# 停止词转pandas并转列表
+list_temp = stop_words.to_pandas()
+stop_words = [i.strip() for i in list_temp['stop_words']]
+
+# 加载词典
+jieba.load_userdict(dict_data['class2_stop_words']) 
+len_data = len(data)
+data_temp = data
+
+
+# 分词+去停用词
+segments = []
+for i in range(len_data):
+    words = jieba.lcut(data_temp['tag'][i])  
+    len_words = len(words)
+    segments.append({'tag':str([words[i] + ' ' for i in range(len_words) if words[i] not in stop_words]). \
+                     replace('\'','').replace(',','').replace('[','').replace(']','').strip(),'class2':data_temp['class2'][i]})
+        
+data_temp_01 = pd.DataFrame(segments,columns=['tag', 'class2'])
+print(data_temp_01)
+print(segments)
+# stop_words
+
+
+
+# 初始化公有参数 
+max_features = 10000 # vocabulary的大小
+maxlen = 500
+embedding_size = 128
+batch_size = 256 # 每个batch中样本的数量
+num_heads = 4
+num_units = 128 # query,key,value的维度
+ffn_dim = 2048
+num_epochs = 30
+max_learning_rate = 0.001
+min_learning_rate = 0.0005
+decay_coefficient = 2.5 # learning_rate的衰减系数
+dropout_keep_prob = 0.5 # dropout的比例
+evaluate_every = 100 # 每100step进行一次eval
+num_classes = 129 # 类别数量
+
+
+
+# 词向量处理 
+# 构建词向量,并截断过长部分防止时序太长导致梯度消失 / 梯度爆炸
+# keras包里的一种将文本转为向量的包,num_words为每行最大处理多少文本量。lower为True时则每处设计一个标记。
+tokenizer = tf.contrib.keras.preprocessing.text.Tokenizer(num_words=max_features,lower=True)
+tokenizer.fit_on_texts(list(data_temp_01['tag']))
+
+# Tokenizer对象中待转为序列的文本列表
+x_train = tokenizer.texts_to_sequences(list(data_temp_01['tag']))
+
+# pad_sequences 为内容的阶段，一般维度比较大的矩阵在该矩阵中进行了截断，这是为了防止在RNN系列中导致维度太大从而梯度消失/爆炸采取的措施。
+x_train = tf.contrib.keras.preprocessing.sequence.pad_sequences(x_train,maxlen=maxlen) 
+x_train
+
+
+'''
+以下开始最新的transformer的代码部分
+'''
+
+class Transformer(object):
+    
+    '''
+    function_name： 词向量嵌入
+    1.相关参数注释:
+    (1) vocab_size:      [Int], max_features,embedding横坐标是最大的输入特征数。
+    (2) embedding_size： [Int], 我们嵌入到多少维度,目前是128.
+    
+    2.tf相关函数用法:
+    (1) tf.random_uniform:       随即是-1-1的随机数，即词向量的初始w参数,我认为这个不太好，后续用其他函数优化。
+    (2) tf.nn.embedding_lookup:  选取一个张量里面索引对应的元素
+        举例说明: 
+        a.针对单维度数据: tf.nn.embedding_lookup(tf.Variable([10,1]), [1, 3]) 就是找到1，3位置相关的value。
+        b.针对多维度数据: aa = np.array([[0.1, 0.2, 0.3], [1.1, 1.2, 1.3], [2.1, 2.2, 2.3], [3.1, 3.2, 3.3], [4.1, 4.2, 4.3]])  
+                          result:shape=(5,3)
+                          idx1 = tf.Variable([0, 2, 3, 1], tf.int32)
+                          idx2 = tf.Variable([[0, 2, 3, 1], [4, 0, 2, 2]], tf.int32)
+                          print(tf.run(tf.nn.embedding_lookup(aa,idx1)))   result: shape = (4,3)  
+                          print(tf.run(tf.nn.embedding_loopup(aa,idx2)))   result: shape = (2,4,3)
+                          
+                          原因：idx1是一维数组, 只获得aa中第一维度的0,2,3,1中所有第二维度的数据。
+                                
+                                
+                          原因: idx2是二维数据,所以是从aa中第一维度的0,2,3,1中组成一个4,3. 再从aa中第一维度中4,0,2,2中组成一个4,3
+                                俩个维度进行concat计算得到 (2,4,3)维度数据。
+                                
+                          PS: embedding_look_up中的第二个参数可以是任意维度，但必须是每个维度数据个数都一样。
+                              其中数据最后一个维度的value(也就是列表里的value是不受到影响的)，
+                              所以你怎么玩都是玩前面维度的位置数据取出并concat。
+        
+    return: 词向量嵌入后的结果
+    '''
+    
+    
+    def embedding(self, input_x):
+        W = tf.Variable(tf.random_uniform([self.vocab_size,self.embedding_size],-1.0,1.0),name='W',trainable=True)
+        input_embedding = tf.nn.embedding_lookup(W, input_x)
+        return input_embedding
+    
+    
+    '''
+    function_name: 给定张量的位置编码
+    1.输入参数注释:
+    embedded_words : [Tensor], embedding后的向量,这个函数主要是找到向量的索引位置
+    sequence_length: [Int],    样本的第二维度，即input_x.shape[1],也就是我们词向量的初始维度
+    
+    2.tf相关函数知识:
+    (1)tf.expand_dims： 根据索引扩展一个维度数据，这个扩展的维度肯定是1，比如 shape=[2,3]的数据转为 shape=[2,3,1]/shape=[1,2,3]/shape[2,1,3]
+        举例:  tf.shape(tf.expand_dims(t2, 0))  result: [1, 2, 3, 5]
+               tf.shape(tf.expand_dims(t2, 2))  result: [2, 3, 1, 5]
+               tf.shape(tf.expand_dims(t2, 3))  result: [2, 3, 5, 1]
+        所以:  tf.expand_dims(tf.range(self.sequence_length), 0) = [1,self.sequence_length]的维度数据
+    (2) tf.title(x,[1,2])  [1,2] 必须跟原始数据维度一样，比如原始数据是2维，那么就是[1,2]进行第一维度*1扩展，第二维度*2扩展
+        这里[batch_size,1]就是第一维度*batch_size扩展，第二维度*1扩展。
+    (3) tf.convert_to_tensor 转为tensor类型
+    return: “张量”比输入多一个秩,该函数的功能是将embedding的结果数据各个维度增加一个0-1且接近0的数据，防止梯度消失。
+    ''' 
+    
+    def positional_encoding(self,embedded_words):         
+        '''
+        这步是初始化索引信息，最后得到[batch.self.sequence_length]  ,第一个参数得到[1,batch]的参数集合，再进行title扩展得到结果。
+        '''
+        positional_ind = tf.tile(tf.expand_dims(tf.range(self.sequence_length), 0), [batch_size, 1])
+        '''
+        这步是初始化embedding后的数值，数学公式 sequence_length该特征维度/10000的embedding数开方，得到一个接近0的数 
+        维度是[sequence_length,embedding_size]
+        '''
+        position_enc = np.array([[pos / np.power(10000, 2.*i/self.embedding_size) for i in range(self.embedding_size)]for pos in range(self.sequence_length)])
+        '''
+        第一，第三维度数据进行sin 
+        '''
+        position_enc[:, 0::2] = np.sin(position_enc[:, 0::2])
+        '''
+        第二维度数据进行cos
+        '''
+        position_enc[:, 1::2] = np.cos(position_enc[:, 1::2])
+        '''
+        将numpy转为tensor
+        '''
+        lookup_table = tf.convert_to_tensor(position_enc,dtype = tf.float32)
+        '''
+        我们的lookup_table是embedding后的维度数据：[sequence_length,embedding_size],
+        然后用输入前的数据维度[batch.self.sequence_length]  去
+        获取索引下的值，得到我们的原始数据上的值，再相加 embedded_words(为我们的embedding输入后的值)
+        '''
+        positional_output = tf.nn.embedding_lookup(lookup_table, positional_ind)
+        positional_output += embedded_words
+        return positional_output
+    
+    '''
+    function_name：padding_mask功能.
+    即将数据的边缘转为0,增强学习能力。我举个例子。
+    我的_是程序员。  _就是我们用padding_mask遮挡住的数据，在这基础上去学习结果和中间内容得到 "工作"这个词语
+    即： 我的工作是程序员
+    1.tf相关函数知识:
+    (1)tf.equal(inputs,0) 判断出该数是否为0，不为0则为False,否则True。
+    2.代码解析：
+      初始化一个判断是否为0矩阵，0即该数据特征化为0，即不学习。此时的inputs维度是[batch,特征维度数]，我们扩展到[batch,特征维度数,特征维度数]
+      所以先用expand_dims=>[batch,1,特征维度数] ，再用tf.tile扩展到[batch,特征维度数,特征维度数]
+      所以得到一个[batch,特征维度数,特征维度数] 的True/False矩阵。
+    return: 新的mask的tensor
+    '''
+    
+    def padding_mask(self, inputs):
+        pad_mask = tf.equal(inputs,0)
+        # [batch_size,sequence_length,sequence_length]
+        pad_mask = tf.tile(tf.expand_dims(pad_mask,axis=1),[1,self.sequence_length,1])
+        return pad_mask
+    
+     
+#      '''
+#      function_name: LN层级归一化处理
+#      input:
+#      (1) inputs：[Tensor] , 具有两个或多个维度的张量，其中第一个维度是 "批量大小".
+#      (2) epsilon:[Float]  , 一个防止零除错误的小数字,一般设置比较小.
+#      (3) scope： [String] , 作为“变量作用域”的可选作用域.
+#      (4) reuse： [Boolean], bool类型,如果要用相同名称则重用前一层全职.
+#      return: 返回与上层相同的归一化后的tensor      
+#      '''
+        
+    def layer_normalize(self, inputs, epsilon = 1e-8, scope = "ln", reuse = None):
+
+        with tf.variable_scope(scope, reuse = reuse):
+            # [batch_size,sequence_length,num_units]
+            inputs_shape = inputs.get_shape()
+            params_shape = inputs_shape[-1:] # num_units
+            # 沿轴-1求均值和方差(也就是沿轴num_units)
+            # mean/variance.shape = [batch_size,sequence_length]
+            mean, variance = tf.nn.moments(inputs, [-1], keep_dims=True) # LN
+            # mean, variance = tf.nn.moments(inputs,[-2,-1],keep_dims=True) # BN
+            beta= tf.Variable(tf.zeros(params_shape))
+            gamma = tf.Variable(tf.ones(params_shape))
+            normalized = (inputs - mean) / ( (variance + epsilon) ** (.5) )
+            # [batch_size,sequence_length,num_units]
+            outputs = gamma * normalized + beta
+            return outputs
+    
+    '''
+    transformer中encoder中的核心部分,也就是mul_attention,并行注意力机制。
+     1.相关参数:
+    (1)num_units:         [Int],    初始化Q,K,V的特征维度,先设置为128
+    (2)num_heads:         [Int],    默认的head数，为8
+    (3)attention_inputs : [Tensor], 注意力机制+positional_encoding结果的padding数据
+    
+     2.tf相关内容
+    (1) dense: tf.keras.layers.Dense(self.num_units)(attention_inputs) => 将attention_inputs映射到num_units维度的数据。 =>
+               tf.keras.layers.Dense(inputs=attention_inputs, units=self.num_units)
+        
+    (2) tf.split(value,num_or_size_splits,axis=0)
+        num_or_size_splits：Tensor指示沿split_dim的拆分数的0-D整数或Tensor包含split_dim中每
+        个输出张量的大小的1-D整数。如果是标量那么它必须均分value.shape[axis]; 否则，拆分维度的大小总和必须与value。
+        举例：tf.concat(tf.split(Q, num_heads, axis=2), axis=0) 的含义
+              我们用tf.split在第三维度均分8份，所以第三维度512除以8.再将这些数据按照第一维度concat，这样
+              就是8*batch_size个 [10,64]的数据，即：shape (batch_size*8， 10, 512/8=64)
+              
+    (3) tf.transpose: 
+        tf.transpose(value,perm=None): 转置。 根据value的尺寸置换到perm的尺寸。如果perm为空，则默认普通的转置。
+        'perm' is more useful for n-dimensional tensors, for n > 2
+        x = tf.constant([[[ 1,  2,  3],
+                  [ 4,  5,  6]],
+                 [[ 7,  8,  9],
+                  [10, 11, 12]]])
+        # 第一层，俩个list, 第二层俩个list ，第三层，三个value. 所以是(2,2,3)
+        [[[1,2,3],[4,5,6]],[[7,8,9],[10,11,12]]] = shape(2,2,3)
+        perm = [0,2,1] 表示第一维度不变，第二和第三维度颠倒。
+        后续为了和Q权重相乘必须这样做。
+        tensorflow的乘法规则：
+        (1) a和b除了最后两个维度可以不一致，其他维度要相同(比如上面代码第一维和第二维分别都是1,2)
+        (2) a和b最后两维的维度要符合矩阵乘法的要求（比如a的(3,4)能和b的(4,6)进行矩阵乘法）
+        
+
+        
+    (4) tf.where()
+        tf.where(input, a,b)，其中a，b均为尺寸一致的tensor，作用是将a中对应input中true的位置的元素值不变，其余元素进行替换，
+        替换成b中对应位置的元素值
+        下问可这样解释： key_masks,paddings,outputs都是相同维度，key_mastks中哪个value为0，用paddings对应位置value取代，否则
+        用outputs对应位置的value取代。
+     
+     3.代码解析:
+     (1)这部分是Q,K,V层，也是mul_attention的核心，我们将embedding处理好后的数据进入该函数，并进行全连接操作。
+        输入数据是[batch,seq,embedding_size] * num_units后得到 [batch,seq,num_units]维度数据。
+     (2)我们开启并行head处理，batch乘以8，num_units相应除以8
+     (3)将K数据的2,3维度颠倒,并与Q相乘得到一个值，该值与K的最后一个维度的开方的比值为我们的最终相似度。
+     (4)将之前的mask数据进行head倍数扩展(batch这里进行head倍)
+     (5)用where将相似度数据和mask数据进行mask操作(即部分数据被挡住不学习，以便增强其他参数的学习能力)
+     (6)将结果进行softmax和drop处理，并与V进行相乘
+     (7)最后将head部分切除回到正常数据即我们最终得到的数据。
+     '''
+    
+    def multihead_attention(self,attention_inputs):
+        # [batch_size,sequence_length, num_units]
+        Q = tf.keras.layers.Dense(self.num_units)(attention_inputs)
+        K = tf.keras.layers.Dense(self.num_units)(attention_inputs)
+        V = tf.keras.layers.Dense(self.num_units)(attention_inputs)
+        
+        # 将Q/K/V分成多头
+        # Q_/K_/V_.shape = [batch_size*num_heads,sequence_length,num_units/num_heads]
+        Q_ = tf.concat(tf.split(Q, num_heads, axis=2), axis=0)
+        K_ = tf.concat(tf.split(K, num_heads, axis=2), axis=0)
+        V_ = tf.concat(tf.split(V, num_heads, axis=2), axis=0)
+        
+        # 计算Q与K的相似度
+        # tf.transpose(K_,[0,2,1])是对矩阵K_转置
+        # similarity.shape = [batch_size*num_heads,sequence_length,sequence_length] 
+        similarity = tf.matmul(Q_, tf.transpose(K_, [0, 2, 1]))
+        similarity = similarity / (K_.get_shape().as_list()[-1] ** 0.5)
+        
+        pad_mask = self.padding_mask(self.input_x)
+        pad_mask = tf.tile(pad_mask,[self.num_heads,1,1])
+        paddings = tf.ones_like(similarity)*(-2**32+1)
+        similarity = tf.where(tf.equal(pad_mask,False),paddings,similarity)
+        similarity = tf.nn.softmax(similarity)
+        similarity = tf.nn.dropout(similarity,self.dropout_keep_prob)
+        # [batch_size*num_heads,sequence_length,sequence_length] 
+        outputs = tf.matmul(similarity, V_)
+        outputs = tf.concat(tf.split(outputs, num_heads, axis=0), axis=2 )
+        return outputs
+
+    '''
+    两层卷积之间加了relu非线性操作。之后是residual操作加上inputs残差，然后是normalize。最后输出的维度还是[N, T_q, S]。
+    1.tf相关参数：
+    (1)tf.layers.conv1d:
+       inputs :     输入tensor， 维度(None,  a, b) 是一个三维的tensor
+
+              None  ：  一般是填充样本的个数，batch_size
+
+              a    ：  句子中的词数或者字数
+
+              b    :   字或者词的向量维度
+
+        filters :   过滤器的个数
+        kernel_size: 卷积核的大小，卷积核其实应该是一个二维的，这里只需要指定一维，是因为卷积核的第二维与输入的词向量维度是一致的，
+                     因为对于句子而言，卷积的移动方向只能是沿着词的方向，即只能在列维度移动
+        activation:  激活函数
+        use_bias   : 是否使用偏执项。
+    2.代码解析： 主要是做了俩层前向传播的全连接，一层加了relu函数增强了非线性能力，最后一层没加。
+
+    '''
+    
+    def feedforward(self,inputs):
+        params = {"inputs": inputs, "filters": ffn_dim, "kernel_size": 1,"activation": tf.nn.relu, "use_bias": True}
+        # 相当于 [batch_size*sequence_length,num_units]*[num_units,ffn_dim]，在reshape成[batch_size,sequence_length,num_units]
+        # [batch_size,sequence_length,ffn_dim]
+        outputs = tf.layers.conv1d(**params)
+        params = {"inputs": outputs, "filters": num_units, "kernel_size": 1,"activation": None, "use_bias": True}
+        # [batch_size,sequence_length,num_units]
+        outputs = tf.layers.conv1d(**params)
+        return outputs
+    
+    
+    '''
+    以下是该函数的初始化参数
+    1.参数解析
+    (1) sequence_length : 我们的输入特征维度。
+    (2) num_classes: 我们的分类数目。
+    (3) vocab_size: 文本数据的总维度数。
+    (4) embedding_size: embedding后的维度。
+    (5) num_units: Q,V,K的维度数。
+    (6) num_heads: mul_attention的数量。
+    
+    '''
+    
+    def __init__(self, sequence_length,num_classes,vocab_size,embedding_size,num_units,num_heads):
+        
+        self.sequence_length = sequence_length
+        self.num_classes = num_classes
+        self.vocab_size = vocab_size
+        self.embedding_size = embedding_size
+        self.num_units = num_units
+        self.num_heads = num_heads
+        
+        # 定义需要用户输入的placeholder。
+        # 定义为placeholder是为了实现lr递减。
+        self.input_x = tf.placeholder(tf.int32, [None,sequence_length], name='input_x')
+        self.input_y = tf.placeholder(tf.float32, [None,num_classes], name='input_y')
+        self.dropout_keep_prob = tf.placeholder(tf.float32, name='dropout_keep_prob')
+        self.learning_rate = tf.placeholder(tf.float32, name='learning_rate') 
+        
+        # embedding操作。
+        input_embedding = self.embedding(self.input_x)
+        
+        # embedding后的增强层，加入接近0的数据。
+        positional_output = self.positional_encoding(input_embedding)
+        
+        # Dropout层。
+        positional_output = tf.nn.dropout(positional_output, self.dropout_keep_prob)
+        
+        # 多头注意力机制层。
+        attention_output = self.multihead_attention(positional_output)
+        
+        # 增强注意力机制层。
+        attention_output += positional_output
+        
+        # LN 归一化。[batch_size, sequence_length, num_units]
+        outputs = self.layer_normalize(attention_output) 
+        
+        # 前向传播层
+        feedforward_outputs = self.feedforward(outputs)
+        
+        # 前向传播后 + outputs
+        feedforward_outputs += outputs
+        
+        # 随后再LN归一化
+        feedforward_outputs = self.layer_normalize(feedforward_outputs)
+        
+        # 最后取均值处理
+        outputs = tf.reduce_mean(outputs ,axis=1)
+        
+        # 进行分类操作
+        self.scores = tf.keras.layers.Dense(self.num_classes)(outputs)
+        
+        # 取分值最大的
+        self.predictions = tf.argmax(self.scores, 1, name="predictions")
+        
+        # 计算loss值
+        with tf.name_scope('loss'):
+            # 交叉熵loss
+            losses = tf.nn.softmax_cross_entropy_with_logits_v2(logits=self.scores, labels=self.input_y)
+            # L2正则化后的loss
+            self.loss = tf.reduce_mean(losses)
+            
+        # 计算准确率
+        with tf.name_scope('accuracy'):
+            correct_predictions = tf.equal(self.predictions, tf.argmax(self.input_y, 1))
+            self.accuracy = tf.reduce_mean(tf.cast(correct_predictions, "float"), name="accuracy")
+
+
+
+
