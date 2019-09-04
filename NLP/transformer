@@ -1,763 +1,453 @@
-https://www.jianshu.com/p/923c8b489604
+https://baijiahao.baidu.com/s?id=1622064575970777188&wfr=spider&for=pc
 
-Transformer来自Google团队17年的文章Attention is all you need。
-该文章的目的：减少计算量并且提高并行效率，同时不减弱最终的实验效果。
-创新点：Transformer只采用了attention机制。不像传统的encoder-decoder的模型需要结合RNN或者CNN来使用。创新之处在于使用了scaled Dot-product Attention和Multi-Head Attention。
-我觉得将Transformer解释的最容易懂的的还是The illustrated transformer，看完这篇博客就瞬间懂了很多东西。然后哈佛大学也给出了详细的pytorch版本的代码，有jupyter notebook详细的解释，看完也会有别样的收获哈。
-一、原理分析
-1、模型的架构图如下：
-Attentin is all you need文中给出的架构图如下，能够比较详细的看到了一个encoder和decoder的细节。在这里，可以看到一个encoder里面有2个子层，然后一个decoder中含有3个子层，后面会详细说到这个结构。
 
+大数据文摘与百度NLP联合出品
 
+编译：张驰、毅航、Conrad、龙心尘
 
 
-然后我们从全局的视野来看，encoder和decoder部分都包含了6个encoder和decoder。进入到第一个encoder的inputs结合embedding和positional embedding。通过了6个encoder之后，输出到了decoder部分的每一个decoder中。
+编者按：前一段时间谷歌推出的BERT模型在11项NLP任务中夺得STOA结果，引爆了整个NLP界。而BERT取得成功的一个关键因素是Transformer的强大作用。谷歌的Transformer模型最早是用于机器翻译任务，当时达到了STOA效果。Transformer改进了RNN最被人诟病的训练慢的缺点，利用self-attention机制实现快速并行。并且Transformer可以增加到非常深的深度，充分发掘DNN模型的特性，提升模型准确率。在本文中，我们将研究Transformer模型，把它掰开揉碎，理解它的工作原理。
 
 
-2、Encoder部分
-Transformer的两个创新的结构图如下，明白了两个部分，后面的东西就清楚多了。
+以下是正文，请欣赏：
 
+Transformer由论文《Attention is All You Need》提出，现在是谷歌云TPU推荐的参考模型。论文相关的Tensorflow的代码可以从GitHub获取，其作为Tensor2Tensor包的一部分。哈佛的NLP团队也实现了一个基于PyTorch的版本，并注释该论文。
 
-上面的Q，K和V，被作为一种抽象的向量，主要目的是用来做计算和辅助attention。根据文章我们知道Attention的计算公式如下:
 
+在本文中，我们将试图把模型简化一点，并逐一介绍里面的核心概念，希望让普通读者也能轻易理解。
 
-然后文章里面提到了Q，K和V的是通过输入encoder的向量x与W^Q, W^K, W^V 相乘得到Q，K和V。W^Q, W^K, W^V在文章的维度是(512, 64)，然后假设我们inputs的维度是(m, 512)，其中m代表了字的个数。所以输入向量与W^Q, W^K, W^V相乘之后得到的Q、K和V的维度就是(m, 64)。
-接着是Multi-head Attention：
 
+Attention is All You Need：
 
+https://arxiv.org/abs/1706.03762
 
 
 
+从宏观的视角开始
 
 
-图中的Z0到Z7就是对应的8个并行的head（维度是(m, 64)），然后concat这个8个head之后就得到了(m, 512)维度。最后与W^O相乘之后就到了维度为(m,512)的输出的矩阵，那么这个矩阵的维度就和进入下一个encoder的维度一样了。所以这里的设计还是挺巧妙的。512的维度和8个并行的头。
+首先将这个模型看成是一个黑箱操作。在机器翻译中，就是输入一种语言，输出另一种语言。
 
 
 
-在这里说明一下，在tensorflow的代码里面，维度变成了(batch_size, max_len, vector_dimension)。其实就是增加了一个batch_size也就是输入的句子数，然后max_len就是控制的一句话的长度，最后是字向量的维度大小。
-上面说的是从下图中x1经过self-attention到了z1的状态，通过了self-attetion的张量还需要进过残差网络和LaterNorm的处理，然后进入到全连接的前馈网络中，前馈网络也是同样的操作，进行的残差处理和正规化。最后输出的张量才真正的进入到了下一个encoder之中，然后这样的操作，经过了6次，然后最后就能进入到decoder的部分了。
+那么拆开这个黑箱，我们可以看到它是由编码组件、解码组件和它们之间的连接组成。
 
 
-可以从上图中看出，在向量进入self-attention层之前，是将词的embedding和位置的encoding做了一个相加的处理。因为模型里面没有用到RNN和CNN的东西，所以该论文采用了位置的编码来解决序列信息获取的问题。这里的positional encoding需要说明一下：
 
+编码组件部分由一堆编码器（encoder）构成（论文中是将6个编码器叠在一起——数字6没有什么神奇之处，你也可以尝试其他数字）。解码组件部分也是由相同数量（与编码器对应）的解码器（decoder）组成的。
 
 
-公式中pos就代表了位置index，然后i就是index所对应的向量值，是一个标量，然后dmodel就是512了。之所以选择这个函数是因为作者假设它能够让模型通过相关的位置学习Attend。
-3、Decoder部分
-对比单个encoder和decoder，可以看出，decoder多出了一个encoder-decoder Attention layer，接收encoder部分输出的向量和decoder自身的self attention出来的向量，然后再进入到全连接的前馈网络中去，最后向量输出到下一个的decoder。
-4、
 
 
+所有的编码器在结构上都是相同的，但它们没有共享参数。每个解码器都可以分解成两个子层。
 
-最后一个decoder输出的向量会经过Linear层和softmax层。Linear层的作用就是对decoder部分出来的向量做映射成一个logits向量，然后softmax层根据这个logits向量，将其转换为了概率值，最后找到概率最大值的位置。这样就完成了解码的输出了。
 
 
-二、代码分析
-代码分析来自于https://github.com/EternalFeather/Transformer-in-generating-dialogue，该文件里面的文件组成和作用如下：
-文件名字	作用
-params.py	定义了该模型里面的所用到的超参数，比如学习率、隐藏单元葛个数等。
-make_dic.py	用来做数据预处理的，作用是生成源语言和目标语言的Vocabulary文件。
-data_load.py	该文件包含所有关于加载数据以及批量化数据的函数。
-modules.py	核心代码部分，包括了embedding和positional embedding、、以及multihead-attention、正则化等函数
-train.py	训练模型的代码，定义了模型，损失函数以及训练和保存模型的过程
-eval.py	模型训练完之后，评估模型的性能
-1、明确该模型的一些超参数(可调)
-# -*- coding: utf-8 -*-class Params:
-    '''
-    Parameters of our model
-    '''
-    src_train = "data/src-train.txt"
-    tgt_train = "data/tgt-train.txt"
-    src_test  = "data/src-val.txt"
-    tgt_test  = "data/tgt-val.txt"
-
-    num_identical = 6
-
-    maxlen       = 10
-    hidden_units = 512
-    num_heads    = 8
-
-    logdir = 'logdir'
-    batch_size = 32
-    num_epochs = 250
-    dropout    = 0.1
-    learning_rate = 0.0001
-
-    word_limit_size  = 20
-    word_limit_lower = 3
-
-    checkpoint = 'checkpoint'
-
-参数名	大小	对应到代码里面	意义
-batch_size	32	N	批量的大小
-learning_rate	0.001	lr	学习率的大小
-maxlen	10	T,T_q,T_k	一句话最长多少个字
-word_limit_size	20		出现次数小于20的话，那么认作UNK
-hidden_units	512	num_units,S	隐藏单元的个数、维度大小
-num_identical	6		encoder和decoder部分叠加的个数
-num_epochs	250		训练的时候，总的epochs数目
-num_heads	8		multi-head attention里面的头数
-dropout_rate	0.1		dropout大小
-2、数据的预处理
-make_dic.py
-from __future__ import print_function
-from params import Params as pm
-import codecs
-import os
-from collections import Counter
-
-def make_dic(path, fname):
-    '''
-    Constructs vocabulary as a dictionary
-
-    Args:
-        path: [String], Input file path
-        fname: [String], Output file name
-
-    Build vocabulary line by line to dictionary/ path
-    '''
-    text = codecs.open(path, 'r', 'utf-8').read()  #codes.open()得到的是一个对象，然后read()之后就变成了字符串了
-    words = text.split()
-    wordCount = Counter(words)
-    if not os.path.exists('dictionary'):
-        os.mkdir('dictionary')
-    with codecs.open('dictionary/{}'.format(fname), 'w', 'utf-8') as f:
-        f.write("{}\t1000000000\n{}\t1000000000\n{}\t1000000000\n{}\t1000000000\n".format("<PAD>","<UNK>","<STR>","<EOS>"))
-        for word, count in wordCount.most_common(len(wordCount)):
-            f.write(u"{}\t{}\n".format(word, count))
-
-if __name__ == '__main__':
-    make_dic(pm.src_train, "en.vocab.tsv")
-    make_dic(pm.tgt_train, "de.vocab.tsv")
-    print("MSG : Constructing Dictionary Finished!")
-运行这个文件之后，我们得到了en.vocab和de.vocab两个文件。en.vocab部分结果如下:
-<PAD>   1000000000<UNK>   1000000000<STR>   1000000000<EOS>   1000000000
-有   17300
-的   15767
-`   12757
--   10831
-卦   8461
-八   7865
-麼   7771
-沒   7324
-嗎   6024
-是   5940
-......
-ASCII   1
-SAISONduSOLEIL  1
-豌   1
-迺   1
-ThuDec2223  1
-snis    1
-Ya  1
-2100    1
-雇   1
-主要作用就是统计了一下出现单词的次数，然后按照出现的次数进行了一个排序，用于后续的data_load模块的操作
-data_load.py
-# -*- coding: utf-8 -*-from __future__ import print_functionfrom params import Params as pmimport codecsimport sysimport numpy as npimport tensorflow as tf
-def load_vocab(vocab):  #  'en.vocab.tsv'  'de.vocab.tsv'
-    '''
-    Load word token from encoding dictionary
-    Args:
-        vocab: [String], vocabulary files
-    ''' 
-    vocab = [line.split()[0] for line in codecs.open('dictionary/{}'.format(vocab), 'r', 'utf-8').read().splitlines() if int(line.split()[1]) >= pm.word_limit_size]
-    word2idx_dic = {word: idx for idx, word in enumerate(vocab)}
-    idx2word_dic = {idx: word for idx, word in enumerate(vocab)}
-    return word2idx_dic, idx2word_dic
-load_vocab这个函数的作用就是处理前面根据词频产生的文档，进过处理之后：
-#en.vocab:
-word2idx ={'<PAD>': 0, '<UNK>': 1, '<STR>': 2, '<EOS>': 3, '有': 4, 
-'的': 5, '`': 6, '-': 7, '卦': 8, '八': 9, ..., '爬': 1642, 'U': 1643}
-idx2word={{0: '<PAD>', 1: '<UNK>', 2: '<STR>', 3: '<EOS>', 4: '有', 
-5: '的', 6: '`', 7: '-', 8: '卦', 9: '八', ..., 1642: '爬', 1643: 'U'}}
-
-#de.vocab
-word2idx={'<PAD>': 0, '<UNK>': 1, '<STR>': 2, '<EOS>': 3, '-': 4, 
-'的': 5, '`': 6, '不': 7, '人': 8, '好': 9, ..., '遺': 1586, '搜': 1587}
-idx2word={0: '<PAD>', 1: '<UNK>', 2: '<STR>',3:'<EOS>', 4: '-', 
-5: '的', 6: '`', 7: '不', 8: '人', 9: '好', ..., 1586: '遺', 1587: '搜'}
-接着看generate_dataset这个函数，它的作用就是产生数据集，也就是将句子表示成了np array的形式。传入的是source句子和target句子。这里的集外词的id给为1。函数的前半部分做的是一个index化，后半部分做的是padding处理，我们可以知道<pad>符号在Vocabulary里面的位置为0，所以当句子的长度小于10的时候，我们就在不足的位置给加填上0，保证每个句子的长度都是相同的。
-最终返回的X，Y的维度都是(句子数，最大的句子的长度)
-def generate_dataset(source_sents, target_sents):
-    '''
-    Parse source sentences and target sentences from corpus with some formats
-    Parse word token of each sentences
-    Args:
-        source_sents: [List], encoding sentences from src-train file
-        target_sents: [List], decoding sentences from tgt-train file
-
-    Padding for word token sentence list
-    '''
-    en2idx, idx2en = load_vocab('en.vocab.tsv')
-    de2idx, idx2de = load_vocab('de.vocab.tsv')
-
-    in_list, out_list, Sources, Targets = [], [], [], []
-    for source_sent, target_sent in zip(source_sents, target_sents):
-        # 1 means <UNK>
-        inpt = [en2idx.get(word, 1) for word in (source_sent + u" <EOS>").split()]
-        outpt = [de2idx.get(word, 1) for word in (target_sent + u" <EOS>").split()]
-        if max(len(inpt), len(outpt)) <= pm.maxlen:
-            # sentence token list
-            in_list.append(np.array(inpt))
-            out_list.append(np.array(outpt))
-            # sentence list
-            Sources.append(source_sent)
-            Targets.append(target_sent)
-
-    X = np.zeros([len(in_list), pm.maxlen], np.int32)
-    Y = np.zeros([len(out_list), pm.maxlen], np.int32)
-    for i, (x, y) in enumerate(zip(in_list, out_list)):
-        X[i] = np.lib.pad(x, (0, pm.maxlen - len(x)), 'constant', constant_values = (0, 0))
-        Y[i] = np.lib.pad(y, (0, pm.maxlen - len(y)), 'constant', constant_values = (0, 0))
-
-    return X, Y, Sources, Targets
-load_data这个函数的作用就是给generate_dataset里面提供参数用的。
-def load_data(l_data):
-    '''
-    Read train-data from input datasets
-
-    Args:
-        l_data: [String], the file name of datasets which used to generate tokens
-    '''
-    if l_data == 'train':
-        en_sents = [line for line in codecs.open(pm.src_train, 'r', 'utf-8').read().split('\n') if line]
-        de_sents = [line for line in codecs.open(pm.tgt_train, 'r', 'utf-8').read().split('\n') if line]
-        if len(en_sents) == len(de_sents):
-            inpt, outpt, Sources, Targets = generate_dataset(en_sents, de_sents)
-        else:
-            print("MSG : Source length is different from Target length.")
-            sys.exit(0)
-        return inpt, outpt
-    elif l_data == 'test':
-        en_sents = [line for line in codecs.open(pm.src_test, 'r', 'utf-8').read().split('\n') if line]
-        de_sents = [line for line in codecs.open(pm.tgt_test, 'r', 'utf-8').read().split('\n') if line]
-        if len(en_sents) == len(de_sents):
-            inpt, outpt, Sources, Targets = generate_dataset(en_sents, de_sents)
-        else:
-            print("MSG : Source length is different from Target length.")
-            sys.exit(0)
-        return inpt, Sources, Targets
-    else:
-        print("MSG : Error when load data.")
-        sys.exit(0)
-利用到了前面的load_data这个函数，参数可以是train或者test。
-这里面的inpt, outpt维度(句子的总数, maxlen)，那么batch_num就是我们总共的要训练的批量数。
-输出x,y的维度(N, T)==(batch_size, maxlen)
-def get_batch_data():
-    '''
-    A batch dataset generator
-    '''
-    inpt, outpt = load_data("train")
-
-    batch_num   = len(inpt) // pm.batch_size
-
-    inpt  = tf.convert_to_tensor(inpt, tf.int32)
-    outpt = tf.convert_to_tensor(outpt, tf.int32)
-
-    # parsing data into queue used for pipeline operations as a generator. 
-    input_queues = tf.train.slice_input_producer([inpt, outpt])
-
-    # multi-thread processing using batch
-    x, y = tf.train.shuffle_batch(input_queues,
-                                num_threads = 8,
-                                batch_size = pm.batch_size,
-                                capacity = pm.batch_size * 64,
-                                min_after_dequeue = pm.batch_size * 32,
-                                allow_smaller_final_batch = False)
-
-    return x, y, batch_num
-3、核心部分-modules.py
-# -*- coding: utf-8 -*-from __future__ import print_functionimport tensorflow as tfimport numpy as npimport math
-def normalize(inputs, epsilon = 1e-8, scope = "ln", reuse = None):
-    '''
-    Implement layer normalization
-    Args:
-        inputs: [Tensor], A tensor with two or more dimensions, where the first one is "batch_size"
-        epsilon: [Float], A small number for preventing ZeroDivision Error
-        scope: [String], Optional scope for "variable_scope"
-        reuse: [Boolean], If to reuse the weights of a previous layer by the same name
-    Returns:
-        A tensor with the same shape and data type as "inputs"
-    '''
-    with tf.variable_scope(scope, reuse = reuse):
-        inputs_shape = inputs.get_shape()  # a.get_shape().as_list() --->a维度是(2,3)，那么这个返回就是 [2, 3]
-        params_shape = inputs_shape[-1 :]  # params_shape就是最后的一个维度了
-
-        # tf.nn.moments 计算返回的 mean 和 variance 作为 tf.nn.batch_normalization 参数调用。
-        mean, variance = tf.nn.moments(inputs, [-1], keep_dims = True)
-        beta  = tf.Variable(tf.zeros(params_shape))
-        gamma = tf.Variable(tf.ones(params_shape))
-        normalized = (inputs - mean) / ((variance + epsilon) ** (.5))
-        outputs = gamma * normalized + beta
-
-    return outputs
-不论是self-attention还是feed-forward neural network，都会做一个正规化的操作。这里参数epsilon就是为了防止正规化的时候，分母为0，然后scope为命名空间。看代码就知道，这个和batch normalization的公式是一样的。目的肯定是使得训练过程，反向传播的时候的震荡幅度更小。好多复杂的网络在输出之后都会加上normalization。
-def positional_encoding(inputs,
-                        vocab_size,
-                        num_units,
-                        zero_pad = True,
-                        scale = True,
-                        scope = "positional_embedding",
-                        reuse = None):
-    '''
-    Positional_Encoding for a given tensor.
-
-    Args:
-        inputs: [Tensor], A tensor contains the ids to be search from the lookup table, shape = [batch_size, 1 + len(inpt)]
-        vocab_size: [Int], Vocabulary size
-        num_units: [Int], Hidden size of embedding
-        zero_pad: [Boolean], If True, all the values of the first row(id = 0) should be constant zero
-        scale: [Boolean], If True, the output will be multiplied by sqrt num_units(check details from paper)
-        scope: [String], Optional scope for 'variable_scope'
-        reuse: [Boolean], If to reuse the weights of a previous layer by the same name
-
-        Returns:
-            A 'Tensor' with one more rank than inputs's, with the dimensionality should be 'num_units'
-    '''
-
-    """
-        inputs (batch_size, 1+len(inputs)) 那么N就是batch_size, 然后T就是maxlen，大小为10
-        num_units 就是隐层单元的个数，维度的大小
-    """
-    N, T = inputs.get_shape().as_list()
-    
-    with tf.variable_scope(scope, reuse = reuse):
-        position_ind = tf.tile(tf.expand_dims(tf.range(T), 0), [N, 1])
-
-        # First part of the PE function: sin and cos argument
-        position_enc = np.array([
-            [pos / np.power(10000, 2.*i/num_units) for i in range(num_units)]
-            for pos in range(T)])
-
-        # Second part, apply the cosine to even columns and sin to odds.
-        position_enc[:, 0::2] = np.sin(position_enc[:, 0::2])  # dim 2i
-        position_enc[:, 1::2] = np.cos(position_enc[:, 1::2])  # dim 2i+1
-
-        # Convert to a tensor
-        lookup_table = tf.convert_to_tensor(position_enc)
-
-        if zero_pad:
-            lookup_table = tf.concat((tf.zeros(shape=[1, num_units]),
-                          lookup_table[1:, :]), 0)
-        outputs = tf.nn.embedding_lookup(lookup_table, position_ind)
-
-        if scale:
-            outputs = outputs * num_units**0.5
-        
-    return tf.cast(outputs, tf.float32)
-这一部分的代码就是架构图里面的positional embedding的实现了，由于没有采用序列模型，那么这里讲位置进行了嵌入，就捕捉到了位置上面的信息。
-def embedding(inputs,
-            vocab_size,
-            num_units,
-            zero_pad = True,
-            scale = True,
-            scope = "embedding",
-            reuse = None):
-    '''
-    Embed a given tensor.
-    Args:
-        inputs: [Tensor], A tensor contains the ids to be search from the lookup table
-        vocab_size: [Int], Vocabulary size
-        num_units: [Int], Hidden size of embedding
-        zero_pad: [Boolean], If True, all the values of the first row(id = 0) should be constant zero
-        scale: [Boolean], If True, the output will be multiplied by sqrt num_units(check details from paper)
-        scope: [String], Optional scope for 'variable_scope'
-        reuse: [Boolean], If to reuse the weights of a previous layer by the same name
-
-        Returns:
-            A 'Tensor' with one more rank than inputs's, with the dimensionality should be 'num_units'
-    '''
-
-    """
-        inputs传进来就(batch_size, 10)
-        lookup_table维度(vocab_size, 512)，进行了随机的初始化
-        """ 
-      # shape = [vocabsize, 8]
-    with tf.variable_scope(scope, reuse = reuse):
-        lookup_table = tf.get_variable('lookup_table',
-                                        dtype = tf.float32,
-                                        shape = [vocab_size, num_units],
-                                        initializer = tf.contrib.layers.xavier_initializer())
-
-        if zero_pad:
-            ''' tf.zeros 维度(1, 512)
-                lookup_table[1:, :]的目的是抛开了<PAD>这玩意儿，赋值为0，然后进行了合并
-                现在look  _table维度还是(vocab_size, 512  ) 
-            '''
-            lookup_table = tf.concat((tf.zeros(shape = [1, num_units]),  lookup_table[1:, :]), 0)
-
-        # outputs 维度就是 (batch_size, 10, 512) ==[N ,T, S]
-        outputs = tf.nn.embedding_lookup(lookup_table, inputs)
-
-        if scale:
-            # embedding 那一步
-            outputs = outputs * math.sqrt(num_units)
-
-    return outputs
-输入维度(batch_size, maxlen)==[N, T]
-输出维度(batch_size, maxlen, S)==[N, T, S]
-这里面注意初始化lookup_table时把id=0的那一行（第一行）初始化为全0的结果。scale为True，paper中在embedding里面说明为什么这里需要做一个scale的操作。
-下面是multi-head attention，为该代码的核心部分。注释里面写清楚了维度的一个变化情况。
-最后输出维度[N, T_q, S]。
-def multihead_attention(queries,
-                        keys,
-                        num_units = None,
-                        num_heads = 8,
-                        dropout_rate = 0,
-                        is_training = True,
-                        causality = False,
-                        scope = "multihead_attention",
-                        reuse = None):
-    '''
-    Implement multihead attention
-
-    Args:
-        queries: [Tensor], A 3-dimensions tensor with shape of [N, T_q, S_q]
-        keys: [Tensor], A 3-dimensions tensor with shape of [N, T_k, S_k]
-        num_units: [Int], Attention size
-        num_heads: [Int], Number of heads
-        dropout_rate: [Float], A ratio of dropout
-        is_training: [Boolean], If true, controller of mechanism for dropout
-        causality: [Boolean], If true, units that reference the future are masked
-        scope: [String], Optional scope for "variable_scope"
-        reuse: [Boolean], If to reuse the weights of a previous layer by the same name
-    
-    Returns:
-        A 3-dimensions tensor with shape of [N, T_q, S]
-    '''
-    """ queries = self.enc  (batch_size, 10 ,512)==[N, T_q, S] keys也是self.enc  
-        num_units =512, num_heads =10
-    """
-    with tf.variable_scope(scope, reuse = reuse):
-        if num_units is None:
-            # length of sentence
-            num_units = queries.get_shape().as_list()[-1]
-
-        """ Linear layers in Figure 2(right) 就是Q、K、V进入scaled Dot-product Attention前的Linear的操作
-        # 首先是进行了全连接的线性变换
-        shape = [N, T_q, S]  (batch_size, 10 ,512)， S可以理解为512"""
-        Q = tf.layers.dense(queries, num_units, activation = tf.nn.relu)
-        # shape = [N, T_k, S]
-        K = tf.layers.dense(keys, num_units, activation = tf.nn.relu)
-        # shape = [N, T_k, S]
-        V = tf.layers.dense(keys, num_units, activation = tf.nn.relu)
-        '''
-            Q_、K_、V_就是权重WQ、WK、WV。
-            shape (batch_size*8， 10, 512/8=64)
-        '''
-        # Split and concat
-        # shape = [N*h, T_q, S/h]
-        Q_ = tf.concat(tf.split(Q, num_heads, axis = 2), axis = 0)
-        # shape = [N*h, T_k, S/h]
-        K_ = tf.concat(tf.split(K, num_heads, axis = 2), axis = 0)
-        # shape = [N*h, T_k, S/h]
-        V_ = tf.concat(tf.split(V, num_heads, axis = 2), axis = 0)
-
-        # [N, T_q, S] * [N*h, T_k, S/h] 这一步的张量乘法是怎么做的？
-        # shape = [N*h, T_q, T_k]   Q
-        outputs = tf.matmul(Q_, tf.transpose(K_, [0, 2, 1]))
-
-        # Scale
-        outputs = outputs / (K_.get_shape().as_list()[-1] ** 0.5)
-
-        # Masking
-        # shape = [N, T_k]
-        # 这里的tf.reduce_sum进行了降维，由三维降低到了2维度，然后是取绝对值，转成0-1之间的值
-        '''[N, T_k, 512]------> [N, T_k] -----》[N*h, T_k] -----》[N*h, T_q, T_k] '''
-        key_masks = tf.sign(tf.abs(tf.reduce_sum(keys, axis = -1)))
-        # shape = [N*h, T_k]
-        key_masks = tf.tile(key_masks, [num_heads, 1])
-        # shape = [N*h, T_q, T_k]    tf.expand_dims就是扩维度
-        key_masks = tf.tile(tf.expand_dims(key_masks, 1), [1, tf.shape(queries)[1], 1])
-
-        # If key_masks == 0 outputs = [1]*length(outputs)
-        paddings = tf.ones_like(outputs) * (-math.pow(2, 32) + 1)
-        # shape = [N*h, T_q, T_k]
-        outputs = tf.where(tf.equal(key_masks, 0), paddings, outputs)
-
-
-
-        if causality: #如果为true的话，那么就是将这个东西未来的units给屏蔽了
-            # reduce dims : shape = [T_q, T_k]
-            diag_vals = tf.ones_like(outputs[0, :, :])
-            # shape = [T_q, T_k]
-            # use triangular matrix to ignore the affect from future words
-            # like : [[1,0,0]
-            #         [1,2,0]
-            #         [1,2,3]]
-            tril = tf.contrib.linalg.LinearOperatorTriL(diag_vals).to_dense()
-            # shape = [N*h, T_q, T_k]
-            masks = tf.tile(tf.expand_dims(tril, 0), [tf.shape(outputs)[0], 1, 1])
-
-            paddings = tf.ones_like(masks) * (-math.pow(2, 32) + 1)
-            # shape = [N*h, T_q, T_k]
-            outputs = tf.where(tf.equal(masks, 0), paddings, outputs)
-
-        # Output Activation
-        outputs = tf.nn.softmax(outputs)
-
-        # Query Masking
-        # shape = [N, T_q]
-        query_masks = tf.sign(tf.abs(tf.reduce_sum(queries, axis = -1)))
-        # shape = [N*h, T_q]
-        query_masks = tf.tile(query_masks, [num_heads, 1])
-        # shape = [N*h, T_q, T_k]
-        query_masks = tf.tile(tf.expand_dims(query_masks, -1), [1, 1, tf.shape(keys)[1]])
-        outputs *= query_masks 
-
-        # Dropouts
-        outputs = tf.layers.dropout(outputs, rate = dropout_rate, training = tf.convert_to_tensor(is_training))
-
-        # Weighted sum
-        # shape = [N*h, T_q, S/h]
-        outputs = tf.matmul(outputs, V_)
-
-        # Restore shape
-        # shape = [N, T_q, S]
-        outputs = tf.concat(tf.split(outputs, num_heads, axis = 0), axis = 2)
-
-        # Residual connection
-        outputs += queries
-
-        # Normalize
-        # shape = [N, T_q, S]
-        outputs = normalize(outputs)
-
-    return outputs
-两层卷积之间加了relu非线性操作。之后是residual操作加上inputs残差，然后是normalize。最后输出的维度还是[N, T_q, S]。
-def feedforward(inputs,
-                num_units = [2048, 512],
-                scope = "multihead_attention",
-                reuse = None):
-    '''
-    Position-wise feed forward neural network
-
-    Args:
-        inputs: [Tensor], A 3d tensor with shape [N, T, S]
-        num_units: [Int], A list of convolution parameters
-        scope: [String], Optional scope for "variable_scope"
-        reuse: [Boolean], If to reuse the weights of a previous layer by the same name 
-    
-    Return:
-        A tensor converted by feedforward layers from inputs
-    '''
-
-    with tf.variable_scope(scope, reuse = reuse):
-        # params = {"inputs": inputs, "filters": num_units[0], "kernel_size": 1, \
-                  # "activation": tf.nn.relu, "use_bias": True}
-        # outputs = tf.layers.conv1d(inputs = inputs, filters = num_units[0], kernel_size = 1, activation = tf.nn.relu, use_bias = True)
-        # outputs = tf.layers.conv1d(**params)
-        params = {"inputs": inputs, "num_outputs": num_units[0], \
-                  "activation_fn": tf.nn.relu}
-        outputs = tf.contrib.layers.fully_connected(**params)
-
-        # params = {"inputs": inputs, "filters": num_units[1], "kernel_size": 1, \
-        #         "activation": None, "use_bias": True}
-        params = {"inputs": inputs, "num_outputs": num_units[1], \
-                  "activation_fn": None}
-        # outputs = tf.layers.conv1d(inputs = inputs, filters = num_units[1], kernel_size = 1, activation = None, use_bias = True)
-        # outputs = tf.layers.conv1d(**params)
-        outputs = tf.contrib.layers.fully_connected(**params)
-
-        # residual connection
-        outputs += inputs
-
-        outputs = normalize(outputs)
-
-    return outputs
-最后是进行了一个平滑的操作，就是one_hot中的0改成了一个很小的数，1改成了一个比较接近于1的数。
-def label_smoothing(inputs, epsilon = 0.1):
-    '''
-    Implement label smoothing
-
-    Args:
-        inputs: [Tensor], A 3d tensor with shape of [N, T, V]
-        epsilon: [Float], Smoothing rate
-
-    Return:
-        A tensor after smoothing
-    '''
-    ''' inputs的维度应该是(batch_size, sentense_length, vector dimension)
-        N就是batch_size, T就是句子的长度，V就是向量的维度大小
-    '''
-    K = inputs.get_shape().as_list()[-1]
-    return ((1 - epsilon) * inputs) + (epsilon / K)
-4、训练
-train.py
-这里面的self.decoder_input采取了一个操作就是将每个句子加了一个初始化为2的id，然后除去了最后的一个句子结束符。然后它的维度还是[N ,T]
-# -*- coding: utf-8 -*-
-from __future__ import print_functionimport tensorflow as tffrom params import Params as pmfrom data_loader import get_batch_data, load_vocabfrom modules import *from tqdm import tqdmimport os
-class Graph():
-    # 直接就是一个init初始化一下
-    def __init__(self, is_training = True):
-        self.graph = tf.Graph()
-
-        with self.graph.as_default():
-            if is_training:
-                self.inpt, self.outpt, self.batch_num = get_batch_data()
-
-            else:
-                '''inpt(None, maxlen)  outpt(None, maxlen) maxlen=10'''
-                self.inpt = tf.placeholder(tf.int32, shape = (None, pm.maxlen))
-
-                self.outpt = tf.placeholder(tf.int32, shape = (None, pm.maxlen))
-
-            # start with 2(<STR>) and without 3(<EOS>)
-            self.decoder_input = tf.concat((tf.ones_like(self.outpt[:, :1])*2, self.outpt[:, :-1]), -1)
-
-            #  直接就拿到了en和de的Vocabulary，en的大小是1644，de的大小是1588
-            en2idx, idx2en = load_vocab('en.vocab.tsv')
-            de2idx, idx2de = load_vocab('de.vocab.tsv')
-
-            # Encoder
-            with tf.variable_scope("encoder"):
-                ''' self.inpt维度是(batch_size, maxlen)
-                    self.enc 维度是(batch_size, maxlen, 512)
-                '''
-                self.enc = embedding(self.inpt,
-                                    vocab_size = len(en2idx),
-                                    num_units  = pm.hidden_units,
-                                    scale = True,
-                                    scope = "enc_embed")
-
-                # Position Encoding(use range from 0 to len(inpt) to represent position dim of each words)
-                # tf.tile(tf.expand_dims(tf.range(tf.shape(self.inpt)[1]), 0), [tf.shape(self.inpt)[0], 1]),
-                self.enc += positional_encoding(self.inpt,
-                                    vocab_size = pm.maxlen,
-                                    num_units  = pm.hidden_units,
-                                    zero_pad   = False,
-                                    scale = False,
-                                    scope = "enc_pe")
-
-                # Dropout
-                self.enc = tf.layers.dropout(self.enc,
-                                            rate = pm.dropout,
-                                            training = tf.convert_to_tensor(is_training))
-
-                # Identical
-                for i in range(pm.num_identical):
-                    with tf.variable_scope("num_identical_{}".format(i)):
-                        # Multi-head Attention
-                        self.enc = multihead_attention(queries = self.enc,
-                                                        keys   = self.enc,
-                                                        num_units = pm.hidden_units,
-                                                        num_heads = pm.num_heads,
-                                                        dropout_rate = pm.dropout,
-                                                        is_training  = is_training,
-                                                        causality = False)
-
-                        self.enc = feedforward(self.enc, num_units = [4 * pm.hidden_units, pm.hidden_units])
-下面就是decoder部分的代码。这里可以参考前面decoder的结构，里面多出了一个attention部分，该部分接受到了encoder输出的张量和decoder中self-attention里面输入的张量，然后再进行了vanilla attention。
-最终decoder部分输出张量的维度是[N ,T, 512]
-            # Decoder
-            with tf.variable_scope("decoder"):
-                self.dec = embedding(self.decoder_input,
-                                vocab_size = len(de2idx),
-                                num_units  = pm.hidden_units,
-                                scale = True,
-                                scope = "dec_embed")
-
-                # Position Encoding(use range from 0 to len(inpt) to represent position dim)
-                self.dec += positional_encoding(self.decoder_input,
-                                    vocab_size = pm.maxlen,
-                                    num_units = pm.hidden_units,
-                                    zero_pad  = False,
-                                    scale = False,
-                                    scope = "dec_pe")
-
-                # Dropout
-                self.dec = tf.layers.dropout(self.dec,
-                                            rate = pm.dropout,
-                                            training = tf.convert_to_tensor(is_training))
-
-                # Identical
-                for i in range(pm.num_identical):
-                    with tf.variable_scope("num_identical_{}".format(i)):
-                        # Multi-head Attention(self-attention)
-                        self.dec = multihead_attention(queries = self.dec,
-                                                        keys   = self.dec,
-                                                        num_units = pm.hidden_units,
-                                                        num_heads = pm.num_heads,
-                                                        dropout_rate = pm.dropout,
-                                                        is_training  = is_training,
-                                                        causality = True,
-                                                        scope = "self_attention")
-
-                        # Multi-head Attention(vanilla-attention)
-                        self.dec = multihead_attention(queries=self.dec, 
-                                                        keys=self.enc, 
-                                                        num_units=pm.hidden_units, 
-                                                        num_heads=pm.num_heads,
-                                                        dropout_rate=pm.dropout,
-                                                        is_training=is_training, 
-                                                        causality=False,
-                                                        scope="vanilla_attention")
-
-                        self.dec = feedforward(self.dec, num_units = [4 * pm.hidden_units, pm.hidden_units])
-现在已经走到了decoder部分输出了：
-self.logits：进行了Linear变化，维度是[N, T, len(de2idx)]
-self.preds：取了self.logits里面最后一个维度里面最大值的下标，维度是[n ,T]
-self.istarget：将self.preds中所有id不为0的位置的值用1.0代替，维度是[n ,T]
-self.acc: 对比self.preds, self.outpt，对应位置相等那么就是1.0，否则就是0。
-            # Linear
-            self.logits   = tf.layers.dense(self.dec, len(de2idx))
-            self.preds    = tf.to_int32(tf.arg_max(self.logits, dimension = -1))
-            self.istarget = tf.to_float(tf.not_equal(self.outpt, 0))
-            self.acc      = tf.reduce_sum(tf.to_float(tf.equal(self.preds, self.outpt)) * self.istarget) / (tf.reduce_sum(self.istarget))
-            tf.summary.scalar('acc', self.acc)
-is_training 为True的时候，也就是训练的时候，就需要进行下面的操作了。
-loss的维度是[N, T]
-            if is_training:
-                # smooth inputs
-                self.y_smoothed = label_smoothing(tf.one_hot(self.outpt, depth = len(de2idx)))
-                # loss function
-                self.loss = tf.nn.softmax_cross_entropy_with_logits(logits = self.logits, labels = self.y_smoothed)
-                self.mean_loss = tf.reduce_sum(self.loss * self.istarget) / (tf.reduce_sum(self.istarget))
-
-                self.global_step = tf.Variable(0, name = 'global_step', trainable = False)
-                # optimizer
-                self.optimizer = tf.train.AdamOptimizer(learning_rate = pm.learning_rate, beta1 = 0.9, beta2 = 0.98, epsilon = 1e-8)
-                self.train_op  = self.optimizer.minimize(self.mean_loss, global_step = self.global_step)
-
-                tf.summary.scalar('mean_loss', self.mean_loss)
-                self.merged = tf.summary.merge_all()   
-if __name__ == '__main__':
-    '''en2idx{'<PAD>':0, ...}, idx2en{0:'<PAD>'}都是字典形式 长度是1684'''
-    '''de2idx{'<PAD>':0, ...}, idx2de{0:'<PAD>'}都是字典形式 长度是1597'''
-    en2idx, idx2en = load_vocab('en.vocab.tsv')
-    de2idx, idx2de = load_vocab('de.vocab.tsv')
-
-    g = Graph("train")
-    print("MSG : Graph loaded!")
-
-    # save model and use this model to training
-    supvisor = tf.train.Supervisor(graph = g.graph,logdir = pm.logdir,save_model_secs = 0)
-
-    with supvisor.managed_session() as sess:
-        for epoch in range(1, pm.num_epochs + 1):
-            if supvisor.should_stop():
-                break
-            # process bar
-            for step in tqdm(range(g.batch_num), total = g.batch_num, ncols = 70, leave = False, unit = 'b'):
-                sess.run(g.train_op)
-
-            if not os.path.exists(pm.checkpoint):
-                os.mkdir(pm.checkpoint)
-            g_step = sess.run(g.global_step)
-            supvisor.saver.save(sess, pm.checkpoint + '/model_epoch_%02d_gs_%d' % (epoch, g_step))
-
-    print("MSG : Done!")
-三、留下一些问题思考
-1、Transformer的创新之处在于哪里？和传统的encoder-decoder模型的区别在哪里？它想实现的目标是什么？
-2、为什么要采用self-attention以及multi-head attention？
-3、如何理解transformer里面所采用的mask？
-最后，有些理解不到位的部分，请指教！
-参考资料:
-1、Attention is all you need论文
-2、attention is all you need模型笔记
-3、The illustrated transformer
-4、The Annotated Transformer
-18人点赞
-自然语言处理
 
+从编码器输入的句子首先会经过一个自注意力（self-attention）层，这层帮助编码器在对每个单词编码时关注输入句子的其他单词。我们将在稍后的文章中更深入地研究自注意力。
+
+
+自注意力层的输出会传递到前馈（feed-forward）神经网络中。每个位置的单词对应的前馈神经网络都完全一样（译注：另一种解读就是一层窗口为一个单词的一维卷积神经网络）。
+
+
+解码器中也有编码器的自注意力（self-attention）层和前馈（feed-forward）层。除此之外，这两个层之间还有一个注意力层，用来关注输入句子的相关部分（和seq2seq模型的注意力作用相似）。
+
+
+
+
+
+
+将张量引入图景
+
+
+我们已经了解了模型的主要部分，接下来我们看一下各种向量或张量（译注：张量概念是矢量概念的推广，可以简单理解矢量是一阶张量、矩阵是二阶张量。）是怎样在模型的不同部分中，将输入转化为输出的。
+
+
+像大部分NLP应用一样，我们首先将每个输入单词通过词嵌入算法转换为词向量。
+
+
+每个单词都被嵌入为512维的向量，我们用这些简单的方框来表示这些向量。
+
+
+词嵌入过程只发生在最底层的编码器中。所有的编码器都有一个相同的特点，即它们接收一个向量列表，列表中的每个向量大小为512维。在底层（最开始）编码器中它就是词向量，但是在其他编码器中，它就是下一层编码器的输出（也是一个向量列表）。向量列表大小是我们可以设置的超参数——一般是我们训练集中最长句子的长度。
+
+
+将输入序列进行词嵌入之后，每个单词都会流经编码器中的两个子层。
+
+
+
+
+接下来我们看看Transformer的一个核心特性，在这里输入序列中每个位置的单词都有自己独特的路径流入编码器。在自注意力层中，这些路径之间存在依赖关系。而前馈（feed-forward）层没有这些依赖关系。因此在前馈（feed-forward）层时可以并行执行各种路径。
+
+
+然后我们将以一个更短的句子为例，看看编码器的每个子层中发生了什么。
+
+
+
+
+现在我们开始“编码”
+
+
+如上述已经提到的，一个编码器接收向量列表作为输入，接着将向量列表中的向量传递到自注意力层进行处理，然后传递到前馈神经网络层中，将输出结果传递到下一个编码器中。
+
+
+
+输入序列的每个单词都经过自编码过程。然后，他们各自通过前向传播神经网络——完全相同的网络，而每个向量都分别通过它。
+
+
+
+
+从宏观视角看自注意力机制
+
+
+不要被我用自注意力这个词弄迷糊了，好像每个人都应该熟悉这个概念。其实我之也没有见过这个概念，直到读到Attention is All You Need 这篇论文时才恍然大悟。让我们精炼一下它的工作原理。
+
+
+例如，下列句子是我们想要翻译的输入句子：
+
+The animal didn't cross the street because it was too tired
+
+
+这个“it”在这个句子是指什么呢？它指的是street还是这个animal呢？这对于人类来说是一个简单的问题，但是对于算法则不是。
+
+
+当模型处理这个单词“it”的时候，自注意力机制会允许“it”与“animal”建立联系。
+
+
+随着模型处理输入序列的每个单词，自注意力会关注整个输入序列的所有单词，帮助模型对本单词更好地进行编码。
+
+
+如果你熟悉RNN（循环神经网络），回忆一下它是如何维持隐藏层的。RNN会将它已经处理过的前面的所有单词/向量的表示与它正在处理的当前单词/向量结合起来。而自注意力机制会将所有相关单词的理解融入到我们正在处理的单词中。
+
+
+当我们在编码器#5（栈中最上层编码器）中编码“it”这个单词的时，注意力机制的部分会去关注“The Animal”，将它的表示的一部分编入“it”的编码中。
+
+
+请务必检查Tensor2Tensor notebook ，在里面你可以下载一个Transformer模型，并用交互式可视化的方式来检验。
+
+
+
+
+从微观视角看自注意力机制
+
+
+首先我们了解一下如何使用向量来计算自注意力，然后来看它实怎样用矩阵来实现。
+
+
+计算自注意力的第一步就是从每个编码器的输入向量（每个单词的词向量）中生成三个向量。也就是说对于每个单词，我们创造一个查询向量、一个键向量和一个值向量。这三个向量是通过词嵌入与三个权重矩阵后相乘创建的。
+
+
+可以发现这些新向量在维度上比词嵌入向量更低。他们的维度是64，而词嵌入和编码器的输入/输出向量的维度是512. 但实际上不强求维度更小，这只是一种基于架构上的选择，它可以使多头注意力（multiheaded attention）的大部分计算保持不变。
+
+
+X1与WQ权重矩阵相乘得到q1, 就是与这个单词相关的查询向量。最终使得输入序列的每个单词的创建一个查询向量、一个键向量和一个值向量。
+
+
+什么是查询向量、键向量和值向量向量？
+
+
+它们都是有助于计算和理解注意力机制的抽象概念。请继续阅读下文的内容，你就会知道每个向量在计算注意力机制中到底扮演什么样的角色。
+
+
+计算自注意力的第二步是计算得分。假设我们在为这个例子中的第一个词“Thinking”计算自注意力向量，我们需要拿输入句子中的每个单词对“Thinking”打分。这些分数决定了在编码单词“Thinking”的过程中有多重视句子的其它部分。
+
+
+这些分数是通过打分单词（所有输入句子的单词）的键向量与“Thinking”的查询向量相点积来计算的。所以如果我们是处理位置最靠前的词的自注意力的话，第一个分数是q1和k1的点积，第二个分数是q1和k2的点积。
+
+
+
+
+第三步和第四步是将分数除以8(8是论文中使用的键向量的维数64的平方根，这会让梯度更稳定。这里也可以使用其它值，8只是默认值)，然后通过softmax传递结果。softmax的作用是使所有单词的分数归一化，得到的分数都是正值且和为1。
+
+
+
+
+这个softmax分数决定了每个单词对编码当下位置（“Thinking”）的贡献。显然，已经在这个位置上的单词将获得最高的softmax分数，但有时关注另一个与当前单词相关的单词也会有帮助。
+
+
+第五步是将每个值向量乘以softmax分数(这是为了准备之后将它们求和)。这里的直觉是希望关注语义上相关的单词，并弱化不相关的单词(例如，让它们乘以0.001这样的小数)。
+
+
+第六步是对加权值向量求和（译注：自注意力的另一种解释就是在编码某个单词时，就是将所有单词的表示（值向量）进行加权求和，而权重是通过该词的表示（键向量）与被编码词表示（查询向量）的点积并通过softmax得到。），然后即得到自注意力层在该位置的输出(在我们的例子中是对于第一个单词)。
+
+
+
+
+这样自自注意力的计算就完成了。得到的向量就可以传给前馈神经网络。然而实际中，这些计算是以矩阵形式完成的，以便算得更快。那我们接下来就看看如何用矩阵实现的。
+
+
+
+
+通过矩阵运算实现自注意力机制
+
+
+第一步是计算查询矩阵、键矩阵和值矩阵。为此，我们将将输入句子的词嵌入装进矩阵X中，将其乘以我们训练的权重矩阵(WQ，WK，WV)。
+
+
+x矩阵中的每一行对应于输入句子中的一个单词。我们再次看到词嵌入向量 (512，或图中的4个格子)和q/k/v向量(64，或图中的3个格子)的大小差异。
+
+
+最后，由于我们处理的是矩阵，我们可以将步骤2到步骤6合并为一个公式来计算自注意力层的输出。
+
+
+
+
+
+自注意力的矩阵运算形式
+
+
+
+
+“大战多头怪”
+
+
+通过增加一种叫做“多头”注意力（“multi-headed” attention）的机制，论文进一步完善了自注意力层，并在两方面提高了注意力层的性能：
+
+
+1.它扩展了模型专注于不同位置的能力。在上面的例子中，虽然每个编码都在z1中有或多或少的体现，但是它可能被实际的单词本身所支配。如果我们翻译一个句子，比如“The animal didn’t cross the street because it was too tired”，我们会想知道“it”指的是哪个词，这时模型的“多头”注意机制会起到作用。
+
+
+2.它给出了注意力层的多个“表示子空间”（representation subspaces）。接下来我们将看到，对于“多头”注意机制，我们有多个查询/键/值权重矩阵集(Transformer使用八个注意力头，因此我们对于每个编码器/解码器有八个矩阵集合)。这些集合中的每一个都是随机初始化的，在训练之后，每个集合都被用来将输入词嵌入(或来自较低编码器/解码器的向量)投影到不同的表示子空间中。
+
+
+
+在“多头”注意机制下，我们为每个头保持独立的查询/键/值权重矩阵，从而产生不同的查询/键/值矩阵。和之前一样，我们拿X乘以WQ/WK/WV矩阵来产生查询/键/值矩阵。
+
+
+如果我们做与上述相同的自注意力计算，只需八次不同的权重矩阵运算，我们就会得到八个不同的Z矩阵。
+
+
+
+
+这给我们带来了一点挑战。前馈层不需要8个矩阵，它只需要一个矩阵(由每一个单词的表示向量组成)。所以我们需要一种方法把这八个矩阵压缩成一个矩阵。那该怎么做？其实可以直接把这些矩阵拼接在一起，然后用一个附加的权重矩阵WO与它们相乘。
+
+
+
+
+这几乎就是多头自注意力的全部。这确实有好多矩阵，我们试着把它们集中在一个图片中，这样可以一眼看清。
+
+
+既然我们已经摸到了注意力机制的这么多“头”，那么让我们重温之前的例子，看看我们在例句中编码“it”一词时，不同的注意力“头”集中在哪里：
+
+当我们编码“it”一词时，一个注意力头集中在“animal”上，而另一个则集中在“tired”上，从某种意义上说，模型对“it”一词的表达在某种程度上是“animal”和“tired”的代表。
+
+
+然而，如果我们把所有的attention都加到图示里，事情就更难解释了：
+
+
+
+
+
+使用位置编码表示序列的顺序
+
+
+到目前为止，我们对模型的描述缺少了一种理解输入单词顺序的方法。
+
+
+为了解决这个问题，Transformer为每个输入的词嵌入添加了一个向量。这些向量遵循模型学习到的特定模式，这有助于确定每个单词的位置，或序列中不同单词之间的距离。这里的直觉是，将位置向量添加到词嵌入中使得它们在接下来的运算中，能够更好地表达的词与词之间的距离。
+
+
+为了让模型理解单词的顺序，我们添加了位置编码向量，这些向量的值遵循特定的模式。
+
+
+如果我们假设词嵌入的维数为4，则实际的位置编码如下：
+
+
+
+尺寸为4的迷你词嵌入位置编码实例
+
+
+这个模式会是什么样子？
+
+
+在下图中，每一行对应一个词向量的位置编码，所以第一行对应着输入序列的第一个词。每行包含512个值，每个值介于1和-1之间。我们已经对它们进行了颜色编码，所以图案是可见的。
+
+
+20字(行)的位置编码实例，词嵌入大小为512(列)。你可以看到它从中间分裂成两半。这是因为左半部分的值由一个函数(使用正弦)生成，而右半部分由另一个函数(使用余弦)生成。然后将它们拼在一起而得到每一个位置编码向量。
+
+
+原始论文里描述了位置编码的公式(第3.5节)。你可以在 get_timing_signal_1d()中看到生成位置编码的代码。这不是唯一可能的位置编码方法。然而，它的优点是能够扩展到未知的序列长度(例如，当我们训练出的模型需要翻译远比训练集里的句子更长的句子时)。
+
+
+
+
+残差模块
+
+
+在继续进行下去之前，我们需要提到一个编码器架构中的细节：在每个编码器中的每个子层（自注意力、前馈网络）的周围都有一个残差连接，并且都跟随着一个“层-归一化”步骤。
+
+
+层-归一化步骤：
+
+https://arxiv.org/abs/1607.06450
+
+
+
+如果我们去可视化这些向量以及这个和自注意力相关联的层-归一化操作，那么看起来就像下面这张图描述一样：
+
+
+
+
+解码器的子层也是这样样的。如果我们想象一个2 层编码-解码结构的transformer，它看起来会像下面这张图一样：
+
+
+
+
+解码组件
+
+
+既然我们已经谈到了大部分编码器的概念，那么我们基本上也就知道解码器是如何工作的了。但最好还是看看解码器的细节。
+
+
+编码器通过处理输入序列开启工作。顶端编码器的输出之后会变转化为一个包含向量K（键向量）和V（值向量）的注意力向量集 。这些向量将被每个解码器用于自身的“编码-解码注意力层”，而这些层可以帮助解码器关注输入序列哪些位置合适：
+
+
+在完成编码阶段后，则开始解码阶段。解码阶段的每个步骤都会输出一个输出序列（在这个例子里，是英语翻译的句子）的元素
+
+
+接下来的步骤重复了这个过程，直到到达一个特殊的终止符号，它表示transformer的解码器已经完成了它的输出。每个步骤的输出在下一个时间步被提供给底端解码器，并且就像编码器之前做的那样，这些解码器会输出它们的解码结果 。另外，就像我们对编码器的输入所做的那样，我们会嵌入并添加位置编码给那些解码器，来表示每个单词的位置。
+
+
+
+而那些解码器中的自注意力层表现的模式与编码器不同：在解码器中，自注意力层只被允许处理输出序列中更靠前的那些位置。在softmax步骤前，它会把后面的位置给隐去（把它们设为-inf）。
+
+
+这个“编码-解码注意力层”工作方式基本就像多头自注意力层一样，只不过它是通过在它下面的层来创造查询矩阵，并且从编码器的输出中取得键/值矩阵。
+
+
+
+
+最终的线性变换和Softmax层
+
+
+解码组件最后会输出一个实数向量。我们如何把浮点数变成一个单词？这便是线性变换层要做的工作，它之后就是Softmax层。
+
+
+线性变换层是一个简单的全连接神经网络，它可以把解码组件产生的向量投射到一个比它大得多的、被称作对数几率（logits）的向量里。
+
+
+不妨假设我们的模型从训练集中学习一万个不同的英语单词（我们模型的“输出词表”）。因此对数几率向量为一万个单元格长度的向量——每个单元格对应某一个单词的分数。
+
+
+接下来的Softmax 层便会把那些分数变成概率（都为正数、上限1.0）。概率最高的单元格被选中，并且它对应的单词被作为这个时间步的输出。
+
+
+
+这张图片从底部以解码器组件产生的输出向量开始。之后它会转化出一个输出单词。
+
+
+
+
+训练部分总结
+
+
+既然我们已经过了一遍完整的transformer的前向传播过程，那我们就可以直观感受一下它的训练过程。
+
+
+在训练过程中，一个未经训练的模型会通过一个完全一样的前向传播。但因为我们用有标记的训练集来训练它，所以我们可以用它的输出去与真实的输出做比较。
+
+
+为了把这个流程可视化，不妨假设我们的输出词汇仅仅包含六个单词：“a”, “am”, “i”, “thanks”, “student”以及 “”（end of sentence的缩写形式）。
+
+
+
+我们模型的输出词表在我们训练之前的预处理流程中就被设定好。
+
+
+一旦我们定义了我们的输出词表，我们可以使用一个相同宽度的向量来表示我们词汇表中的每一个单词。这也被认为是一个one-hot 编码。所以，我们可以用下面这个向量来表示单词“am”：
+
+
+
+例子：对我们输出词表的one-hot 编码
+
+
+接下来我们讨论模型的损失函数——这是我们用来在训练过程中优化的标准。通过它可以训练得到一个结果尽量准确的模型。
+
+
+
+
+损失函数
+
+
+比如说我们正在训练模型，现在是第一步，一个简单的例子——把“merci”翻译为“thanks”。
+
+
+这意味着我们想要一个表示单词“thanks”概率分布的输出。但是因为这个模型还没被训练好，所以不太可能现在就出现这个结果。
+
+
+
+因为模型的参数（权重）都被随机的生成，（未经训练的）模型产生的概率分布在每个单元格/单词里都赋予了随机的数值。我们可以用真实的输出来比较它，然后用反向传播算法来略微调整所有模型的权重，生成更接近结果的输出。
+
+
+你会如何比较两个概率分布呢？我们可以简单地用其中一个减去另一个。更多细节请参考交叉熵和KL散度。
+
+
+交叉熵：
+
+https://colah.github.io/posts/2015-09-Visual-Information/
+
+KL散度：
+
+https://www.countbayesie.com/blog/2017/5/9/kullback-leibler-divergence-explained
+
+
+但注意到这是一个过于简化的例子。更现实的情况是处理一个句子。例如，输入“je suis étudiant”并期望输出是“i am a student”。那我们就希望我们的模型能够成功地在这些情况下输出概率分布：
+
+每个概率分布被一个以词表大小（我们的例子里是6，但现实情况通常是3000或10000）为宽度的向量所代表。
+第一个概率分布在与“i”关联的单元格有最高的概率
+第二个概率分布在与“am”关联的单元格有最高的概率
+以此类推，第五个输出的分布表示“”关联的单元格有最高的概率
+
+
+依据例子训练模型得到的目标概率分布。
+
+
+在一个足够大的数据集上充分训练后，我们希望模型输出的概率分布看起来像这个样子：
+
+
+
+我们期望训练过后，模型会输出正确的翻译。当然如果这段话完全来自训练集，它并不是一个很好的评估指标（参考：交叉验证，链接https://www.youtube.com/watch?v=TIgfjmp-4BA）。注意到每个位置（词）都得到了一点概率，即使它不太可能成为那个时间步的输出——这是softmax的一个很有用的性质，它可以帮助模型训练。
+
+
+因为这个模型一次只产生一个输出，不妨假设这个模型只选择概率最高的单词，并把剩下的词抛弃。这是其中一种方法（叫贪心解码）。另一个完成这个任务的方法是留住概率最靠高的两个单词（例如I和a），那么在下一步里，跑模型两次：其中一次假设第一个位置输出是单词“I”，而另一次假设第一个位置输出是单词“me”，并且无论哪个版本产生更少的误差，都保留概率最高的两个翻译结果。然后我们为第二和第三个位置重复这一步骤。这个方法被称作集束搜索（beam search）。在我们的例子中，集束宽度是2（因为保留了2个集束的结果，如第一和第二个位置），并且最终也返回两个集束的结果（top_beams也是2）。这些都是可以提前设定的参数。
+
+
+再进一步
+
+
+我希望通过上文已经让你们了解到Transformer的主要概念了。如果你想在这个领域深入，我建议可以走以下几步：阅读Attention Is All You Need，Transformer博客和Tensor2Tensor announcement，以及看看ukasz Kaiser的介绍，了解模型和细节。
+
+
+Attention Is All You Need：
+
+https://arxiv.org/abs/1706.03762
+
+Transformer博客：
+
+https://ai.googleblog.com/2017/08/transformer-novel-neural-network.html
+
+Tensor2Tensor announcement：
+
+https://ai.googleblog.com/2017/06/accelerating-deep-learning-research.html
+
+ukasz Kaiser的介绍：
+
+https://colab.research.google.com/github/tensorflow/tensor2tensor/blob/master/tensor2tensor/notebooks/hello_t2t.ipynb
+
+
+接下来可以研究的工作：
+
+Depthwise Separable Convolutions for Neural Machine Translationhttps://arxiv.org/abs/1706.03059
+One Model To Learn Them Allhttps://arxiv.org/abs/1706.05137
+Discrete Autoencoders for Sequence Modelshttps://arxiv.org/abs/1801.09797
+Generating Wikipedia by Summarizing Long Sequenceshttps://arxiv.org/abs/1801.10198
+Image Transformerhttps://arxiv.org/abs/1802.05751
+Training Tips for the Transformer Modelhttps://arxiv.org/abs/1804.00247
+Self-Attention with Relative Position Representationshttps://arxiv.org/abs/1803.02155
+Fast Decoding in Sequence Models using Discrete Latent Variableshttps://arxiv.org/abs/1803.03382
+Adafactor: Adaptive Learning Rates with Sublinear Memory Costhttps://arxiv.org/abs/1804.04235
+
+本文系大数据文摘与百度NLP联合出品系列文章第一篇。
+
+
+百度NLP以“理解语言，拥有智能，改变世界”为使命，开展包括自然语言处理、机器学习、数据挖掘在内的技术研究和产品应用工作，引领着人工智能技术的发展。
