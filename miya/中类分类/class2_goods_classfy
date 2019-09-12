@@ -1,0 +1,571 @@
+# -*- coding: utf-8 -*-
+'''
+@author: 金容明
+@file: tf_lstm_rfm.py
+@time: 2019/09/10 18:00
+@help: 商品中类模型测试
+'''
+import os
+import gc
+import sys
+import csv
+import json
+import nltk
+import math 
+import time
+import jieba
+import random
+import warnings
+import datetime
+import numpy as np 
+import pandas as pd 
+import tensorflow as tf
+
+from math import sqrt
+from odps import ODPS
+from random import shuffle
+from odps.df import DataFrame
+from collections import Counter
+from tensorflow.contrib import rnn
+from sklearn.model_selection import KFold
+from tensorflow.python.ops import init_ops
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import roc_auc_score, accuracy_score, precision_score, recall_score
+
+warnings.filterwarnings("ignore")
+
+'''
+PS:尝试了 transformer,text_cnn,fasttext这三个处理短文本非时序数据工业中效果不错的模型，最后得出text_cnn效果最好，用于生产线上。
+transformer目前还是适合长文本，而且对GPU的开销很大，参数很多，但设计好可能会有更好的效果，不过需要很强的分布式集群支撑，后续
+如果配置足够可以尝试。
+'''
+
+'''
+下面是 TextCNN 的模型训练和部署,利用参数可以调节，目前PAI不支持python的动态参数，所以用命令行方式输出即可，
+后续会加入单机多GPU和分布式的代码。
+'''
+
+'''
+前期用交叉验证做测试,后续用全量训练集训练模型。
+kf = KFold(n_splits=2)
+for train_index, test_index in kf.split(X):
+    print('X_train:%s ' % X[train_index])
+    print('X_test: %s ' % X[test_index])
+    
+'''
+
+
+
+
+## 获取动态参数
+FLAGS=None
+
+### 动态参数 ###
+def Config():
+    parser = argparse.ArgumentParser()
+    
+    ##模型参数
+    parser.add_argument('--learning_rate', type = float, default = 0.001, help = '学习率' )
+    parser.add_argument('--learning_rate_dec',type = float, default = 0.6, help = '学习下降率,指数级别下降。' )
+    parser.add_argument('--keep_prob', type = float, default = 0.5, help = 'DropOut训练时最大保留率')
+    parser.add_argument('--l2_normal', type = float, default = 0.001, help = 'L2正则项')
+    parser.add_argument('--batch_size',type = int, default = 256, help = '每次迭代数量')
+    parser.add_argument('--embedding_size',type = int, default = 128, help = 'embedding后的词向量维度')
+    parser.add_argument('--loss_min',type = float, default = 0.001, help = '训练集和验证集的最小损失值')
+    parser.add_argument('--maxlen',type=int,default=500, help = '一次读取文本时间窗口的最大长度,先设置为500')
+    parser.add_argument('--feature_train_test_num',type=int,default=2, help = '测试环境下训练集的特征总数,我这里是2')
+    parser.add_argument('--feature_train_pro_num',type=int,default=2, help = '生产环境下训练集的特征总数,我这里是2')
+    parser.add_argument('--feature_test_test_num',type=int,default=2, help = '测试环境下测试集的特征总数,我这里是2')
+    parser.add_argument('--feature_test_pro_num',type=int,default=2, help = '生产环境下测试集的特征总数,我这里是2')
+    parser.add_argument('--filter_sizes',type=list,default=[3,4,5], help = '总共三层卷积,分别为3,4,5')
+    parser.add_argument('--num_filters',type=list,default=128, help = '卷积核输出数量')
+    parser.add_argument('--normal_epsilon',type = float, default = 0.01, help = '标准化中防止除以0的情况所留的小数')
+    parser.add_argument('--num_epochs', type = int, default = 20, help = '训练的epoch次数')
+    parser.add_argument('--decay_num', type = int, default = 1000, help = '每迭代多少次学习率更新')
+    parser.add_argument('--activation_list',type=list,default=['selu','relu','elu','leaky_relu','crelu','softsign','softplus','tanh','maxout'],help = '激活函数集合')
+    parser.add_argument('--activation_select',type=str,default='softplus',help = '这次选择的激活函数')
+    parser.add_argument('--alpha',type=float,default=0.2,help = 'leaky_relu 的激活函数中给所有负数都加入的一个常数,使其为负数是不是变为0成为dead神经元,而是负小斜率的线性变化。')
+    
+
+    ##路径配置参数
+    parser.add_argument('--buckets', type = str, default = '', help = 'bueckts桶,上线后为空值,后续可能会更改，所以先设置默认值')
+    parser.add_argument('--checkpointDir', type = str, default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/workplace/jrm/goods_class2_classify/model/',help = '模型保存路径的默认路径')
+    parser.add_argument('--train_path', type = str, default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/workplace/jrm/data/class2_goods_train*',help = '训练集输入路径')  # 后续需要去掉只剩下train*
+    parser.add_argument('--test_path',type = str,default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/data_tmp/class2_goods_test*',help = '测试集输入路径')
+    parser.add_argument('--read_new_train', type = str, default = 'odps://miya_data_analysis/tables/tmp_xy_rpt_rfm_pre_feature_input_all_label_04', help = '新的读取数据格式,直接读取maxcomputer表的方式,此为训练集')
+    parser.add_argument('--read_new_test', type = str, default = 'odps://miya_data_analysis/tables/tmp_xy_rpt_rfm_pre_feature_input_all_06_01', help = '新的读取数据格式,直接读取maxcomputer表的方式,此为测试集')    
+    parser.add_argument('--write_new', type = str, default = 'odps://miya_data_analysis/tables/tmp_xy_rpt_rfm_pre_feature_input_all_result_01', help = '新的写入数据格式,直接读取maxcomputer表的方式,此为预测得到的结果集')
+    parser.add_argument('--read_dict_path', type = str, default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/workplace/jrm/goods_class2_classify/data/dict_words*', help = 'OSS的字典')
+    parser.add_argument('--read_stop_words_path', type = str, default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/workplace/jrm/goods_class2_classify/data/stop_words*', help = 'OSS的停止词') 
+    parser.add_argument('--read_new_dict', type = str, default = 'odps://miya_data_analysis/tables/miya_goods_id_stop_words', help = 'ODPS的字典')
+    parser.add_argument('--read_new_stop_words', type = str, default = 'odps://miya_data_analysis/tables/miya_stop_words_list', help = 'ODPS的停止词')    
+    
+    
+    ##系统配置参数(分布式,单机多卡)
+    parser.add_argument('--is_single', type = bool, default = True, help = '是否开启单卡多节点/单节点')
+    parser.add_argument('--is_distribute', type = bool, default = True, help = '是否开启分布式')
+    parser.add_argument('--python_thread', type = int, default = 2, help = 'python的进程数,后续优化需要用到')
+    parser.add_argument('--device', type = str, default = 'GPU', help = 'python为GPU还是CPU')
+    parser.add_argument('--worker_num', type = int, default = 2, help = '分布式的节点数')
+    parser.add_argument('--gpu_num', type = int, default = 2, help = 'GPU个数,在pai里单机最多为2')
+    parser.add_argument('--ps_hosts', type = str, default = '', help = 'PS服务器的HOST,默认空,如果是python脚本执行输入ps_host,如果用pai不用管')
+    parser.add_argument('--worker_hosts', type = str, default = '', help = 'worker的HOST,默认空,如果是python脚本执行输入ps_host,如果用pai不用管')
+    parser.add_argument('--job_name', type = str, default = '', help = 'job名称')
+    parser.add_argument('--task_index', type = int, default = 0, help = '每个job第几个task')
+    parser.add_argument('--issync', type = int, default = 1, help = '是否采用分布式的同步模式，1表示同步模式，0表示异步模式')
+    
+    
+    ##逻辑和数据代码参数(代码和数据处理涉及到的相关参数)  
+    parser.add_argument('--num_classes', type = int, default = 129,help = '预测类别总数')
+    parser.add_argument('--total_num', type = int, default = 1900000, help = '总数据输入数量')
+    parser.add_argument('--test_num', type = int, default = 50000, help = '模型输出数量')
+    parser.add_argument('--dict_num', type = int, default = 32760, help = '总数据输入数量')
+    parser.add_argument('--stop_num', type = int, default = 1861, help = '总数据输入数量')
+    parser.add_argument('--min_num', type = int, default = 0, help = '最小数值')
+    parser.add_argument('--evaluate_every', type = int, default = 20, help = '每20次展现打印一次结果')
+    parser.add_argument('--min_after_dequeue', type = int, default = 100, help = '最小出队数,至少达到多少数时，队列才出队。')
+    parser.add_argument('--thread_num', type = int, default = 10, help = '读取数据的线程数量')
+    parser.add_argument('--train_feature_start', type = int, default = 2, help = '训练集原始特征维度数,算上标签')
+    parser.add_argument('--test_feature_start', type = int, default = 2, help = '测试集原始特征维度数,算上标签')
+    parser.add_argument('--is_training', type = bool, default = True, help = '读取数据是否为训练集,True为训练集,False为测试集,默认为True')
+    parser.add_argument('--is_producting', type = bool, default = False, help = '是否为测试环境或者生产环境,True为生产环境,False为测试环境,默认为False。')
+      
+
+    FLAGS, _ = parser.parse_known_args()
+    return FLAGS
+	
+	
+## 单机单卡的TextCNN 
+class TextCNN(object):
+    def __init__(self,FLAGS):
+        print('单机单卡 TextCNN 模型初始化开始...')
+        self.batch_size = FLAGS.batch_size 
+        self.keep_prob = FLAGS.keep_prob
+        self.num_classes = FLAGS.num_classes
+        self.l2_normal = FLAGS.l2_normal
+        self.normal_epsilon = FLAGS.normal_epsilon
+        self.decay_num = FLAGS.decay_num
+        self.learning_rate_dec = FLAGS.learning_rate_dec
+        self.checkpointDir = FLAGS.checkpointDir
+        self.total_num = FLAGS.total_num 
+        self.test_num = FLAGS.test_num
+        self.loss_min = FLAGS.loss_min
+        self.learning_rate = FLAGS.learning_rate
+        self.buckets = FLAGS.buckets 
+        self.checkpointDir = FLAGS.checkpointDir
+        self.thread_num = FLAGS.thread_num
+        self.min_after_dequeue = FLAGS.min_after_dequeue
+        self.train_path = FLAGS.train_path
+        self.test_path = FLAGS.test_path
+        self.is_training = FLAGS.is_training
+        self.read_new_train = FLAGS.read_new_train
+        self.read_new_test = FLAGS.read_new_test
+        self.write_new = FLAGS.write_new
+        self.is_producting = FLAGS.is_producting
+        self.alpha = FLAGS.alpha
+        self.train_feature_start = FLAGS.train_feature_start
+        self.test_feature_start = FLAGS.test_feature_start
+        self.activation_select = FLAGS.activation_select    
+        self.min_after_dequeue = FLAGS.min_after_dequeue
+        self.feature_train_test_num = FLAGS.feature_train_test_num 
+        self.feature_train_pro_num = FLAGS.feature_train_pro_num 
+        self.feature_test_test_num = FLAGS.feature_test_test_num
+        self.feature_test_pro_num = FLAGS.feature_test_pro_num
+        self.read_dict_path = FLAGS.read_dict_path
+        self.read_stop_words_path = FLAGS.read_stop_words_path
+        self.read_new_dict = FLAGS.read_new_dict
+        self.read_new_stop_words = FLAGS.read_new_dict
+        self.stop_num = FLAGS.stop_num
+        self.dict_num = FLAGS.dict_num
+        self.embedding_size  =FLAGS.embedding_size
+        self.filter_sizes = FLAGS.filter_sizes
+        self.num_filters  =FLAGS.num_filters
+        self.num_epochs = FLAGS.num_epochs
+        self.evaluate_every = FLAGS.evaluate_every
+        
+        print('单机单卡 TextCNN 模型初始化结束...')
+        
+         
+    """
+    1.激活函数
+    2.参数解析：
+    (1) input_x:输入的x数据tensor
+    (2) w_in:   w初始权重
+    (3) b_in:   b偏置项权重
+    3.输出:经过激活函数后的tensor
+    """
+    def activation_sele(self,input_x,w_in,b_in):
+        assert input_x is not None and w_in is not None and b_in is not None
+        if self.activation_select == 'leaky_relu':
+            return tf.nn.leaky_relu(tf.matmul(input_x,w_in) + b_in,alpha = self.alpha)
+        if self.activation_select == 'relu':
+            return tf.nn.relu(tf.matmul(input_x,w_in) + b_in)
+        if self.activation_select == 'elu':
+            return tf.nn.elu(tf.matmul(input_x,w_in) + b_in)
+        if self.activation_select == 'selu':
+            return tf.nn.selu(tf.matmul(input_x,w_in) + b_in)
+        if self.activation_select == 'softsign':
+            return tf.nn.softsign(tf.matmul(input_x,w_in) + b_in)
+        if self.activation_select == 'crelu':
+            return tf.nn.crelu(tf.matmul(input_x,w_in) + b_in)
+        if self.activation_select == 'softplus':
+            return tf.nn.softplus(tf.matmul(input_x,w_in) + b_in)
+        if self.activation_select == 'tanh':
+            return tf.nn.tanh(tf.matmul(input_x,w_in) + b_in)
+       
+    
+    """
+    读取数据,总共有四种方式读取:
+    (1) 测试环境下的训练集读取
+    (2) 测试环境下的测试集读取
+    (3) 生产线下的训练集读取
+    (4) 生产线下的测试集读取
+    
+    PS:用 is_training    是否为True来证明是否为训练集/测试集
+       用 is_producting  是否为True来证明是否为生产线/测试环境
+       
+    因为现在PAI无法用python传递动态参数,所以先用FLAGS设置,后续可以的话改成用main里设置。
+    """
+    
+    ## 加载数据前期处理
+    def load_data_handle(self,path,dict_path,stop_path,reader,is_product):
+        if path is None or len(path) == 0 or reader is None or dict_path is None or len(dict_path) == 0 or stop_path is None or len(stop_path) == 0:
+            print('数据路径和reader读取数据对象不能为空')
+            return
+        
+        ##根据读取方式不同，测试集群上是is_product==False时的读取方式。
+        if is_product == True:
+            file_name_queue = tf.train.string_input_producer([path], num_epochs = 1)  
+            file_dict_name_queue = tf.train.string_input_producer([file_dict_path], num_epochs = 1)
+            file_stop_name_queue = tf.train.string_input_producer([stop_path], num_epochs = 1)
+        else:
+            file_path = tf.gfile.Glob(os.path.join(self.buckets,path)) 
+            file_dict_path = tf.gfile.Glob(os.path.join(self.buckets,path))     
+            file_stop_path = tf.gfile.Glob(os.path.join(self.buckets,stop_path)) 
+            file_name_queue = tf.train.string_input_producer(file_path)    
+            file_dict_name_queue = tf.train.string_input_producer(file_dict_path)   
+            file_stop_name_queue = tf.train.string_input_producer(file_stop_path)    
+            
+        # 懒加载序列里的value值。
+        key_train,value_train = reader.read(filename_queue)
+        key_train,value_dict = reader.read(file_dict_name_queue)
+        key_train,value_stop = reader.read(file_stop_name_queue)   
+               
+        return value_train, value_dict, value_stop
+    
+    
+    ## 加载数据处理 
+    def load_data(self):
+        
+        # 测试环境下进行训练集/测试集数据读取
+        if self.is_producting == False:
+            # 创建tf的reader对象
+            reader = tf.TextLineReader()
+            # 管道数据处理
+            if self.is_training == True:
+                value_data,dict_data,stop_data =  load_data_handle(self.train_path,self.read_dict_path,self.read_stop_words_path,reader,self.is_producting)
+                feature_data = tf.train.batch([tf.decode_csv(value_data, record_defaults=[[str(i)] for i in range(self.feature_train_test_num)] )],batch_size=self.total_num , num_threads=self.thread_num, capacity=self.total_num) 
+                
+            else:
+                value_data,dict_data,stop_data =  load_data_handle(self.test_path,self.read_dict_path,self.read_stop_words_path,reader,self.is_producting)
+                feature_data = tf.train.batch([tf.decode_csv(load_data_handle(self.test_path,reader), record_defaults=[[str(i)] for i in range(self.feature_test_test_num)] )],batch_size=self.test_num , num_threads=self.thread_num, capacity=self.test_num) 
+            
+            dict_feature_data = tf.train.batch([tf.decode_csv(dict_data, record_defaults=[['1.0']])],batch_size=self.dict_num , num_threads=self.thread_num, capacity=self.dict_num) 
+            stop_feature_data = tf.train.batch([tf.decode_csv(stop_data, record_defaults=[['1.0']])],batch_size=self.stop_num , num_threads=self.thread_num, capacity=self.stop_num) 
+        
+        # 生产环境下进行训练集/测试集数据读取
+        else:
+            # 创建tf读取ODPS德reader对象
+            reader = tf.TableRecordReader()
+            if self.is_training == True:
+                value_data,dict_data,stop_data =  load_data_handle(self.read_new_train,self.read_new_dict,self.read_new_stop,reader,self.is_producting)
+                feature_data = tf.train.batch([tf.decode_csv(load_data_handle(self.read_new_train,reader), record_defaults=[[str(i)] for i in range(self.feature_train_pro_num)] )],batch_size=self.total_num , num_threads=self.thread_num, capacity=self.total_num) 
+            else:
+                value_data,dict_data,stop_data =  load_data_handle(self.read_new_test,self.read_new_dict,self.read_new_stop,reader,self.is_producting)
+                feature_data = tf.train.batch([tf.decode_csv(load_data_handle(self.read_new_test,reader), record_defaults=[[str(i)] for i in range(self.feature_test_pro_num)] )],batch_size=self.test_num , num_threads=self.thread_num, capacity=self.test_num) 
+            
+            dict_feature_data = tf.train.batch([tf.decode_csv(dict_data, record_defaults=[['1.0']])],batch_size=self.dict_num , num_threads=self.thread_num, capacity=self.dict_num) 
+            stop_feature_data = tf.train.batch([tf.decode_csv(stop_data, record_defaults=[['1.0']])],batch_size=self.stop_num , num_threads=self.thread_num, capacity=self.stop_num) 
+            
+        # 开始执行session,读取数据
+        with tf.Session() as sess:  
+            sess.run(tf.global_variables_initializer())  
+            # 初始化线程
+            coord = tf.train.Coordinator()
+            threads = tf.train.start_queue_runners(sess = sess,coord = coord)              
+            # 读取数据
+            data = sess.run([feature_data])
+            data_dict = sess.run([dict_feature_data])
+            data_stop = sess.run([stop_feature_data])
+            
+            data = np.array(data)   
+            data_dict = np.array(data_dict)
+            data_stop = np.array(data_stop)
+            
+            # 维度转换
+            if self.is_producting == False and self.is_training == True:                
+                data = data.reshape(self.train_feature_start,self.total_num).T   
+            if self.is_producting == False and self.is_training == False:
+                data = data.reshape(self.test_feature_start,self.test_num).T  
+            if self.is_producting == True and self.is_training == True:                
+                data = data.reshape(self.train_feature_start,self.total_num).T   
+            if self.is_producting == True and self.is_training == False:
+                data = data.reshape(self.test_feature_start,self.test_num).T 
+            
+            # 结束读取数据进程
+            coord.request_stop()
+            coord.join(threads)   
+            
+#             print(data.shape)
+#             print(data_dict.shape)
+#             print(data_stop.shape)
+            
+            return data,data_dict,data_stop
+    
+    
+    ## 转为one_hot向量
+    def convert_to_one_hot(self,labels):
+        #计算向量有多少行
+        num_labels = len(labels)
+        #生成值全为0的独热编码的矩阵
+        labels_one_hot = np.zeros((num_labels, self.num_classes))
+        #计算向量中每个类别值在最终生成的矩阵“压扁”后的向量里的位置
+        index_offset = np.arange(num_labels) * self.num_classes
+        #遍历矩阵，为每个类别的位置填充1
+        labels_one_hot.flat[index_offset + labels] = 1
+        return labels_one_hot
+    
+    ## 数据处理
+    def data_handle(self):
+        data,data_dict,data_stop = load_data()
+        
+        # 处理停用词
+        stop_words = [i.strip() for i in data_stop]
+        # 加载词典
+        jieba.load_userdict(dict_data['class2_stop_words'])
+        
+        segments = []
+        for i in range(len_data):
+            words = jieba.lcut(data_temp['tag'][i])  
+            len_words = len(words)
+            segments.append({'tag':str([words[i] + ' ' for i in range(len_words) if words[i] not in stop_words]). \
+                     replace('\'','').replace(',','').replace('[','').replace(']','').strip(),'class2':data_temp['class2'][i]})
+        
+        data_temp_01 = pd.DataFrame(segments,columns=['tag', 'class2'])
+        
+        x_train = data_temp_01['tag']
+        y_train = data_temp_01['class2']
+        
+        # label索引化
+        y_labels = list(y_train.value_counts().index)
+        
+        # 创建数值类型
+        le = LabelEncoder()
+        aa = le.fit_transform(y_labels)
+        
+        
+        dd = data_temp_01['class2']
+        cc = np.array(dd.map(lambda x: le.transform([x])[0]))
+        
+        # 进行 one-hot处理。
+        y_train = convert_to_one_hot(np.array(y_train.map(lambda x: le.transform([x])[0])), self.num_classes)
+        
+        ## 下面是生成词向量
+        data_temp_02 = list(data_temp_01['tag'])
+        tokenizer = tf.contrib.keras.preprocessing.text.Tokenizer(num_words=max_features,lower=True)
+        tokenizer.fit_on_texts(data_temp_02)
+        
+        # 存储词的索引,也就是我们embedding输入的向量维度,作为返回值
+        vocab = tokenizer.word_index
+        
+        # Tokenizer对象中待转为序列的文本列表
+        X_train_word_ids = tokenizer.texts_to_sequences(data_temp_02)
+        
+        # pad_sequences 为内容的阶段，一般维度比较大的矩阵在该矩阵中进行了截断，这是为了防止在RNN系列中导致维度太大从而梯度消失/爆炸采取的措施。
+        # 而这里的maxlen就是我们的每次滑动截取的字符长度：sequence_length
+        x_train = tf.contrib.keras.preprocessing.sequence.pad_sequences(X_train_word_ids,maxlen=maxlen) 
+        
+        max_features = len(vocab)
+        
+        return x_train, y_train, max_features
+    
+    ## 构建网络架构
+
+    def build_model(self,l2_reg_lambda=0.0 ):
+        
+        #  初始化x,y轴,x为每个batch的一次访问词的最大长度，比如 "今天天气真好，咱们出去玩"。最多是8， 就到"今天天气真好，咱"  
+        self.input_x = tf.placeholder(tf.int32, [None, self.sequence_length], name="input_x")
+        self.input_y = tf.placeholder(tf.float32, [None, self.num_classes], name="input_y")
+        self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
+
+        # 正则项
+        l2_loss = tf.constant(0.0)
+
+        # embedding层。
+        with tf.device('/cpu:0'), tf.name_scope("embedding"):
+            self.W = tf.Variable(tf.random_uniform([self.vocab_size, self.embedding_size], -1.0, 1.0),name="W")
+            self.embedded_chars = tf.nn.embedding_lookup(self.W, self.input_x)
+            self.embedded_chars_expanded = tf.expand_dims(self.embedded_chars, -1)
+
+        # 卷积层,我们初始化三个卷积。i是索引,filter_sizes为卷积核大小的list集合，我们初始化为[3,4,5]
+        # 初始化池化层集合表，后续做拼接用
+        pooled_outputs = []
+        for i, filter_size in enumerate(self.filter_sizes):
+            # 每个卷积一个name_scope
+            with tf.name_scope("conv-maxpool-%s" % filter_size):              
+                # 卷积层:W维度:[卷积核大小,每个数据的维度,管道(灰白为1，彩色3),输出的卷积核数量]
+                filter_shape = [self.filter_size, self.embedding_size, 1, self.num_filters]
+                W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W")
+                
+                # b为卷积核数量。
+                b = tf.Variable(tf.constant(0.1, shape=[self.num_filters]), name="b")
+                conv = tf.nn.conv2d(self.embedded_chars_expanded,W,strides=[1, 1, 1, 1],padding="VALID",name="conv")
+                
+                # relu层
+                h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu")
+               
+                # 池化层:[batch，高度，宽度，通道数=卷积核个数]
+                pooled = tf.nn.max_pool(h,ksize=[1, self.sequence_length - self.filter_size + 1, 1, 1],strides=[1, 1, 1, 1],padding='VALID',name="pool")
+                pooled_outputs.append(pooled)
+
+        # 最大特征数,也就是embedding*3
+        num_filters_total = self.num_filters * len(self.filter_sizes)
+        # 拼接
+        self.h_pool = tf.concat(pooled_outputs, 3)
+        # reshape拉平。
+        self.h_pool_flat = tf.reshape(self.h_pool, [-1, num_filters_total])
+
+        # 拉平后dropout处理
+        with tf.name_scope("dropout"):
+            self.h_drop = tf.nn.dropout(self.h_pool_flat, self.dropout_keep_prob)
+
+        # 计算损失,准确率，加入正则损失
+        with tf.name_scope("output"):
+            W = tf.get_variable("W",shape=[num_filters_total, self.num_classes],initializer=tf.contrib.layers.xavier_initializer())
+            b = tf.Variable(tf.constant(0.1, shape=[self.num_classes]), name="b")
+            l2_loss += tf.nn.l2_loss(W)
+            l2_loss += tf.nn.l2_loss(b)
+            self.scores = tf.nn.xw_plus_b(self.h_drop, W, b, name="scores")
+            self.predictions = tf.argmax(self.scores, 1, name="predictions")
+
+        # 计算损失
+        with tf.name_scope("loss"):
+            losses = tf.nn.softmax_cross_entropy_with_logits(logits=self.scores, labels=self.input_y)
+            self.loss = tf.reduce_mean(losses) + l2_reg_lambda * l2_loss
+
+        # 计算准确率。
+        with tf.name_scope("accuracy"):
+            correct_predictions = tf.equal(self.predictions, tf.argmax(self.input_y, 1))
+            self.accuracy = tf.reduce_mean(tf.cast(correct_predictions, "float"), name="accuracy")
+    
+    
+    ## batch处理
+    def batch_iter(data, batch_size, num_epochs, shuffle=True):
+        data = np.array(data)
+        return shuffled_data[start_index:end_index]
+        data_size = len(data)
+        num_batches_per_epoch = int((len(data) - 1) / batch_size) + 1
+        for epoch in range(num_epochs):
+            if shuffle:
+                # 每次打乱索引即可
+                shuffle_indices = np.random.permutation(np.arange(data_size))
+                shuffled_data = data[shuffle_indices]
+            else:
+                shuffled_data = data
+            for batch_num in range(num_batches_per_epoch):
+                start_index = batch_num * batch_size
+                end_index = min((batch_num + 1) * batch_size, data_size)
+                yield shuffled_data[start_index:end_index]
+    
+    
+    ## 训练模型
+    def train(self):
+         # 初始化图,防止命名冲突
+        self._graph = tf.Graph()
+        # 初始化环境变量,开启GPU,这里目前我没仔细研究,后续研究这里。 
+        config = tf.ConfigProto()
+        config.gpu_options.allow_growth = True
+        
+        # 初始化session
+        self.session_tf = tf.Session(graph = self._graph,config = config)
+        
+        # 开始运行            
+        with self._graph.as_default():  
+            x_train, y_train, max_features = data_handle()
+            self.sequence_length = x_train.shape[1]
+            self.vocab_size = max_features
+            cnn = build_model()
+
+            # 初始化梯度
+            # 动态学习率初始化 
+            self.global_step = tf.get_variable('global_step', [],initializer=tf.constant_initializer(0), trainable=False)
+            self.learning_rate = tf.train.exponential_decay(self.learning_rate,self.global_step,self.decay_num, self.learning_rate_dec,staircase=True) 
+            
+             # 初始化优化器
+            self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
+            
+            # 计算梯度
+            grads_and_vars = optimizer.compute_gradients(cnn.loss)
+            train_op = optimizer.apply_gradients(grads_and_vars)
+            
+            
+            NUM = len(x_train)
+        
+            # 训练集内函数
+            def train_step(x_batch, y_batch):
+                _, step, loss, accuracy = sess.run([train_op, global_step, cnn.loss, cnn.accuracy],{
+                    cnn.input_x: x_batch,
+                    cnn.input_y: y_batch,
+                    cnn.dropout_keep_prob: dropout_keep_prob
+                })
+                epoch = step*self.batch_size // NUM + 1
+                time_str = datetime.datetime.now().isoformat()
+                return step, loss, accuracy, time_str, epoch
+                
+
+            # batch处理
+            batches = batch_iter(list(zip(x_train, y_train)), self.batch_size, self.num_epochs)
+            
+            temp = 0
+            # 打印日志
+            for batch in batches:
+                temp += 1
+                x_batch, y_batch = zip(*batch)
+                step, loss, accuracy, time_str, epoch = train_step(x_batch, y_batch)
+                if temp % self.evaluate_every == 1:
+                    start_time = time.time()
+                if temp % self.evaluate_every == 0:
+                    tf.logging.info("{}: epoch {}, step {}, loss {:g}, acc {:g}, time {:g}".format(time_str, epoch, step, loss, accuracy, end_time - start_time))
+        
+        print('模型结束...')
+        
+        return self
+    
+    
+
+# 主函数编写,因为pai里目前不支持调用python主参数,在这里我用FLAGS取代写成定式,后续到其他平台可以修改回来。
+def main():
+    # 初始化参数
+    FLAGS = Config()
+    
+    cnn_classfi_model = TextCNN(FLAGS)
+    cnn_classfi_model.train()
+    
+
+# 开启程序
+if __name__ == '__main__':  
+ 
+    main()
+
+
+                
+        
+    
+    
+    
+        
+
+        
+        
+     
+
