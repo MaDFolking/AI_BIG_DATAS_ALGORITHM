@@ -16,9 +16,11 @@ import time
 import jieba
 import random
 import warnings
+import argparse
 import datetime
 import numpy as np 
 import pandas as pd 
+import multiprocessing
 import tensorflow as tf
 
 from math import sqrt
@@ -55,8 +57,6 @@ for train_index, test_index in kf.split(X):
 '''
 
 
-
-
 ## 获取动态参数
 FLAGS=None
 
@@ -70,9 +70,9 @@ def Config():
     parser.add_argument('--keep_prob', type = float, default = 0.5, help = 'DropOut训练时最大保留率')
     parser.add_argument('--l2_normal', type = float, default = 0.001, help = 'L2正则项')
     parser.add_argument('--batch_size',type = int, default = 256, help = '每次迭代数量')
-    parser.add_argument('--embedding_size',type = int, default = 128, help = 'embedding后的词向量维度')
+    parser.add_argument('--embedding_size',type = int, default = 32, help = 'embedding后的词向量维度')
     parser.add_argument('--loss_min',type = float, default = 0.001, help = '训练集和验证集的最小损失值')
-    parser.add_argument('--maxlen',type=int,default=500, help = '一次读取文本时间窗口的最大长度,先设置为500')
+    parser.add_argument('--maxlen',type=int,default=64, help = '一次读取文本时间窗口的最大长度,先设置为500')
     parser.add_argument('--feature_train_test_num',type=int,default=2, help = '测试环境下训练集的特征总数,我这里是2')
     parser.add_argument('--feature_train_pro_num',type=int,default=2, help = '生产环境下训练集的特征总数,我这里是2')
     parser.add_argument('--feature_test_test_num',type=int,default=2, help = '测试环境下测试集的特征总数,我这里是2')
@@ -86,18 +86,18 @@ def Config():
     parser.add_argument('--activation_select',type=str,default='softplus',help = '这次选择的激活函数')
     parser.add_argument('--alpha',type=float,default=0.2,help = 'leaky_relu 的激活函数中给所有负数都加入的一个常数,使其为负数是不是变为0成为dead神经元,而是负小斜率的线性变化。')
     
-
+    # miya-bigdata-base-oss
     ##路径配置参数
     parser.add_argument('--buckets', type = str, default = '', help = 'bueckts桶,上线后为空值,后续可能会更改，所以先设置默认值')
     parser.add_argument('--checkpointDir', type = str, default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/workplace/jrm/goods_class2_classify/model/',help = '模型保存路径的默认路径')
-    parser.add_argument('--train_path', type = str, default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/workplace/jrm/data/class2_goods_train*',help = '训练集输入路径')  # 后续需要去掉只剩下train*
-    parser.add_argument('--test_path',type = str,default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/data_tmp/class2_goods_test*',help = '测试集输入路径')
-    parser.add_argument('--read_new_train', type = str, default = 'odps://miya_data_analysis/tables/tmp_xy_rpt_rfm_pre_feature_input_all_label_04', help = '新的读取数据格式,直接读取maxcomputer表的方式,此为训练集')
+    parser.add_argument('--train_path', type = str, default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/workplace/jrm/goods_class2_classify/code/data/class_2_goods_train*',help = '训练集输入路径')  # 后续需要去掉只剩下train*
+    parser.add_argument('--test_path',type = str,default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/workplace/jrm/goods_class2_classify/data/class2_goods_test*',help = '测试集输入路径')
+    parser.add_argument('--read_new_train', type = str, default = 'odps://miya_data_analysis/tables/miya_goods_id_classify_train', help = '新的读取数据格式,直接读取maxcomputer表的方式,此为训练集')
     parser.add_argument('--read_new_test', type = str, default = 'odps://miya_data_analysis/tables/tmp_xy_rpt_rfm_pre_feature_input_all_06_01', help = '新的读取数据格式,直接读取maxcomputer表的方式,此为测试集')    
     parser.add_argument('--write_new', type = str, default = 'odps://miya_data_analysis/tables/tmp_xy_rpt_rfm_pre_feature_input_all_result_01', help = '新的写入数据格式,直接读取maxcomputer表的方式,此为预测得到的结果集')
-    parser.add_argument('--read_dict_path', type = str, default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/workplace/jrm/goods_class2_classify/data/dict_words*', help = 'OSS的字典')
-    parser.add_argument('--read_stop_words_path', type = str, default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/workplace/jrm/goods_class2_classify/data/stop_words*', help = 'OSS的停止词') 
-    parser.add_argument('--read_new_dict', type = str, default = 'odps://miya_data_analysis/tables/miya_goods_id_stop_words', help = 'ODPS的字典')
+    parser.add_argument('--read_dict_path', type = str, default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/workplace/jrm/goods_class2_classify/code/data/dict_words*', help = 'OSS的字典')
+    parser.add_argument('--read_stop_words_path', type = str, default = 'oss://miya-bigdata-base-oss.oss-cn-shanghai-internal.aliyuncs.com/workplace/jrm/goods_class2_classify/code/data/stop_words*', help = 'OSS的停止词') 
+    parser.add_argument('--read_new_dict', type = str, default = 'odps://miya_data_analysis/tables/miya_goods_id_dict', help = 'ODPS的字典')
     parser.add_argument('--read_new_stop_words', type = str, default = 'odps://miya_data_analysis/tables/miya_stop_words_list', help = 'ODPS的停止词')    
     
     
@@ -117,7 +117,7 @@ def Config():
     
     ##逻辑和数据代码参数(代码和数据处理涉及到的相关参数)  
     parser.add_argument('--num_classes', type = int, default = 129,help = '预测类别总数')
-    parser.add_argument('--total_num', type = int, default = 1900000, help = '总数据输入数量')
+    parser.add_argument('--total_num', type = int, default = 2000000, help = '总数据输入数量')
     parser.add_argument('--test_num', type = int, default = 50000, help = '模型输出数量')
     parser.add_argument('--dict_num', type = int, default = 32760, help = '总数据输入数量')
     parser.add_argument('--stop_num', type = int, default = 1861, help = '总数据输入数量')
@@ -133,8 +133,7 @@ def Config():
 
     FLAGS, _ = parser.parse_known_args()
     return FLAGS
-	
-	
+
 ## 单机单卡的TextCNN 
 class TextCNN(object):
     def __init__(self,FLAGS):
@@ -182,6 +181,7 @@ class TextCNN(object):
         self.num_filters  =FLAGS.num_filters
         self.num_epochs = FLAGS.num_epochs
         self.evaluate_every = FLAGS.evaluate_every
+        self.maxlen = FLAGS.maxlen
         
         print('单机单卡 TextCNN 模型初始化结束...')
         
@@ -240,14 +240,14 @@ class TextCNN(object):
             file_stop_name_queue = tf.train.string_input_producer([stop_path], num_epochs = 1)
         else:
             file_path = tf.gfile.Glob(os.path.join(self.buckets,path)) 
-            file_dict_path = tf.gfile.Glob(os.path.join(self.buckets,path))     
+            file_dict_path = tf.gfile.Glob(os.path.join(self.buckets,dict_path))     
             file_stop_path = tf.gfile.Glob(os.path.join(self.buckets,stop_path)) 
             file_name_queue = tf.train.string_input_producer(file_path)    
             file_dict_name_queue = tf.train.string_input_producer(file_dict_path)   
             file_stop_name_queue = tf.train.string_input_producer(file_stop_path)    
             
         # 懒加载序列里的value值。
-        key_train,value_train = reader.read(filename_queue)
+        key_train,value_train = reader.read(file_name_queue)
         key_train,value_dict = reader.read(file_dict_name_queue)
         key_train,value_stop = reader.read(file_stop_name_queue)   
                
@@ -257,18 +257,19 @@ class TextCNN(object):
     ## 加载数据处理 
     def load_data(self):
         
+        print('开始加载数据')
         # 测试环境下进行训练集/测试集数据读取
         if self.is_producting == False:
             # 创建tf的reader对象
             reader = tf.TextLineReader()
             # 管道数据处理
             if self.is_training == True:
-                value_data,dict_data,stop_data =  load_data_handle(self.train_path,self.read_dict_path,self.read_stop_words_path,reader,self.is_producting)
+                value_data,dict_data,stop_data =  self.load_data_handle(self.train_path,self.read_dict_path,self.read_stop_words_path,reader,self.is_producting)
                 feature_data = tf.train.batch([tf.decode_csv(value_data, record_defaults=[[str(i)] for i in range(self.feature_train_test_num)] )],batch_size=self.total_num , num_threads=self.thread_num, capacity=self.total_num) 
                 
             else:
-                value_data,dict_data,stop_data =  load_data_handle(self.test_path,self.read_dict_path,self.read_stop_words_path,reader,self.is_producting)
-                feature_data = tf.train.batch([tf.decode_csv(load_data_handle(self.test_path,reader), record_defaults=[[str(i)] for i in range(self.feature_test_test_num)] )],batch_size=self.test_num , num_threads=self.thread_num, capacity=self.test_num) 
+                value_data,dict_data,stop_data =  self.load_data_handle(self.test_path,self.read_dict_path,self.read_stop_words_path,reader,self.is_producting)
+                feature_data = tf.train.batch([tf.decode_csv(self.load_data_handle(self.test_path,reader), record_defaults=[[str(i)] for i in range(self.feature_test_test_num)] )],batch_size=self.test_num , num_threads=self.thread_num, capacity=self.test_num) 
             
             dict_feature_data = tf.train.batch([tf.decode_csv(dict_data, record_defaults=[['1.0']])],batch_size=self.dict_num , num_threads=self.thread_num, capacity=self.dict_num) 
             stop_feature_data = tf.train.batch([tf.decode_csv(stop_data, record_defaults=[['1.0']])],batch_size=self.stop_num , num_threads=self.thread_num, capacity=self.stop_num) 
@@ -278,11 +279,11 @@ class TextCNN(object):
             # 创建tf读取ODPS德reader对象
             reader = tf.TableRecordReader()
             if self.is_training == True:
-                value_data,dict_data,stop_data =  load_data_handle(self.read_new_train,self.read_new_dict,self.read_new_stop,reader,self.is_producting)
-                feature_data = tf.train.batch([tf.decode_csv(load_data_handle(self.read_new_train,reader), record_defaults=[[str(i)] for i in range(self.feature_train_pro_num)] )],batch_size=self.total_num , num_threads=self.thread_num, capacity=self.total_num) 
+                value_data,dict_data,stop_data =  self.load_data_handle(self.read_new_train,self.read_new_dict,self.read_new_stop,reader,self.is_producting)
+                feature_data = tf.train.batch([tf.decode_csv(self.load_data_handle(self.read_new_train,reader), record_defaults=[[str(i)] for i in range(self.feature_train_pro_num)] )],batch_size=self.total_num , num_threads=self.thread_num, capacity=self.total_num) 
             else:
-                value_data,dict_data,stop_data =  load_data_handle(self.read_new_test,self.read_new_dict,self.read_new_stop,reader,self.is_producting)
-                feature_data = tf.train.batch([tf.decode_csv(load_data_handle(self.read_new_test,reader), record_defaults=[[str(i)] for i in range(self.feature_test_pro_num)] )],batch_size=self.test_num , num_threads=self.thread_num, capacity=self.test_num) 
+                value_data,dict_data,stop_data =  self.load_data_handle(self.read_new_test,self.read_new_dict,self.read_new_stop,reader,self.is_producting)
+                feature_data = tf.train.batch([tf.decode_csv(self.load_data_handle(self.read_new_test,reader), record_defaults=[[str(i)] for i in range(self.feature_test_pro_num)] )],batch_size=self.test_num , num_threads=self.thread_num, capacity=self.test_num) 
             
             dict_feature_data = tf.train.batch([tf.decode_csv(dict_data, record_defaults=[['1.0']])],batch_size=self.dict_num , num_threads=self.thread_num, capacity=self.dict_num) 
             stop_feature_data = tf.train.batch([tf.decode_csv(stop_data, record_defaults=[['1.0']])],batch_size=self.stop_num , num_threads=self.thread_num, capacity=self.stop_num) 
@@ -311,20 +312,33 @@ class TextCNN(object):
                 data = data.reshape(self.train_feature_start,self.total_num).T   
             if self.is_producting == True and self.is_training == False:
                 data = data.reshape(self.test_feature_start,self.test_num).T 
+            data_dict = data_dict.reshape(1,self.dict_num).T
+            data_stop = data_stop.reshape(1,self.stop_num).T
+            
+            data = pd.DataFrame(data,columns = ['tag','class2'])
+#             data_dict = pd.DataFrame(data_dict,columns = ['class2_stop_words'])
+#             data_stop = pd.DataFrame(data_stop,columns = ['stop_words'])
+            
+            print('加载数据完事...')
+            print('文本数据维度为: ',data.shape)
+            print('字典数据维度为: ',data_dict.shape)
+            print('停用词数据维度为: ',data_stop.shape)         
+            
+            print(type(data))
+            print(type(data_dict))
+            print(type(data_stop))
             
             # 结束读取数据进程
             coord.request_stop()
             coord.join(threads)   
             
-#             print(data.shape)
-#             print(data_dict.shape)
-#             print(data_stop.shape)
+
             
             return data,data_dict,data_stop
     
     
     ## 转为one_hot向量
-    def convert_to_one_hot(self,labels):
+    def convert_to_one_hot(self,labels,num_classes):
         #计算向量有多少行
         num_labels = len(labels)
         #生成值全为0的独热编码的矩阵
@@ -337,24 +351,30 @@ class TextCNN(object):
     
     ## 数据处理
     def data_handle(self):
-        data,data_dict,data_stop = load_data()
+        data_temp,dict_data,data_stop = self.load_data()
         
-        # 处理停用词
-        stop_words = [i.strip() for i in data_stop]
-        # 加载词典
-        jieba.load_userdict(dict_data['class2_stop_words'])
+#         len_stop = len(data_stop)
+#         # 处理停用词 
+#         stop_words = [data_stop[i][0] for i in range(len_stop)]
+#         print(stop_words)
+#         # 加载词典
+#         jieba.load_userdict([str(i) for i in np.nditer(dict_data)])
         
+        len_data = len(data_temp)
         segments = []
         for i in range(len_data):
             words = jieba.lcut(data_temp['tag'][i])  
             len_words = len(words)
-            segments.append({'tag':str([words[i] + ' ' for i in range(len_words) if words[i] not in stop_words]). \
-                     replace('\'','').replace(',','').replace('[','').replace(']','').strip(),'class2':data_temp['class2'][i]})
+            segments.append({'tag':str([words[i] + ' ' for i in range(len_words)]). \
+            replace('\'','').replace(',','').replace('[','').replace(']','').strip(),'class2':data_temp['class2'][i]})
         
         data_temp_01 = pd.DataFrame(segments,columns=['tag', 'class2'])
         
         x_train = data_temp_01['tag']
         y_train = data_temp_01['class2']
+        
+        print(x_train.shape)
+        print(y_train.shape)
         
         # label索引化
         y_labels = list(y_train.value_counts().index)
@@ -368,7 +388,9 @@ class TextCNN(object):
         cc = np.array(dd.map(lambda x: le.transform([x])[0]))
         
         # 进行 one-hot处理。
-        y_train = convert_to_one_hot(np.array(y_train.map(lambda x: le.transform([x])[0])), self.num_classes)
+        y_train = self.convert_to_one_hot(np.array(y_train.map(lambda x: le.transform([x])[0])), self.num_classes)
+        
+        max_features = 100128
         
         ## 下面是生成词向量
         data_temp_02 = list(data_temp_01['tag'])
@@ -383,86 +405,87 @@ class TextCNN(object):
         
         # pad_sequences 为内容的阶段，一般维度比较大的矩阵在该矩阵中进行了截断，这是为了防止在RNN系列中导致维度太大从而梯度消失/爆炸采取的措施。
         # 而这里的maxlen就是我们的每次滑动截取的字符长度：sequence_length
-        x_train = tf.contrib.keras.preprocessing.sequence.pad_sequences(X_train_word_ids,maxlen=maxlen) 
+        x_train = tf.contrib.keras.preprocessing.sequence.pad_sequences(X_train_word_ids,maxlen=self.maxlen) 
         
-        max_features = len(vocab)
+        max_features = 100128
         
         return x_train, y_train, max_features
     
     ## 构建网络架构
 
     def build_model(self,l2_reg_lambda=0.0 ):
-        
-        #  初始化x,y轴,x为每个batch的一次访问词的最大长度，比如 "今天天气真好，咱们出去玩"。最多是8， 就到"今天天气真好，咱"  
-        self.input_x = tf.placeholder(tf.int32, [None, self.sequence_length], name="input_x")
-        self.input_y = tf.placeholder(tf.float32, [None, self.num_classes], name="input_y")
-        self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
-
-        # 正则项
-        l2_loss = tf.constant(0.0)
-
-        # embedding层。
-        with tf.device('/cpu:0'), tf.name_scope("embedding"):
-            self.W = tf.Variable(tf.random_uniform([self.vocab_size, self.embedding_size], -1.0, 1.0),name="W")
-            self.embedded_chars = tf.nn.embedding_lookup(self.W, self.input_x)
-            self.embedded_chars_expanded = tf.expand_dims(self.embedded_chars, -1)
-
-        # 卷积层,我们初始化三个卷积。i是索引,filter_sizes为卷积核大小的list集合，我们初始化为[3,4,5]
-        # 初始化池化层集合表，后续做拼接用
-        pooled_outputs = []
-        for i, filter_size in enumerate(self.filter_sizes):
-            # 每个卷积一个name_scope
-            with tf.name_scope("conv-maxpool-%s" % filter_size):              
-                # 卷积层:W维度:[卷积核大小,每个数据的维度,管道(灰白为1，彩色3),输出的卷积核数量]
-                filter_shape = [self.filter_size, self.embedding_size, 1, self.num_filters]
-                W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W")
+        with tf.variable_scope(tf.get_variable_scope(), reuse= tf.AUTO_REUSE) :   
+            #  初始化x,y轴,x为每个batch的一次访问词的最大长度，比如 "今天天气真好，咱们出去玩"。最多是8， 就到"今天天气真好，咱"  
+            self.input_x = tf.placeholder(tf.int32, [None, self.sequence_length], name="input_x")
+            self.input_y = tf.placeholder(tf.float32, [None, self.num_classes], name="input_y")
+            self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
+    
+            # 正则项
+            l2_loss = tf.constant(0.0)
+    
+            # embedding层。
+            with tf.device('/cpu:0'), tf.name_scope("embedding"):
+                self.W = tf.Variable(tf.random_uniform([self.vocab_size, self.embedding_size], -1.0, 1.0),name="W")
+                self.embedded_chars = tf.nn.embedding_lookup(self.W, self.input_x)
+                self.embedded_chars_expanded = tf.expand_dims(self.embedded_chars, -1)
+    
+            # 卷积层,我们初始化三个卷积。i是索引,filter_sizes为卷积核大小的list集合，我们初始化为[3,4,5]
+            # 初始化池化层集合表，后续做拼接用
+            pooled_outputs = []
+            for i, filter_size in enumerate(self.filter_sizes):
+                # 每个卷积一个name_scope
+                with tf.name_scope("conv-maxpool-%s" % filter_size):              
+                    # 卷积层:W维度:[卷积核大小,每个数据的维度,管道(灰白为1，彩色3),输出的卷积核数量]
+                    filter_shape = [filter_size, self.embedding_size, 1, self.num_filters]
+                    W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W")
+                    
+                    # b为卷积核数量。
+                    b = tf.Variable(tf.constant(0.1, shape=[self.num_filters]), name="b")
+                    conv = tf.nn.conv2d(self.embedded_chars_expanded,W,strides=[1, 1, 1, 1],padding="VALID",name="conv")
+                    
+                    # relu层
+                    h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu")
+                   
+                    # 池化层:[batch，高度，宽度，通道数=卷积核个数]
+                    pooled = tf.nn.max_pool(h,ksize=[1, self.sequence_length - filter_size + 1, 1, 1],strides=[1, 1, 1, 1],padding='VALID',name="pool")
+                    pooled_outputs.append(pooled)
+    
+            # 最大特征数,也就是embedding*3
+            num_filters_total = self.num_filters * len(self.filter_sizes)
+            # 拼接
+            self.h_pool = tf.concat(pooled_outputs, 3)
+            # reshape拉平。
+            self.h_pool_flat = tf.reshape(self.h_pool, [-1, num_filters_total])
+    
+            # 拉平后dropout处理
+            with tf.name_scope("dropout"):
+                self.h_drop = tf.nn.dropout(self.h_pool_flat, self.dropout_keep_prob)
+    
+            # 计算损失,准确率，加入正则损失
+            with tf.name_scope("output"):
+                W = tf.get_variable("W",shape=[num_filters_total, self.num_classes],initializer=tf.contrib.layers.xavier_initializer())
+                b = tf.Variable(tf.constant(0.1, shape=[self.num_classes]), name="b")
+                l2_loss += tf.nn.l2_loss(W)
+                l2_loss += tf.nn.l2_loss(b)
+                self.scores = tf.nn.xw_plus_b(self.h_drop, W, b, name="scores")
+                self.predictions = tf.argmax(self.scores, 1, name="predictions")
+    
+            # 计算损失
+            with tf.name_scope("loss"):
+                losses = tf.nn.softmax_cross_entropy_with_logits(logits=self.scores, labels=self.input_y)
+                loss = tf.reduce_mean(losses) + l2_reg_lambda * l2_loss
+    
+            # 计算准确率。
+            with tf.name_scope("accuracy"):
+                correct_predictions = tf.equal(self.predictions, tf.argmax(self.input_y, 1))
+                accuracy = tf.reduce_mean(tf.cast(correct_predictions, "float"), name="accuracy")
                 
-                # b为卷积核数量。
-                b = tf.Variable(tf.constant(0.1, shape=[self.num_filters]), name="b")
-                conv = tf.nn.conv2d(self.embedded_chars_expanded,W,strides=[1, 1, 1, 1],padding="VALID",name="conv")
-                
-                # relu层
-                h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu")
-               
-                # 池化层:[batch，高度，宽度，通道数=卷积核个数]
-                pooled = tf.nn.max_pool(h,ksize=[1, self.sequence_length - self.filter_size + 1, 1, 1],strides=[1, 1, 1, 1],padding='VALID',name="pool")
-                pooled_outputs.append(pooled)
-
-        # 最大特征数,也就是embedding*3
-        num_filters_total = self.num_filters * len(self.filter_sizes)
-        # 拼接
-        self.h_pool = tf.concat(pooled_outputs, 3)
-        # reshape拉平。
-        self.h_pool_flat = tf.reshape(self.h_pool, [-1, num_filters_total])
-
-        # 拉平后dropout处理
-        with tf.name_scope("dropout"):
-            self.h_drop = tf.nn.dropout(self.h_pool_flat, self.dropout_keep_prob)
-
-        # 计算损失,准确率，加入正则损失
-        with tf.name_scope("output"):
-            W = tf.get_variable("W",shape=[num_filters_total, self.num_classes],initializer=tf.contrib.layers.xavier_initializer())
-            b = tf.Variable(tf.constant(0.1, shape=[self.num_classes]), name="b")
-            l2_loss += tf.nn.l2_loss(W)
-            l2_loss += tf.nn.l2_loss(b)
-            self.scores = tf.nn.xw_plus_b(self.h_drop, W, b, name="scores")
-            self.predictions = tf.argmax(self.scores, 1, name="predictions")
-
-        # 计算损失
-        with tf.name_scope("loss"):
-            losses = tf.nn.softmax_cross_entropy_with_logits(logits=self.scores, labels=self.input_y)
-            self.loss = tf.reduce_mean(losses) + l2_reg_lambda * l2_loss
-
-        # 计算准确率。
-        with tf.name_scope("accuracy"):
-            correct_predictions = tf.equal(self.predictions, tf.argmax(self.input_y, 1))
-            self.accuracy = tf.reduce_mean(tf.cast(correct_predictions, "float"), name="accuracy")
+                return accuracy, loss
     
     
     ## batch处理
-    def batch_iter(data, batch_size, num_epochs, shuffle=True):
+    def batch_iter(self,data, batch_size, num_epochs, shuffle=True):
         data = np.array(data)
-        return shuffled_data[start_index:end_index]
         data_size = len(data)
         num_batches_per_epoch = int((len(data) - 1) / batch_size) + 1
         for epoch in range(num_epochs):
@@ -491,32 +514,33 @@ class TextCNN(object):
         
         # 开始运行            
         with self._graph.as_default():  
-            x_train, y_train, max_features = data_handle()
+            x_train, y_train, max_features = self.data_handle()
             self.sequence_length = x_train.shape[1]
             self.vocab_size = max_features
-            cnn = build_model()
+            self.accuracy, self.loss = self.build_model()
 
             # 初始化梯度
             # 动态学习率初始化 
-            self.global_step = tf.get_variable('global_step', [],initializer=tf.constant_initializer(0), trainable=False)
-            self.learning_rate = tf.train.exponential_decay(self.learning_rate,self.global_step,self.decay_num, self.learning_rate_dec,staircase=True) 
+            global_step = tf.get_variable('global_step', [],initializer=tf.constant_initializer(0), trainable=False)
+            self.learning_rate = tf.train.exponential_decay(self.learning_rate,global_step,self.decay_num, self.learning_rate_dec,staircase=True) 
             
              # 初始化优化器
             self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
             
             # 计算梯度
-            grads_and_vars = optimizer.compute_gradients(cnn.loss)
-            train_op = optimizer.apply_gradients(grads_and_vars)
+            grads_and_vars = self.optimizer.compute_gradients(self.loss)
+            train_op = self.optimizer.apply_gradients(grads_and_vars,global_step = global_step)
             
+            self.session_tf.run(tf.global_variables_initializer())
             
             NUM = len(x_train)
         
             # 训练集内函数
             def train_step(x_batch, y_batch):
-                _, step, loss, accuracy = sess.run([train_op, global_step, cnn.loss, cnn.accuracy],{
-                    cnn.input_x: x_batch,
-                    cnn.input_y: y_batch,
-                    cnn.dropout_keep_prob: dropout_keep_prob
+                _, step, loss, accuracy = self.session_tf.run([train_op, global_step, self.loss, self.accuracy],{
+                    self.input_x: x_batch,
+                    self.input_y: y_batch,
+                    self.dropout_keep_prob: self.keep_prob
                 })
                 epoch = step*self.batch_size // NUM + 1
                 time_str = datetime.datetime.now().isoformat()
@@ -524,7 +548,7 @@ class TextCNN(object):
                 
 
             # batch处理
-            batches = batch_iter(list(zip(x_train, y_train)), self.batch_size, self.num_epochs)
+            batches = self.batch_iter(list(zip(x_train, y_train)), self.batch_size, self.num_epochs)
             
             temp = 0
             # 打印日志
@@ -535,7 +559,7 @@ class TextCNN(object):
                 if temp % self.evaluate_every == 1:
                     start_time = time.time()
                 if temp % self.evaluate_every == 0:
-                    tf.logging.info("{}: epoch {}, step {}, loss {:g}, acc {:g}, time {:g}".format(time_str, epoch, step, loss, accuracy, end_time - start_time))
+                    tf.logging.info("{}: epoch {}, step {}, loss {:g}, acc {:g}, time {:g}".format(time_str, epoch, step, loss, accuracy, time.time() - start_time))
         
         print('模型结束...')
         
@@ -554,18 +578,5 @@ def main():
 
 # 开启程序
 if __name__ == '__main__':  
- 
     main()
-
-
-                
-        
-    
-    
-    
-        
-
-        
-        
-     
 
