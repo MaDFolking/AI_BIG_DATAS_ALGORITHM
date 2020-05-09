@@ -16,7 +16,6 @@ import tensorflow as tf
 from odps import ODPS
 from odps.df import DataFrame
 from tensorflow.contrib import rnn
-odps = ODPS('LTAIsdroAVHALblY', 'E1tfJVRaf3PWL3sz2lGWRLNmTt4dNy', 'miya_data_analysis',endpoint='http://service.odps.aliyun.com/api')
 
 # 加载原表
 table_name = 'miya_data_analysis.miya_goods_id_classify_train'
