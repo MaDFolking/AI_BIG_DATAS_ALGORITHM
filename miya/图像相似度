@@ -1,0 +1,183 @@
+import os
+import csv
+import h5py
+import argparse
+import numpy as np
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import matplotlib.image as mpimg
+
+from numpy import linalg as LA
+from keras.preprocessing import image
+from keras.applications.vgg16 import VGG16
+from keras.applications.vgg16 import preprocess_input as preprocess_input_vgg
+
+
+# 公共变量 
+
+# 图片与种类的元组列表,里面是列表
+image_class_list = []
+# 图片种类列表结果集(处理后的)
+image_class_list_end = {}
+# 图片种类集合 
+image_class_info = []
+# 图片列表路径 
+path_image_list = 'D:\\data\\image_simi\\image_info_end.csv'
+# 图片路径 
+path_image = 'D:\\data\\image_simi\\image_simi_1\\'
+# 跟路径 
+path = 'D:\\data\\image_simi\\'
+# 模型路径 
+index = path + 'vgg_featureCNN.h5'
+# 最终结果导出 
+dict_goods_simi_end = {}
+# 相似度数量  
+maxres = 20
+
+# 1. 加载所有种类 
+n = 0
+with open(path_image_list,'r') as f:
+    read_class = csv.reader(f)  
+    for i in read_class:
+        if n > 0:
+            image_class_info.append(i[2])
+        n += 1  
+        
+    
+image_class_info = list(set(image_class_info))
+
+# 2. 加载所有图片 
+for i in image_class_info:
+    list_temp = []
+    with open(path_image_list, 'r') as f: 
+        reader = csv.reader(f)
+        for row in reader:
+            if row[2] == i:
+                 list_temp.append(row[0])
+        
+        image_class_list_end[i] = list_temp
+
+print(len(image_class_list_end))
+
+
+## 创建VGG网络 
+
+# 我们的图片要缩放到224,224。这块后续要学习代码优化缩放g
+
+class VGGNet:
+    def __init__(self):
+        # weights: 'imagenet'
+        # pooling: 'max' or 'avg'
+        # input_shape: (width, height, 3), width and height should >= 48
+        self.input_shape = (224, 224, 3)
+        self.weight = 'imagenet'
+        self.pooling = 'max'
+        # include_top：是否保留顶层的3个全连接网络
+        # weights：None代表随机初始化，即不加载预训练权重。'imagenet'代表加载预训练权重
+        # input_tensor：可填入Keras tensor作为模型的图像输出tensor
+        # input_shape：可选，仅当include_top=False有效，应为长为3的tuple，指明输入图片的shape，图片的宽高必须大于48，如(200,200,3)
+        #pooling：当include_top = False时，该参数指定了池化方式。None代表不池化，最后一个卷积层的输出为4D张量。‘avg’代表全局平均池化，‘max’代表全局最大值池化。
+        #classes：可选，图片分类的类别数，仅当include_top = True并且不加载预训练权重时可用。
+        self.model_vgg = VGG16(weights = self.weight, input_shape = (self.input_shape[0], self.input_shape[1], 
+                                                                     self.input_shape[2]), pooling = self.pooling, include_top = False)
+        self.model_vgg.predict(np.zeros((1, 224, 224 , 3)))
+
+    '''
+    Use vgg16/Resnet model to extract features
+    Output normalized feature vector
+    '''
+    #提取vgg16最后一层卷积特征
+    def vgg_extract_feat(self, img_path):
+        img = image.load_img(img_path, target_size=(self.input_shape[0], self.input_shape[1]))
+        img = image.img_to_array(img)
+        img = np.expand_dims(img, axis=0)
+        img = preprocess_input_vgg(img)
+        feat = self.model_vgg.predict(img)
+        # print(feat.shape)
+        norm_feat = feat[0]/LA.norm(feat[0])
+        return norm_feat
+    #提取resnet50最后一层卷积特征
+    def resnet_extract_feat(self, img_path):
+        img = image.load_img(img_path, target_size=(self.input_shape[0], self.input_shape[1]))
+        img = image.img_to_array(img)
+        img = np.expand_dims(img, axis=0)
+        img = preprocess_input_resnet(img)
+        feat = self.model_resnet.predict(img)
+        # print(feat.shape)
+        norm_feat = feat[0]/LA.norm(feat[0])
+        return norm_feat
+    #提取densenet121最后一层卷积特征
+    def densenet_extract_feat(self, img_path):
+        img = image.load_img(img_path, target_size=(self.input_shape[0], self.input_shape[1]))
+        img = image.img_to_array(img)
+        img = np.expand_dims(img, axis=0)
+        img = preprocess_input_densenet(img)
+        feat = self.model_densenet.predict(img)
+        # print(feat.shape)
+        norm_feat = feat[0]/LA.norm(feat[0])
+        return norm_feat
+        
+        
+# 我们需要根据种类来获取相似度处理  
+for k,v in image_class_list_end.items():
+    print(k)
+    # 模型训练部分: 
+    model = VGGNet()
+    feats = []
+    names = []
+    for i, img_path in enumerate(v):
+        norm_feat = model.vgg_extract_feat('D:\\data\\image_simi\\image_simi_1\\' + img_path)      #修改此处改变提取特征的网络
+        img_name = os.path.split(img_path)[1]
+        feats.append(norm_feat)
+        names.append(img_name)
+               
+    feats = np.array(feats)
+    
+    # 模型推理部分:
+    model = VGGNet()
+    for xl in v: 
+        queryVec   = model.vgg_extract_feat('D:\\data\\image_simi\\image_simi_1\\' + xl)
+        scores     = np.dot(queryVec, feats.T)
+        rank_ID    = np.argsort(scores)[::-1]
+        rank_score = scores[rank_ID]
+        
+        imlist = []
+        list_simi_temp = []
+        
+        # print(xl+'开始......')
+        for j,index in enumerate(rank_ID[0:maxres]):
+            # imlist.append(imgNames[index])
+            list_simi_temp_1 = []
+            list_simi_temp_1.append(names[index])
+            list_simi_temp_1.append(round(rank_score[j],4))
+            list_simi_temp.append(list_simi_temp_1)
+            imlist.append(names[index])
+            # print(j)
+            # print("image names: "+str(names[index]) + " scores: %f"%rank_score[j])
+        # print(xl+'结束........')
+        dict_goods_simi_end[xl] = list_simi_temp 
+        
+#         # 可视化部分,运行程序时需要对其注解
+#         for z,im in enumerate(imlist):
+#             image = mpimg.imread(path_image + "/" + im)
+#             plt.title("search output %d" %(z+1))
+#             plt.imshow(image)
+#             plt.show()
+    
+print(len(dict_goods_simi_end))
+
+# 生成csv文件 
+import pandas as pd 
+# 生成pandas，并保存到csv中 
+dict_end_result = {}
+list_1111 = []
+list_2222 = []
+for k,v in dict_goods_simi_end.items():
+    list_1111.append(k)
+    list_2222.append(v)
+dict_end_result['image' ]  = list_1111
+dict_end_result['simily']  = list_2222
+df11  = pd.DataFrame(dict_end_result,columns=['image','simily'])#创建dataframe 
+# df22  = pd.DataFrame(df11.values.T, index=df.columns, columns=df.index)#转置
+# df = pd.DataFrame(dict_end,columns = ['颜色分布','主颜色分布','最大主颜色','十色相分布','最大十色相'])
+df11.to_csv('D:\\data\\image_simi\\image_feature_simi.csv')
